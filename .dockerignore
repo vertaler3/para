@@ -1,0 +1,10 @@
+# Контекст сборки — только исходники; журналы и артефакты наружу
+.git
+.gitignore
+build/
+build-tests/
+data/
+docs/
+*.db
+*.db-*
+.DS_Store

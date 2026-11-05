@@ -1,0 +1,13 @@
+# «Пара» — запуск демо: docker compose up --build
+# Один сервис + именованный том БД (02 §8.1: para-data:/opt/para/data).
+services:
+  para:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - para-data:/opt/para/data
+    restart: unless-stopped
+
+volumes:
+  para-data:

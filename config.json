@@ -17,6 +17,9 @@
         "number_of_threads": 1,
         //enable_session: сессии включаются на шаге 7 Э1 (AuthCtrl + LoginFilter)
         "enable_session": false,
+        //upload_path: временные загрузки Drogon — на томе para-data (владелец
+        //UID 10001); дефолт "uploads" в /opt/para недоступен на запись (Р-4 п.7)
+        "upload_path": "data/uploads",
         //document_root: корень статики (наполнение — FE-дорожка, Э3–Э4)
         "document_root": "./",
         //log: вывод в stdout — Docker собирает логи движком; логи без паролей/токенов (02 §6.5)
