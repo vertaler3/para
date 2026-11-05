@@ -126,10 +126,23 @@ enable_testing()
 add_test(NAME para-tests COMMAND para-tests)
 
 # ##############################################################################
-# security_tests — до Э8 это заглушка (компилируется и печатает план).
-# Реальная реализация — 8 шагов 02 §9.3: 403/404/401, изоляция данных,
-# staff-эндпоинты (гайд BE §10; DoD №2 — вывод теста прикладывается к отчёту).
-add_executable(security_tests tests/security_tests.cpp)
+# security_tests — автотест безопасности 02 §9.3 (DoD №2). С Э4 шага 3 здесь
+# реально выполняется шаг 4 (grades/{id}: чужой → 403, свой → 200,
+# несуществующий → 404) на уровне OwnershipGuard::check(Table::Grades) +
+# GradesService::gradeById поверх временной SQLite — тот же код, что под
+# GradesCtrl::getGrade; полный HTTP-вариант с двумя живыми сессиями — Э8
+# (шаги 1–3, 5–8 — тоже Э8: сущности Э5–Э6а). Вывод теста прикладывается
+# к отчёту жюри.
+add_executable(security_tests
+               tests/security_tests.cpp
+               src/services/GradesService.cpp
+               src/services/OwnershipGuard.cpp)
 
-target_include_directories(security_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_include_directories(security_tests
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+                                   ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(security_tests PRIVATE
+                      ${PARA_DROGON_TARGETS}
+                      ${PARA_SQLITE3_TARGET}
+                      ${ARGON2_LIBRARY})
 add_test(NAME security_tests COMMAND security_tests)
