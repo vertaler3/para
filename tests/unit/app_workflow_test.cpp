@@ -331,6 +331,9 @@ TEST_CASE("AppWorkflow: все 16 переходов матрицы примен
                                std::nullopt, 5);
         CHECK(r.outcome == AppWorkflow::Outcome::Applied);
         CHECK(r.fromStatus == std::string(t.from));
+        // Э5 шаг 2: id записанного события возвращается (тело 201 messages
+        // строится по id, не по «последнему событию» на гонках).
+        CHECK(r.eventId > 0);
     }
 
     // БД: каждая заявка пары теперь в целевом статусе; события — ровно по

@@ -58,6 +58,10 @@ class AppWorkflow
         std::string fromStatus;  // статус заявки на момент отказа — для
                                  // сообщения 409 («из X в Y нельзя»); при
                                  // NotFound — пустая строка
+        int64_t eventId = 0;     // id строки таймлайна при Applied (SELECT
+                                 // last_insert_rowid() внутри транзакции) —
+                                 // caller отдаёт событие в теле ответа без
+                                 // «последнего события» на гонках; 0 иначе
     };
     using ApplyCb = std::function<void(ApplyResult)>;
 

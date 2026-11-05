@@ -95,4 +95,49 @@ constexpr bool canApplicationTransition(std::string_view from,
     return false;
 }
 
+// ============================================================================
+// Каталог типов заявок (Э5 шаг 2). 02 §4.3: «Каталог типов заявок
+// (application_types: …) — constexpr-данные в коде»; состав и названия
+// карточек — вайрфрейм каталога 03 §4.5.2 (справки: об обучении, о периоде
+// обучения, академическая; заявления: согласование темы ВКР, другое).
+// Ключи — те же, что в sql/fixtures.sql (academic_certificate,
+// study_certificate, thesis_topic): фикстуры и каталог не расходятся.
+// type в таблице applications — TEXT без FK (02 §4.1): валидность ключа
+// проверяет ApplicationsService при POST по этому каталогу.
+// ============================================================================
+
+struct ApplicationType
+{
+    std::string_view key;    // ключ — значение applications.type
+    std::string_view title;  // человекочитаемое название карточки каталога
+};
+
+// Порядок — как на экране 03 §4.5.2: справки, затем заявления.
+inline constexpr std::array<ApplicationType, 5> kApplicationTypes{{
+    {"study_certificate", "Справка об обучении"},
+    {"period_certificate", "Справка о периоде обучения"},
+    {"academic_certificate", "Академическая справка"},
+    {"thesis_topic", "Согласование темы ВКР"},
+    {"other", "Другое заявление"},
+}};
+
+// Ключ типа в каталоге (constexpr проход — POST-валидация и тесты).
+constexpr bool isKnownApplicationType(std::string_view key)
+{
+    for (const auto& t : kApplicationTypes)
+        if (t.key == key)
+            return true;
+    return false;
+}
+
+// Название типа по ключу; неизвестный ключ → сам ключ (строки в БД,
+// созданные до расширения каталога, не ломают карточку).
+constexpr std::string_view applicationTypeTitle(std::string_view key)
+{
+    for (const auto& t : kApplicationTypes)
+        if (t.key == key)
+            return t.title;
+    return key;
+}
+
 }  // namespace para::models

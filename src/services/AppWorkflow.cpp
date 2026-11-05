@@ -37,6 +37,10 @@ const std::string kInsertEventSql =
     "(application_id, from_status, to_status, comment, author_id) "
     "VALUES ($1, $2, $3, $4, $5)";
 
+// id последней вставленной строки на соединении — читается ВНУТРИ
+// транзакции (соединение закреплено за ней, межзапросной гонки нет).
+const std::string kLastRowIdSql = "SELECT last_insert_rowid() AS id";
+
 }  // namespace
 
 bool AppWorkflow::canTransition(std::string_view from, std::string_view to)
@@ -78,9 +82,12 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
             //    once — единственный выстрел колбэка: commit-callback
             //    стреляет при уничтожении tx и не должен дублировать
             //    error-ветки; atomic под shared_ptr (atomic некопируем).
+            //    eventId — id записанного события (шаг 2 Э5: тело 201 у
+            //    messages строится по id, не по «последнему событию»).
             auto once = std::make_shared<std::atomic_bool>(false);
-            auto fire = [cb, applicationId,
-                         once](Outcome outcome, const std::string& from) {
+            auto eventId = std::make_shared<int64_t>(0);
+            auto fire = [cb, applicationId, once,
+                         eventId](Outcome outcome, const std::string& from) {
                 bool expected = false;
                 if (!once->compare_exchange_strong(expected, true))
                     return;
@@ -89,11 +96,12 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                     LOG_WARN << "AppWorkflow::apply(" << applicationId
                              << "): ошибка БД, транзакция откатывается";
                 }
-                cb(ApplyResult{outcome, from});
+                cb(ApplyResult{outcome, from, *eventId});
             };
 
             db->newTransactionAsync([fire, from, toStatus, comment, authorId,
-                                     applicationId](const std::shared_ptr<
+                                     applicationId,
+                                     eventId](const std::shared_ptr<
                                          Transaction>& transaction) {
                 if (!transaction)
                 {
@@ -105,7 +113,7 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                 }
 
                 auto updateOk = [tx = transaction, from, toStatus, comment,
-                                 authorId, applicationId,
+                                 authorId, applicationId, eventId,
                                  fire](const Result& r) {
                     if (r.affectedRows() == 0)
                     {
@@ -119,15 +127,29 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                         return;
                     }
 
-                    // 4. Событие таймлайна (application_events, 02 §4.1).
-                    // tx захвачен в оба колбэка INSERT: последний держатель
-                    // уничтожается после завершения INSERT → деструктор
-                    // транзакции коммитит (TransactionImpl v1.9.14: commit —
-                    // в деструкторе), commit-callback отдаёт Applied.
+                    // 4. Событие таймлайна (application_events, 02 §4.1) +
+                    // его id (last_insert_rowid() на том же соединении
+                    // транзакции — до коммита). tx захвачен в колбэки
+                    // INSERT и SELECT: последний держатель уничтожается
+                    // после завершения SELECT → деструктор транзакции
+                    // коммитит (TransactionImpl v1.9.14: commit — в
+                    // деструкторе), commit-callback отдаёт Applied.
                     *tx << kInsertEventSql << applicationId << from
                         << toStatus << comment << authorId >>
-                        [tx](const Result&) {
-                            // commit — при уничтожении tx (см. выше).
+                        [tx, eventId](const Result&) {
+                            *tx << kLastRowIdSql >>
+                                [tx, eventId](const Result& rows) {
+                                    if (!rows.empty())
+                                        *eventId =
+                                            rows[0]["id"].as<int64_t>();
+                                } >>
+                                [tx](const DrogonDbException& e) {
+                                    // Событие записано, id не прочитан —
+                                    // не фейлим Applied: eventId остаётся 0.
+                                    LOG_WARN << "AppWorkflow::apply: "
+                                             << "select event id: "
+                                             << e.base().what();
+                                };
                         } >>
                         [tx, from, fire](const DrogonDbException& e) {
                             LOG_ERROR << "AppWorkflow::apply: insert event: "
