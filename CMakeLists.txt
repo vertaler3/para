@@ -56,6 +56,7 @@ add_executable(para
                src/controllers/AuthCtrl.cpp
                src/controllers/SettingsCtrl.cpp
                src/controllers/ScheduleCtrl.cpp
+               src/controllers/GradesCtrl.cpp
                src/controllers/IcsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -64,6 +65,7 @@ add_executable(para
                src/services/SettingsService.cpp
                src/services/ScheduleService.cpp
                src/services/ScheduleCache.cpp
+               src/services/GradesService.cpp
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/services/UserService.cpp
@@ -95,6 +97,7 @@ add_executable(para-tests
                tests/unit/ownership_guard_test.cpp
                tests/unit/settings_service_test.cpp
                tests/unit/schedule_service_test.cpp
+               tests/unit/grades_service_test.cpp
                tests/unit/ics_builder_test.cpp
                tests/unit/ics_service_token_test.cpp
                src/controllers/HealthCtrl.cpp
@@ -105,6 +108,7 @@ add_executable(para-tests
                src/services/SettingsService.cpp
                src/services/ScheduleService.cpp
                src/services/ScheduleCache.cpp
+               src/services/GradesService.cpp
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/utils/LoginLimiter.cpp)
