@@ -30,14 +30,22 @@
 
 ## 4. Команды
 
-> Планируемые на Э1 (02 §8–9): сборка `cmake --build build`; тесты `cmake --build build-tests && ctest --output-on-failure`; security-тест `./build/security_tests`; локально `./build/para config.json`. Полная замена блока — по завершении Э1.
+> Фактически проверенные на Docker-контуре Э1 (последний полный прогон — гейт закрытия Э1, 05.11.2026). `<DEMO_PASSWORD>` — плейсхолдер единого демо-пароля: значение в репо не хранится (§5.2), публикуется в комментарии к работе. Локальная сборка без Docker (`cmake`/`ctest` на хосте) в Э1 не проверялась.
 
-**Проверено фактически (Э1 шаги 1–7, 05.11.2026, Docker; гейт шагов 4–7 — зелёный):**
-- сборка и запуск: `cd para && docker compose up -d --build` → exit 0 (демо-контур сеет фикстуры при старте — ENTRYPOINT с `--seed`, Р-8);
-- живость: `curl localhost:8080/healthz` → HTTP 200, тело «ok»;
-- смок входа: `curl -i -X POST localhost:8080/v1/auth/login -d 'login=anya.demo&password=<демо-пароль>'` → 200 + `Set-Cookie: para_session=…; HttpOnly; Secure; SameSite=Lax`; `curl -b '<cookie>' localhost:8080/v1/me` → 200; неверный пароль → 401 `invalid_credentials` без деталей; 4-я попытка подряд → 429 + `Retry-After: 15` (значение демо-пароля в репо не хранится — §5.2; оно в отчёте сессии и будет в комментарии к работе на Э10);
-- тесты: `docker compose --profile tests run --rm tests` → ctest зелёный (para-tests + security_tests);
-- идемпотентность сидирования: `docker compose restart para` → `users` до/после равны (маркер `fixtures` в schema_migrations, Р-5/Р-8).
+- **Сборка и запуск:** `cd para && docker compose up -d --build` → exit 0 (демо-контур сеет фикстуры при старте — ENTRYPOINT с `--seed`, Р-8);
+- **Живость:** `curl localhost:8080/healthz` → HTTP 200, тело «ok»;
+- **Тесты:** `docker compose --profile tests run --rm tests` → ctest зелёный (para-tests + security_tests);
+- **Смок входа** (JSON-тело — как в гайде BE §2 и в реализации AuthCtrl; тело ошибок — единый формат 02 §5.1 `{error:{code,message}}`):
+  ```bash
+  curl -i -c c.txt -X POST localhost:8080/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"login":"anya.demo","password":"<DEMO_PASSWORD>"}'  # 200 + Set-Cookie: para_session=…; HttpOnly; Secure; SameSite=Lax
+  curl -i -b c.txt localhost:8080/v1/me                      # 200
+  curl -i -b c.txt -X POST localhost:8080/v1/auth/logout     # 200
+  curl -i -b c.txt localhost:8080/v1/me                      # 401 {"error":{"code":"unauthorized",…}}
+  ```
+  неверный пароль → 401 `invalid_credentials` без деталей; 4-я попытка подряд → 429 + `Retry-After: 15`;
+- **Идемпотентность сидирования:** `docker compose restart para` → `users` до/после равны (маркер `fixtures` в schema_migrations, Р-5/Р-8); пересеивание фикстур с нуля (в т.ч. после ротации пароля) — `docker compose down -v`, затем `up` снова.
 
 ## 5. Соглашения (нарушать нельзя)
 
@@ -52,23 +60,15 @@
 
 ## 6. Текущий статус
 
-- **Дата обновления:** 05.11.2026 · **Этап:** 1 — в работе: шаги 1–7 выполнены агентскими сессиями workflow (1–3 — каркас `para/`, CMake, Docker-контур; 4–7 — миграционный раннер, схема БД, фикстуры, вход); шаги 8–9 не начаты.
-- Пакет решений 01–05 готов и отрецензирован; команда разделена на дорожки BE/FE (05 §4.5), гайды в `гайды/`.
-- Готово в Э1, шаги 1–3 (коммиты `d4d4565`, `e06924e`, `cc37ab3` в `para/`):
-  - репозиторий по дереву 05 §2: копии решений 01–05 и гайдов в `para/docs/`, README (бейдж «концепт…»), LICENSE MIT, `.gitignore`/`.gitattributes`/env.example, каталоги-заготовки с `.gitkeep`;
-  - CMake-скаффолд: цели `para`, `para-tests`, `security_tests`; `HealthCtrl` → GET `/healthz` → 200 «ok»; doctest v2.5.3 вендорен (`tests/doctest.hpp` + карточка лицензии);
-  - Docker-контур: Dockerfile multi-stage (`FROM --platform=linux/amd64` в обеих стадиях), `.dockerignore`, `docker-compose.yml` (порт 8080, volume `para-data`, USER 10001);
-  - `para/docs/decisions.md`: Р-1…Р-4 (статическая линковка Drogon/Trantor; тег образа `v1.9.14` — тега `1.9.14` на Docker Hub нет; doctest MIT; 7 отклонений Dockerfile от 02 §8.1 — сама спецификация не правилась, протокол §7.3).
-- Готово в Э1, шаги 4–7 — агентская сессия workflow 05.11.2026 (коммиты `f85194c`, `b0e19c6`, `b277f13`, `1c540db` + правки `0222161`, `d484eff` в `para/`):
-  - шаг 4 (`f85194c`) — миграционный раннер `src/services/MigrationRunner.{h,cpp}`: `schema_migrations`, транзакция на файл (`BEGIN IMMEDIATE` → параметризованный `INSERT` версии → `COMMIT`, при ошибке `ROLLBACK`), `PRAGMA user_version` внутри той же транзакции, идемпотентный `--seed` маркером `fixtures`, WAL; БД `/opt/para/data/para.db` на томе `para-data` (путь в `db_clients` и `custom_config.db_path` — инвариант в config.json); юнит-тесты `tests/unit/migration_runner_test.cpp`; решение Р-5;
-  - шаг 5 (`b0e19c6`) — миграции `sql/migrations/0001…0005` по DDL 02 §4.1 + индексы §4.2 (21 таблица; ревью сверило побайтово);
-  - шаг 6 (`b277f13`) — `sql/fixtures.sql`: 5 аккаунтов `anya/oleg/mark/dina/dean.demo` (пароли — только argon2id-хэши t=2 m=19456 p=1, верифицированы `argon2id_verify`), демо-неделя 2–8.11.2026 группы 1-ФМО — 10 событий с двумя переносами среды и отменой четверга, оценки (Аня — пусто, Марк — порог допуска 78/82 и пересдача), заявки в трёх статусах автомата, уведомления о переносах; решения Р-6;
-  - шаг 7 (`1c540db`) — вход: `AuthCtrl` (POST `/v1/auth/login`, POST `/v1/auth/logout`, GET `/v1/me`, GET `/login`), `LoginFilter`, сессии в таблице `sessions` (токен 128 бит CSPRNG, cookie `HttpOnly; Secure; SameSite=Lax`, TTL 30 сут), лимитер 3 неудачи → 15 с с удвоением до 900 с (429 + `Retry-After`), `PasswordHasher`/`SessionService`, `views/login.csp` по 03 §4.1 (ждёт ревью FE-дорожки), сервис `tests` в compose; решение Р-7;
-  - правки по гейту и ревью (`0222161`, `d484eff`): `--seed` в ENTRYPOINT (Р-8), действующее значение демо-пароля удалено из `docs/decisions.md` (§5.2), SQL вынесен из AuthCtrl в `src/services/UserService` (§5.5).
-- **Как проверить (05.11.2026, гейт зелёный):** `cd para && docker compose up -d --build` → exit 0; смок: `curl -i -X POST localhost:8080/v1/auth/login -d 'login=anya.demo&password=<демо-пароль>'` → 200 + Set-Cookie, `/v1/me` с cookie → 200, неверный пароль → 401 без деталей, 4-я попытка → 429 + `Retry-After: 15`; `docker compose --profile tests run --rm tests` → ctest зелёный; `docker compose restart para` → users до/после равны (идемпотентность сидирования). Значение демо-пароля в репо не хранится (§5.2).
-- Ревью шагов 1–3: 3 обязательных замечания применены (`cc37ab3`). Ревью шагов 4–7: 8 находок, 2 обязательных применены (`d484eff` — демо-пароль из decisions.md, SQL из контроллера); medium/low (`foreign_keys=0`, FATAL MULTITHREAD в логе старта, CSP/nosniff, timing-оракул входа и др.) — без mustFix, учтены для плана Э8. Гейт шагов 4–7: два раунда (раунд 0 красный — ENTRYPOINT без `--seed`, исправлено `0222161`/Р-8; раунд 1 зелёный). Журнал сессии — `para/docs/agents-log/2026-11-05-э1-шаги-4-7-агентская-сессия.md`.
-- **Репозиторий:** `git@github.com:vertaler3/para.git` (приватный GitHub), ветка `main`; push ещё не выполнялся (шаг 8 Э1). Корень репозитория — папка `para/` (штаб: задание, `решения/`, `гайды/` — канонические и в репо не входят, в репо копии в `docs/`).
-- Следующий шаг: шаги 8–9 Э1 — актуализация README, push — **всё локально, без VPS**; первый деплой на VPS — Э9 (BE-гайд §11). После Э1 дорожки параллельны: BE — Э2–Э6, Э8–Э10; FE — Э3–Э4 и все состояния, Э7.
+- **Дата обновления:** 05.11.2026 · **Этап:** 1 — **закрыт (шаги 1–9)**, следующий этап — **Э2** (BE: OwnershipGuard, профиль `/v1/me`, настройки уведомлений; FE — параллельно; первый деплой на VPS — Э9, BE-гайд §11).
+- Пакет решений 01–05 готов и отрецензирован; дорожки BE/FE (05 §4.5), гайды в `гайды/`.
+- **Артефакты Э1** (репозиторий `para/`, ветка `main`; корень репо — папка `para/`: штаб — задание, `решения/`, `гайды/` — канонические, в репо копии в `docs/`):
+  - шаги 1–3 — каркас и Docker-контур (коммиты `d4d4565`, `e06924e`, ревью `cc37ab3`): дерево 05 §2, README/LICENSE MIT/`.gitignore`/env.example, CMake-скаффолд (`para`, `para-tests`, `security_tests`; `HealthCtrl` → GET `/healthz`), doctest v2.5.3 вендорен, Dockerfile multi-stage (`FROM --platform=linux/amd64`), docker-compose (порт 8080, том `para-data`, USER 10001); решения Р-1…Р-4;
+  - шаги 4–7 — БД и вход (коммиты `f85194c`, `b0e19c6`, `b277f13`, `1c540db` + правки `0222161`, `d484eff`; журнал сессии `03df89f`): шаг 4 — миграционный раннер (`schema_migrations`, транзакция на файл, идемпотентный `--seed` маркером `fixtures`, Р-5); шаг 5 — миграции `0001…0005` (21 таблица, DDL 02 §4.1 + индексы §4.2); шаг 6 — фикстуры `sql/fixtures.sql` (5 аккаунтов, демо-неделя 2–8.11.2026, заявки, оценки, уведомления; Р-6); шаг 7 — вход (`AuthCtrl`, `LoginFilter`, сессии, лимитер 3→15 с с удвоением до 900 с; Р-7); правки гейта/ревью: `--seed` в ENTRYPOINT (Р-8), демо-пароль из decisions.md (§5.2), SQL из контроллера в `UserService` (§5.5);
+  - три задачи закрытия (workflow, 05.11.2026): `42ab5a1` — ротация демо-пароля фикстур (все 5 `password_hash` перегенерированы argon2id t=2 m=19456 p=1, соль на аккаунт, верификация `argon2id_verify` в одноразовом контейнере; Р-9); `d3bc367` — формат ошибок API приведён к 02 §5.1 `{error:{code,message}}` (единый хелпер `src/utils/ApiError.h`; 6 ответов `AuthCtrl`/`LoginFilter`); актуализация README и AGENTS.md — данным коммитом;
+  - гейт шагов 4–7: два раунда (раунд 0 красный — ENTRYPOINT без `--seed`, исправлено `0222161`; раунд 1 зелёный); ревью шагов 4–7: 8 находок, 2 обязательных применены (`d484eff`); medium/low (`foreign_keys=0`, FATAL MULTITHREAD в логе старта, CSP/nosniff, timing-оракул входа и др.) — без mustFix, учтены для плана Э8; журнал — `para/docs/agents-log/2026-11-05-э1-шаги-4-7-агентская-сессия.md`.
+- **Честный статус шага 8 (push):** этой сессией НЕ выполнялся — выполняется владельцем отдельным шагом после финального смока гейта закрытия Э1; remote `git@github.com:vertaler3/para.git` настроен (приватный GitHub, ветка `main`); после push — клон на второй машине и сборка строго по README (гайд BE §2 шаг 8). Шаг 9 (ctest + коммит + актуализация AGENTS.md) — выполнен данным коммитом.
+- Как проверить — команды раздела 4 (фактически проверенные); значение демо-пароля в репо не хранится (§5.2) — публикуется в комментарии к работе.
 
 ## 7. Протокол ведения (обязательный)
 
@@ -79,7 +79,6 @@
 
 ## 8. Открытые вопросы
 
-- Финальное значение единого демо-пароля (задаётся кодом на Э1, публикуется в комментарии к работе; в БД — только хэши).
 - Выбор VPS-провайдера (кандидаты в 02 §8.5: Timeweb Cloud / Selectel / Beget / RuVDS) и проверка доступности из РФ без VPN.
 - Порядок фазы 2 push (web-push) после М3 — решить на Э7; до фриза фич гарантия — WebSocket-канал.
 - «Бронь аудитории» (5.10) — P1: если календарь сгорит, этап Э5а переносится после Э7 без влияния на ядро (решение фиксируется здесь и в `docs/decisions.md`).

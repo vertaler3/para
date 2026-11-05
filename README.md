@@ -13,19 +13,38 @@
 - **Фронтенд:** CSP-шаблоны + чистый CSS на дизайн-токенах + htmx + Alpine.js (вендоренно, без npm-сборки и внешних CDN).
 - **Инфраструктура:** Docker multi-stage, Nginx + systemd, бэкапы SQLite по cron.
 
-## Запуск (3 команды)
+## Запуск и проверка
+
+Команды — фактически проверенные на Docker-контуре этапа Э1 (05.11.2026):
 
 ```bash
 git clone git@github.com:vertaler3/para.git && cd para
-docker compose up --build
-# открыть http://localhost:8080
+docker compose up -d --build
+curl localhost:8080/healthz            # HTTP 200, тело «ok»; открыть http://localhost:8080
 ```
 
-> Состояние каркаса Э1: отвечает `GET /healthz` → 200 «ok» (проверка живости); страницы ядра и вход появятся на шагах 4–7 Э1 (миграции, фикстуры, AuthCtrl).
+Тесты (ctest: para-tests + security_tests):
+
+```bash
+docker compose --profile tests run --rm tests
+```
+
+Смок входа (демо-аккаунт Ани; `<DEMO_PASSWORD>` — плейсхолдер, значение в репозитории не хранится):
+
+```bash
+curl -i -c c.txt -X POST localhost:8080/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"login":"anya.demo","password":"<DEMO_PASSWORD>"}'  # 200 + Set-Cookie: para_session=…; HttpOnly; Secure; SameSite=Lax
+curl -i -b c.txt localhost:8080/v1/me                      # 200
+curl -i -b c.txt -X POST localhost:8080/v1/auth/logout     # 200
+curl -i -b c.txt localhost:8080/v1/me                      # 401 — {"error":{"code":"unauthorized",…}}
+```
+
+Неверный пароль → 401 `invalid_credentials` без деталей; 4-я попытка подряд → 429 + `Retry-After: 15`. Тело ошибок API — единый формат `{"error":{"code":"…","message":"…"}}`. Демо-данные сеются при старте (`--seed`) и идемпотентны: `docker compose restart para` не дублирует их; пересеять с нуля — `docker compose down -v` и `up` снова.
 
 ## Демо-доступы жюри
 
-Пять демо-аккаунтов (данные вымышленные) и единый демо-пароль — **появятся на шаге 6 Э1** (фикстуры `sql/fixtures.sql`); пароль публикуется в комментарии к работе, в репозитории и БД — только argon2id-хэши.
+Пять вымышленных демо-аккаунтов в фикстурах `sql/fixtures.sql`: `anya.demo`, `oleg.demo`, `mark.demo`, `dina.demo` (студенты) и `dean.demo` (сотрудник деканата). Единый демо-пароль **в репозитории и БД не хранится** (только argon2id-хэши, AGENTS.md §5.2) — значение публикуется в комментарии к работе, поэтому в README его нет намеренно.
 
 ## Документация
 
