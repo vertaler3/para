@@ -1,6 +1,6 @@
-/* «Пара» — конфиг каркаса Э1 (шаг 2): минимум без секретов (AGENTS.md §5.2).
+/* «Пара» — конфиг каркаса Э1 (шаги 2 и 4): без секретов (AGENTS.md §5.2).
    Секреты и ключи — только в переменных окружения сервера (см. env.example).
-   БД, сессии, миграции, фильтры добавляются на шагах 4–7 Э1. */
+   Сессии и фильтры добавляются на шагах 5–7 Э1. */
 {
     "listeners": [
         {
@@ -31,5 +31,31 @@
             "log_level": "INFO",
             "display_local_time": true
         }
+    },
+    //db_clients: SQLite DbClient — пул для сервисов (02 §2.2, §3, §7.5).
+    //filename — файл БД внутри контейнера, на именованном томе para-data
+    //(Dockerfile: /opt/para/data). initialization_queries выполняются на
+    //каждом соединении (Drogon 1.9.14): WAL + synchronous=NORMAL (02 §7.5).
+    "db_clients": [
+        {
+            "name": "para",
+            "rdbms": "sqlite3",
+            "filename": "/opt/para/data/para.db",
+            "connection_number": 1,
+            "initialization_queries": [
+                "PRAGMA journal_mode=WAL;",
+                "PRAGMA synchronous=NORMAL;"
+            ]
+        }
+    ],
+    //custom_config: параметры миграционного раннера (main.cpp, 02 §8.3;
+    //docs/decisions.md Р-5). db_path ОБЯЗАН совпадать с db_clients[para].
+    //filename — это один и тот же файл БД; менять только вместе.
+    //migrations_dir/fixtures_path — относительно WORKDIR (/opt/para в
+    //контейнере, корень проекта при локальном запуске).
+    "custom_config": {
+        "db_path": "/opt/para/data/para.db",
+        "migrations_dir": "sql/migrations",
+        "fixtures_path": "sql/fixtures.sql"
     }
 }

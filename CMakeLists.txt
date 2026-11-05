@@ -12,6 +12,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Drogon CONFIG REQUIRED)
 
+# SQLite: системная libsqlite3 (02 §2.2, public domain) — прямое использование
+# миграционным раннером до старта event loop (docs/decisions.md Р-5);
+# dev-пакет есть в build-образе drogonframework/drogon:v1.9.14, в рантайм-слой
+# уже входит libsqlite3-0 (Dockerfile, Р-4).
+# Нюанс образа: find_package(Drogon) подкладывает drogon'овский FindSQLite3
+# (не создаёт цель SQLite::SQLite3, вместо неё — SQLite3_lib), а на машинах
+# без Drogon-пакета сработает системный FindSQLite3 с SQLite::SQLite3.
+# Поддерживаем оба, фактическую цель проверяем после find_package.
+find_package(SQLite3 REQUIRED)
+if(TARGET SQLite3_lib)
+    set(PARA_SQLITE3_TARGET SQLite3_lib)
+else()
+    set(PARA_SQLITE3_TARGET SQLite::SQLite3)
+endif()
+
 # ##############################################################################
 # Требование: рантайм-бинарник без libdrogon.so/libtrantor.so (docs/decisions.md Р-1).
 # Факт (проверено 05.11.2026 в образе drogonframework/drogon:v1.9.14):
@@ -31,22 +46,25 @@ endif()
 
 add_executable(para
                src/main.cpp
-               src/controllers/HealthCtrl.cpp)
+               src/controllers/HealthCtrl.cpp
+               src/services/MigrationRunner.cpp)
 
 target_include_directories(para PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(para PRIVATE ${PARA_DROGON_TARGETS})
+target_link_libraries(para PRIVATE ${PARA_DROGON_TARGETS} ${PARA_SQLITE3_TARGET})
 
 # ##############################################################################
 # para-tests — doctest (vendored одиночный заголовок, MIT — docs/decisions.md Р-3).
 # Юнит-тесты: tests/unit/ (02 §9.1).
 add_executable(para-tests
                tests/unit/healthz_smoke.cpp
-               src/controllers/HealthCtrl.cpp)
+               tests/unit/migration_runner_test.cpp
+               src/controllers/HealthCtrl.cpp
+               src/services/MigrationRunner.cpp)
 
 target_include_directories(para-tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                    ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(para-tests PRIVATE ${PARA_DROGON_TARGETS})
+target_link_libraries(para-tests PRIVATE ${PARA_DROGON_TARGETS} ${PARA_SQLITE3_TARGET})
 
 enable_testing()
 add_test(NAME para-tests COMMAND para-tests)
