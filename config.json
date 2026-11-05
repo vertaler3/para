@@ -1,0 +1,32 @@
+/* «Пара» — конфиг каркаса Э1 (шаг 2): минимум без секретов (AGENTS.md §5.2).
+   Секреты и ключи — только в переменных окружения сервера (см. env.example).
+   БД, сессии, миграции, фильтры добавляются на шагах 4–7 Э1. */
+{
+    "listeners": [
+        {
+            //address: Ip address, 0.0.0.0 by default
+            "address": "0.0.0.0",
+            //port: Port number
+            "port": 8080,
+            //https: TLS терминируется на Nginx (02 §7.1), здесь — false
+            "https": false
+        }
+    ],
+    "app": {
+        //number_of_threads: количество IO-потоков
+        "number_of_threads": 1,
+        //enable_session: сессии включаются на шаге 7 Э1 (AuthCtrl + LoginFilter)
+        "enable_session": false,
+        //document_root: корень статики (наполнение — FE-дорожка, Э3–Э4)
+        "document_root": "./",
+        //log: вывод в stdout — Docker собирает логи движком; логи без паролей/токенов (02 §6.5)
+        "log": {
+            "use_spdlog": false,
+            "logfile_base_name": "",
+            "log_size_limit": 100000000,
+            "max_files": 0,
+            "log_level": "INFO",
+            "display_local_time": true
+        }
+    }
+}

@@ -1,0 +1,13 @@
+# LF — в репозитории и в рабочих копиях (Docker/Linux-сборка)
+* text=auto eol=lf
+
+# Шелл-скрипты всегда LF (будущий deploy/, tools/)
+*.sh text eol=lf
+
+# Бинарные ассеты (будущие static/fonts, static/img)
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.png binary
+*.ico binary
+*.pdf binary
