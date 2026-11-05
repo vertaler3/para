@@ -5,6 +5,13 @@ build/
 build-tests/
 data/
 docs/
+uploads/
+# секреты — только в окружении сервера (AGENTS.md §5.2), в контекст не попадают
+.env
+.env.*
+keys/
+*.pem
+*.key
 *.db
 *.db-*
 .DS_Store
