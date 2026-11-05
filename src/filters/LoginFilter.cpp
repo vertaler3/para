@@ -6,10 +6,13 @@ namespace {
 
 bool isPublic(const std::string& path)
 {
-    // Публичные префиксы — см. комментарий в LoginFilter.h.
+    // Публичные префиксы — см. комментарий в LoginFilter.h. /ics/ —
+    // приватная подписка календаря 5.4: авторизация самим секретным токеном
+    // (02 §6.1: «Аутентификация всех эндпоинтов, кроме /v1/auth/login,
+    // /ics/{token} … и /healthz, — через сессионную cookie и LoginFilter»).
     static const char* kPublicPrefixes[] = {
-        "/css/",  "/js/",  "/vendor/", "/img/", "/icons/",
-        "/fonts/", "/static/", "/healthz", "/v1/auth/login", "/login",
+        "/css/",  "/js/",  "/vendor/", "/img/", "/icons/", "/fonts/",
+        "/static/", "/healthz", "/v1/auth/login", "/login", "/ics/",
     };
     for (const char* prefix : kPublicPrefixes)
     {
