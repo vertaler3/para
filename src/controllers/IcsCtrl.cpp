@@ -32,7 +32,11 @@ void IcsCtrl::getCalendar(const HttpRequestPtr& req,
             }
             auto resp = HttpResponse::newHttpResponse();
             resp->setStatusCode(k200OK);
-            resp->addHeader("Content-Type", "text/calendar; charset=utf-8");
+            // text/calendar через setContentTypeString (НЕ addHeader):
+            // newHttpResponse ставит дефолтный text/html — addHeader
+            // ДОБАВЛЯЛ бы второй Content-Type (дубль — malformed HTTP,
+            // RFC 9110 §7.2; поймано E2E гейта, раунд 2).
+            resp->setContentTypeString("text/calendar; charset=utf-8");
             resp->setBody(std::move(c.ics));
             cb(resp);
         });

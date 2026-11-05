@@ -96,13 +96,16 @@ add_executable(para-tests
                tests/unit/settings_service_test.cpp
                tests/unit/schedule_service_test.cpp
                tests/unit/ics_builder_test.cpp
+               tests/unit/ics_service_token_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
+               src/services/SessionService.cpp
                src/services/SettingsService.cpp
                src/services/ScheduleService.cpp
                src/services/ScheduleCache.cpp
+               src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/utils/LoginLimiter.cpp)
 
