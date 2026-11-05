@@ -6,7 +6,8 @@
 -- t=2, m=19456 КБ, p=1, длина тега 32 байта; соль индивидуальна на каждый
 -- аккаунт. Единый демо-пароль в репозитории НЕ хранится (AGENTS.md §5.2/§8:
 -- публикуется в комментарии к работе). Хэши сгенерированы утилитой argon2
--- (ubuntu:24.04) и проверены argon2id_verify из libargon2 — docs/decisions.md Р-6.
+-- (ubuntu:24.04) и проверены argon2id_verify из libargon2 — docs/decisions.md Р-6;
+-- ротация единого демо-пароля при закрытии Э1 05.11.2026 — docs/decisions.md Р-9.
 -- Состав — 01 (Приложение A: тестовые аккаунты, сценарии С1–С8) и 05 (Э3:
 -- демо-неделя 2–8.11.2026 с двумя переносами среды и отменой чт 10:00).
 -- rooms/room_bookings сознательно НЕ заполняются — бронь аудитории это Э5а.
@@ -19,11 +20,11 @@ INSERT INTO groups(id, name, course) VALUES
 
 -- ==== 5 демо-аккаунтов (01, Приложение A); единый пароль — argon2id ====
 INSERT INTO users(id, login, password_hash, role) VALUES
-  (1, 'anya.demo', '$argon2id$v=19$m=19456,t=2,p=1$ZGM5OWRiZDMxZmQ4M2NlN2NhMDY4NmJkOTYyMzVhOWM$sBDNJLl8jtkbBHm6TJs72He5CtIvm9u56UrAQFiuo2k', 'student'),
-  (2, 'oleg.demo', '$argon2id$v=19$m=19456,t=2,p=1$MTZiYjYwMjE5YTAwZGZkOTQzYTcxOWY3OTU1NWY0MTg$7xHZz5ZE8ploymZ57d5PdRQdnDMsBB/eWa6UFnbGFbQ', 'student'),
-  (3, 'mark.demo', '$argon2id$v=19$m=19456,t=2,p=1$NzdhNjZmY2FiYWViNjAxZTUyNzgyOTNlMzE2YTk3OTY$JPGIoOVkPPAEn2sF7fZniFuhmkiUSWG+ng8NrYDktrM', 'student'),
-  (4, 'dina.demo', '$argon2id$v=19$m=19456,t=2,p=1$Njc4ODAyZDA1MzA5ZWYyZDM1N2I0ZDhhZTJlYTc0ZDM$JniZoa6uZwzjttv+1xMvYAdFcmZygiR7lgG1ypx7lY8', 'student'),
-  (5, 'dean.demo', '$argon2id$v=19$m=19456,t=2,p=1$MjMwMDIzZDkxMjQ2MmE0NGI2YTg5ZjY3MWIyMDY4OTI$319Lo5qLL/qo8fMrAJYUEQV0irHiMZret/HkZ2fBF7w', 'staff');
+  (1, 'anya.demo', '$argon2id$v=19$m=19456,t=2,p=1$NWMyNDY5Y2VhMTliYWI0ZjU5YTczMzJlMGZkZmQ0MzI$1qJDeAyREXGRFyqZYTD/FcbzQVomziXt5Lgax3LhwaY', 'student'),
+  (2, 'oleg.demo', '$argon2id$v=19$m=19456,t=2,p=1$YmQ4NTNhZGJiYjU0ZTdlMjI5OTBiY2I5NDJmNTkzNGU$eW0UF54gv/c/zUUAGmRcsW0VItatDolBnonJardUd54', 'student'),
+  (3, 'mark.demo', '$argon2id$v=19$m=19456,t=2,p=1$OWIzNWE2YWQ3N2QzNmIxYjEyNzUyZDQ5NjIxM2M5ZWI$XwwEB1bVgUA/QV1+2FfZGvsT66s11lt/yrt+OuJHAic', 'student'),
+  (4, 'dina.demo', '$argon2id$v=19$m=19456,t=2,p=1$ODdkMWNlZDMxYzk2MmQxYjJlM2FhOGUzYjUxZjU2MjI$d+S5dFfZs2CIzH1Zytq9hY4BrODUNf99uOMWHanSj3A', 'student'),
+  (5, 'dean.demo', '$argon2id$v=19$m=19456,t=2,p=1$MjlkOTIyOWIwZDVlZWNmMzIwODMwN2MwYzlkNGQyOTA$SEaabMMYZ9/81Vr7Ru+MWNTehx/Q4EwLyiy5j87Qi70', 'staff');
 
 -- ==== Профили студентов (сотруднику деканата профиль не нужен: в модели
 --      02 §4.1 profiles — карточка студента с обязательной группой) ====
