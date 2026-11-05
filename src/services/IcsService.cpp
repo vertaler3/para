@@ -112,7 +112,11 @@ void IcsService::createToken(
     int64_t userId,
     std::function<void(bool ok, const std::string& token)> cb)
 {
-    const std::string token = SessionService::generateToken();
+    // 256 бит энтропии → 64 hex-символа (Р-11, правки по гейту Э3 раунд 1:
+    // проверка «токенДлина» — приватный токен живёт в URL как bearer-ключ
+    // GET /ics; длина — единственная усиливаемая защита, 128 бит ниже
+    // порога гейта).
+    const std::string token = SessionService::generateToken(32);
     const std::string now = SessionService::utcNow();
     // user_id — PRIMARY KEY ics_tokens: UPSERT и есть ротация (строка одна,
     // прежний токен перестаёт находиться — он заменён этим).

@@ -10,11 +10,12 @@ namespace para {
 // Приватная подписка календаря (идея 5.4; 02 §5.2: POST/DELETE /v1/ics/token,
 // GET /ics/{token}; таблица ics_tokens — миграция 0004: user_id — PRIMARY KEY,
 // token UNIQUE, revoked DEFAULT 0 — один активный токен на пользователя
-// закреплён схемой). Токен — случайный 128-бит hex через CSPRNG OpenSSL
-// (SessionService::generateToken — тот же генератор, что у токена сессии,
-// Р-7). GET авторизуется самим токеном (02 §6.1: /ics/{token} — без
-// сессионной cookie); POST/DELETE — по сессии. Весь SQL — здесь
-// (AGENTS.md §5.5, 02 §6.4); VCALENDAR — IcsBuilder.
+// закреплён схемой). Токен — случайный 256-бит hex (64 hex-символа) через
+// CSPRNG OpenSSL (SessionService::generateToken(32) — тот же генератор, что
+// у токена сессии, Р-7; длина — Р-11, правки по гейту Э3 раунд 1). GET
+// авторизуется самим токеном (02 §6.1: /ics/{token} — без сессионной
+// cookie); POST/DELETE — по сессии. Весь SQL — здесь (AGENTS.md §5.5,
+// 02 §6.4); VCALENDAR — IcsBuilder.
 class IcsService
 {
   public:

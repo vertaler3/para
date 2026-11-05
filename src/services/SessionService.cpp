@@ -1,8 +1,9 @@
 #include "services/SessionService.h"
 
-#include <array>
+#include <cassert>
 #include <cstdlib>
 #include <ctime>
+#include <vector>
 
 #include <openssl/rand.h>
 
@@ -21,10 +22,12 @@ std::string SessionService::sessionCookie(const std::string& token,
            std::to_string(ttlSec) + "; HttpOnly; Secure; SameSite=Lax";
 }
 
-std::string SessionService::generateToken()
+std::string SessionService::generateToken(std::size_t bytes)
 {
-    // 128 бит CSPRNG → 32 hex-символа: в cookie — только он (02 §6.1).
-    std::array<unsigned char, 16> raw{};
+    // CSPRNG → bytes*2 hex-символов; bytes = 16 (128 бит) — токен сессии
+    // (02 §6.1), bytes = 32 (256 бит) — токен подписки ICS (Р-11).
+    assert(bytes > 0);
+    std::vector<unsigned char> raw(bytes);
     if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1)
     {
         throw std::runtime_error("SessionService: RAND_bytes failed");

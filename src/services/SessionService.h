@@ -36,8 +36,11 @@ class SessionService
     // Заголовок Set-Cookie со всеми флагами (единый хелпер, 02 §6.1).
     static std::string sessionCookie(const std::string& token, int64_t ttlSec);
 
-    // Случайный 128-битный токен в hex (CSPRNG OpenSSL).
-    static std::string generateToken();
+    // Случайный токен в hex (CSPRNG OpenSSL): bytes байт энтропии →
+    // bytes*2 hex-символов. Дефолт 16 байт = 128 бит — токен сессии
+    // (02 §6.1, Р-7); приватный токен подписки ICS берёт 32 байта =
+    // 256 бит (64 hex-символа) — Р-11 (правки по гейту Э3, раунд 1).
+    static std::string generateToken(std::size_t bytes = 16);
 
     // Создать сессию (заодно чистит истёкшие — idx_sessions_expiry, 02 §4.2).
     static void create(drogon::orm::DbClientPtr db,
