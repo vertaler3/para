@@ -55,6 +55,7 @@ add_executable(para
                src/controllers/HealthCtrl.cpp
                src/controllers/AuthCtrl.cpp
                src/services/MigrationRunner.cpp
+               src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
                src/services/SessionService.cpp
                src/services/UserService.cpp
@@ -83,8 +84,10 @@ add_executable(para-tests
                tests/unit/healthz_smoke.cpp
                tests/unit/migration_runner_test.cpp
                tests/unit/auth_unit.cpp
+               tests/unit/ownership_guard_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
+               src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
                src/utils/LoginLimiter.cpp)
 
