@@ -57,6 +57,39 @@ class GradesService
     // {"average":null,"disciplines":[]}.
     static void summary(drogon::orm::DbClientPtr db, int64_t userId,
                         ResultCb cb);
+
+    // GET /v1/grades/{id} — одна запись. Владение проверяет КОНТРОЛЛЕР через
+    // OwnershipGuard::check(Table::Grades) ДО вызова этого метода (правило
+    // код-ревью в шапке OwnershipGuard.h; 02 §6.3 п.3 — guard различает
+    // NotFound/Forbidden). Выборка здесь — по PK БЕЗ условия user_id:
+    // дублировать проверку владения SQL-условием мимо guard'а нельзя
+    // (постановка Э4 шаг 2; guard — единственная точка решения о доступе).
+    // Found — строка есть (body — объект той же формы, что в list);
+    // NotFound — строки нет (после Own guard'а — удаление в гонке; контроллер
+    // отвечает 404); Error — ошибка БД → 500, fail-closed.
+    enum class One
+    {
+        Found,
+        NotFound,
+        Error
+    };
+    struct OneResult
+    {
+        One status = One::NotFound;
+        Json::Value body;  // объект оценки при Found
+    };
+    using OneCb = std::function<void(OneResult)>;
+
+    static void gradeById(drogon::orm::DbClientPtr db, int64_t gradeId,
+                          OneCb cb);
+
+    // GET /v1/exams → {"exams": [...]} — session_plan пользователя
+    // (02 §5.2 «Экран „Сессия“: консультации/экзамены/зачёты/пересдачи»).
+    // kind задан CHECK-ограничением 02 §4.1 — все четыре значения
+    // (consultation/exam/credit/retake) принадлежат экрану, фильтра нет;
+    // порядок по starts_at (idx_session_plan_user (user_id, starts_at) —
+    // 02 §4.2). Плана сессии нет (Аня, staff) — 200 с пустым exams.
+    static void exams(drogon::orm::DbClientPtr db, int64_t userId, ResultCb cb);
 };
 
 }  // namespace para

@@ -1,17 +1,25 @@
-// Юнит-тесты GradesService (Э4 шаг 1; 02 §5.2, миграция 0002):
+// Юнит-тесты GradesService (Э4 шаги 1–2; 02 §5.2, миграция 0002):
 //  - список — только СВОИ оценки (user_id из сессии), с кодом/названием
 //    дисциплины, comment null у строк без комментария;
 //  - сводка — агрегат по дисциплинам: порог = Σ max_score компонентов,
 //    «что осталось» (missing) = max(0, Σ max_score − Σ score), средний балл —
 //    взвешенный процент Σ score / Σ max_score × 100 (демо-арифметика
 //    05 §3 Э4: у «Мировой экономики» 30+30+18=78 при пороге 82 — не хватает 4);
+//  - одна запись (шаг 2): gradeById по PK — БЕЗ user_id-условия: владение
+//    проверяет OwnershipGuard (сценарии своё/чужое/несуществующее/ошибка БД —
+//    через OwnershipGuard::check(Table::Grades) поверх той же временной SQLite,
+//    как в ownership_guard_test.cpp для applications);
+//  - exams (шаг 2) — session_plan пользователя (02 §5.2 «Экран „Сессия“»),
+//    все kind из CHECK DDL, сортировка по starts_at, изоляция по user_id;
 //  - пользователь без оценок — пустой список и «пустое» состояние сводки
 //    (average=null, disciplines=[]) — Аня, С5.6/03 §4.4;
 //  - ошибка БД — fail-closed (ok=false → 500 контроллером), не пустой ответ.
-// Данные копируют оценки sql/fixtures.sql дословно: user 3 (Марк) — 10 строк
-// (ids 1–10; факт проверен sqlite по фикстурам: в постановке шага было «8
+// Данные копируют sql/fixtures.sql дословно: оценки user 3 (Марк) — 10 строк
+// (ids 1–10; факт проверен sqlite по фикстурам: в постановке шага 1 было «8
 // записей», в sql/fixtures.sql их 10 — все user_id=3, включая неуд «История
-// МЭО» id 10) + помеченное дополнение теста: id 99 пользователя 9 (изоляция).
+// МЭО» id 10), session_plan — 5 строк (у Марка retake 18.11, консультация и
+// экзамен по МЭО; у Дины — дисциплина 10) + помеченные дополнения теста:
+// id 99 grades и id 99 session_plan пользователя 9 (изоляция).
 // Временная SQLite через настоящий DbClient — как в тестах Э2/Э3.
 #include <chrono>
 #include <filesystem>
@@ -24,9 +32,11 @@
 #include <doctest.hpp>
 
 #include "services/GradesService.h"
+#include "services/OwnershipGuard.h"
 
 namespace fs = std::filesystem;
 using para::GradesService;
+using para::OwnershipGuard;
 
 namespace {
 
@@ -93,7 +103,8 @@ struct Fixture
              " (6,'MT-401','Международная торговля','graded_credit'),"
              " (7,'EC-401','Эконометрика','exam'),"
              " (8,'BE-401','Деловой английский','credit'),"
-             " (9,'MN-401','Международные переговоры','exam');"
+             " (9,'MN-401','Международные переговоры','exam'),"
+             " (10,'IL-401','Международное право','exam');"
              "CREATE TABLE grades ("
              "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
              "  user_id INTEGER NOT NULL,"
@@ -142,6 +153,31 @@ struct Fixture
              " VALUES"
              " (99, 9, 1, 'exam', 'модуль 1', 30, 30, 1, NULL,"
              " '2026-10-05T12:00:00Z');");
+        // session_plan (миграция 0002) — строки sql/fixtures.sql дословно:
+        // Марк — пересдача «История МЭО» 18.11, консультация и экзамен МЭО
+        // (С4.5); Дина — консультация и экзамен по международному праву.
+        exec(raw,
+             "CREATE TABLE session_plan ("
+             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  user_id INTEGER NOT NULL,"
+             "  discipline_id INTEGER NOT NULL,"
+             "  kind TEXT NOT NULL,"
+             "  starts_at TEXT NOT NULL,"
+             "  room TEXT NOT NULL);"
+             "CREATE INDEX idx_session_plan_user ON session_plan(user_id,"
+             " starts_at);"
+             "INSERT INTO session_plan(id, user_id, discipline_id, kind,"
+             " starts_at, room) VALUES"
+             " (1, 3, 3,  'retake',       '2026-11-18T10:00:00Z', '1108'),"
+             " (2, 3, 1,  'consultation', '2026-11-21T10:00:00Z', '4210'),"
+             " (3, 3, 1,  'exam',         '2026-11-24T10:00:00Z', '4210'),"
+             " (4, 4, 10, 'consultation', '2026-11-21T14:00:00Z', '2210'),"
+             " (5, 4, 10, 'exam',         '2026-11-25T10:00:00Z', '2210');");
+        // Дополнение теста: session_plan другого пользователя (user 9).
+        exec(raw,
+             "INSERT INTO session_plan(id, user_id, discipline_id, kind,"
+             " starts_at, room)"
+             " VALUES (99, 9, 1, 'credit', '2026-11-20T10:00:00Z', '1201');");
         sqlite3_close(raw);
     }
 };
@@ -175,6 +211,50 @@ const Json::Value* disciplineOf(const Json::Value& arr, int64_t disciplineId)
         if (d["discipline_id"].as<int64_t>() == disciplineId)
             return &d;
     return nullptr;
+}
+
+GradesService::OneResult gradeByIdOf(const drogon::orm::DbClientPtr& db,
+                                     int64_t gradeId)
+{
+    std::promise<GradesService::OneResult> p;
+    auto f = p.get_future();
+    GradesService::gradeById(db,
+                             gradeId,
+                             [&p](GradesService::OneResult r) {
+                                 p.set_value(std::move(r));
+                             });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+GradesService::Result examsOf(const drogon::orm::DbClientPtr& db,
+                              int64_t userId)
+{
+    std::promise<GradesService::Result> p;
+    auto f = p.get_future();
+    GradesService::exams(db, userId, [&p](GradesService::Result r) {
+        p.set_value(std::move(r));
+    });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+OwnershipGuard::Verdict guardGrade(const drogon::orm::DbClientPtr& db,
+                                   int64_t sessionUserId,
+                                   int64_t gradeId)
+{
+    // Сценарий контроллера GET /v1/grades/{id}: guard ДО любых данных.
+    std::promise<OwnershipGuard::Verdict> p;
+    auto f = p.get_future();
+    OwnershipGuard::check(db,
+                          OwnershipGuard::Table::Grades,
+                          sessionUserId,
+                          gradeId,
+                          [&p](OwnershipGuard::Verdict v) {
+                              p.set_value(v);
+                          });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
 }
 
 }  // namespace
@@ -319,4 +399,97 @@ TEST_CASE("GradesService: ошибка БД — fail-closed (ok=false → 500)")
     Fixture f(/*withTables=*/false);
     CHECK_FALSE(listOf(f.db, 3).ok);
     CHECK_FALSE(summaryOf(f.db, 3).ok);
+    CHECK_FALSE(examsOf(f.db, 3).ok);
+    CHECK(gradeByIdOf(f.db, 1).status == GradesService::One::Error);
+}
+
+TEST_CASE("OwnershipGuard (Table::Grades): своё/чужое/несуществующее/ошибка БД")
+{
+    // Сценарии контроллера GET /v1/grades/{id} (02 §6.3: guard различает
+    // 403/404; путь контроллера: Own → данные, NotFound → 404, Forbidden →
+    // 403, Error → 500). Оценки фикстур принадлежат user 3 (Марк).
+    Fixture f;
+    // Своя — grade id 1 у Марка.
+    CHECK(guardGrade(f.db, 3, 1) == OwnershipGuard::Verdict::Own);
+    // Чужая существующая: Аня (user 1) и пользователь 9 запрашивают grade
+    // Марка → Forbidden (403), а не 404.
+    CHECK(guardGrade(f.db, 1, 1) == OwnershipGuard::Verdict::Forbidden);
+    CHECK(guardGrade(f.db, 9, 10) == OwnershipGuard::Verdict::Forbidden);
+    // Несуществующая → NotFound (404) — для любого пользователя.
+    CHECK(guardGrade(f.db, 3, 999) == OwnershipGuard::Verdict::NotFound);
+    CHECK(guardGrade(f.db, 1, 999) == OwnershipGuard::Verdict::NotFound);
+    // Ошибка БД — fail-closed: Error (контроллер → 500), не разрешение.
+    Fixture broken(/*withTables=*/false);
+    CHECK(guardGrade(broken.db, 3, 1) == OwnershipGuard::Verdict::Error);
+}
+
+TEST_CASE("GradesService::gradeById — одна запись по PK, NotFound отсутствующей")
+{
+    Fixture f;
+    // Своя запись (после Own guard'а): те же поля, что в списке.
+    const auto own = gradeByIdOf(f.db, 1);
+    REQUIRE(own.status == GradesService::One::Found);
+    CHECK(own.body["id"].as<int64_t>() == 1);
+    CHECK(own.body["discipline_id"].as<int64_t>() == 1);
+    CHECK(own.body["code"].asString() == "ME-101");
+    CHECK(own.body["discipline"].asString() == "Мировая экономика");
+    CHECK(own.body["component"].asString() == "модуль 1");
+    CHECK(own.body["score"].as<int64_t>() == 30);
+    CHECK(own.body["max_score"].as<int64_t>() == 30);
+    CHECK(own.body["comment"].isNull());
+    CHECK(own.body["graded_at"].asString() == "2026-10-05T12:00:00Z");
+
+    // Запись с комментарием преподавателя (неуд «История МЭО»).
+    const auto ret = gradeByIdOf(f.db, 10);
+    REQUIRE(ret.status == GradesService::One::Found);
+    CHECK(ret.body["comment"].asString() ==
+          "Порог не достигнут; пересдача 18 ноября");
+    CHECK(ret.body["score"].as<int64_t>() == 25);
+
+    // Несуществующая → NotFound (контроллер → 404 02 §5.1).
+    CHECK(gradeByIdOf(f.db, 999).status == GradesService::One::NotFound);
+    CHECK(gradeByIdOf(f.db, -1).status == GradesService::One::NotFound);
+    // Ошибка БД — Error (контроллер → 500), не NotFound.
+    Fixture broken(/*withTables=*/false);
+    CHECK(gradeByIdOf(broken.db, 1).status == GradesService::One::Error);
+}
+
+TEST_CASE("GradesService::exams — session_plan пользователя, порядок, изоляция")
+{
+    Fixture f;
+    // Марк: 3 строки фикстур, по starts_at — retake 18.11 → консультация
+    // 21.11 → экзамен 24.11; все kind из CHECK DDL попадают без фильтра.
+    const auto m = examsOf(f.db, 3);
+    REQUIRE(m.ok);
+    const auto& arr = m.body["exams"];
+    REQUIRE(arr.size() == 3);
+    CHECK(arr[0]["id"].as<int64_t>() == 1);
+    CHECK(arr[0]["kind"].asString() == "retake");  // пересдача — 05 §3 Э4
+    CHECK(arr[0]["discipline"].asString() == "История МЭО");
+    CHECK(arr[0]["code"].asString() == "HME-101");
+    CHECK(arr[0]["room"].asString() == "1108");
+    CHECK(arr[0]["starts_at"].asString() == "2026-11-18T10:00:00Z");
+    CHECK(arr[1]["kind"].asString() == "consultation");
+    CHECK(arr[1]["discipline"].asString() == "Мировая экономика");
+    CHECK(arr[1]["room"].asString() == "4210");
+    CHECK(arr[2]["kind"].asString() == "exam");
+    CHECK(arr[2]["starts_at"].asString() == "2026-11-24T10:00:00Z");
+
+    // Дина: только её две строки (discipline 10), чужие (Марк/9) не попали.
+    const auto d = examsOf(f.db, 4);
+    REQUIRE(d.ok);
+    REQUIRE(d.body["exams"].size() == 2);
+    CHECK(d.body["exams"][0]["discipline"].asString() == "Международное право");
+    CHECK(d.body["exams"][0]["kind"].asString() == "consultation");
+
+    // Аня (user 1) и пользователь 9 без session_plan фикстур... user 9 —
+    // только его тестовая строка id 99 (изоляция).
+    const auto a = examsOf(f.db, 1);
+    REQUIRE(a.ok);
+    CHECK(a.body["exams"].size() == 0);
+    const auto nine = examsOf(f.db, 9);
+    REQUIRE(nine.ok);
+    REQUIRE(nine.body["exams"].size() == 1);
+    CHECK(nine.body["exams"][0]["id"].as<int64_t>() == 99);
+    CHECK(nine.body["exams"][0]["kind"].asString() == "credit");
 }
