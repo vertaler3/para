@@ -38,7 +38,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    //Run HTTP framework, the method will block in the internal event loop
+    //Run HTTP framework, the method will block in the internal event loop.
+    //LoginFilter не регистрируется явно: HttpFilter<T> в Drogon создаётся
+    //и регистрируется автоматически по имени класса ("LoginFilter") —
+    //на него ссылаются роуты AuthCtrl через METHOD_LIST.
     drogon::app().run();
     return 0;
 }

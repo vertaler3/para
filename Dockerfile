@@ -12,7 +12,7 @@ FROM --platform=linux/amd64 drogonframework/drogon:v1.9.14 AS build
 WORKDIR /src
 COPY . .
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ninja-build ccache \
+ && apt-get install -y --no-install-recommends ninja-build ccache libargon2-dev \
  && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)"
 

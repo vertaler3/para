@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- Страница входа (шаг 7 Э1). Вайрфрейм: 03 §4.1. Минимальная
+     семантическая разметка БЕЗ стилей: CSS/токены/иконки — FE-дорожка
+     (AGENTS.md §5.8; договорённость — docs/decisions.md Р-7).
+     Пользовательские данные в шаблоне отсутствуют: строки — серверные
+     константы, поэтому {{}}-интеграций нет. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Пара — вход</title>
+</head>
+<body>
+  <header>
+    <h1>пара</h1>
+    <p>деканат в кармане</p>
+  </header>
+
+  <main>
+    <form method="post" action="/v1/auth/login">
+      <label for="login">Логин</label>
+      <input id="login" name="login" type="text" autocomplete="username" required>
+
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+      <button type="submit">Войти</button>
+      <!-- Состояние ошибки (01, экран входа): «Неверный логин или пароль»,
+           без раскрытия, что именно неверно. Оживит FE-дорожка. -->
+      <p role="alert" hidden>Неверный логин или пароль</p>
+    </form>
+
+    <!-- Карточка «Демо-доступы для жюри» (03 §4.1). Значение единого
+         демо-пароля в разметку НЕ подставляется: оно публикуется в
+         комментарии к работе (AGENTS.md §5.2, §8); подстановка логина по
+         тапу — FE. Пометка про пароль — по заданию шага 7. -->
+    <section aria-label="Демо-доступы для жюри">
+      <h2>Демо-доступы для жюри</h2>
+      <ul>
+        <li>anya.demo — студентка 1 курса</li>
+        <li>oleg.demo — студент 1 курса</li>
+        <li>mark.demo — студент 4 курса</li>
+        <li>dina.demo — студентка 4 курса</li>
+        <li>dean.demo — сотрудник деканата</li>
+      </ul>
+      <p>Единый демо-пароль будет опубликован позже (появится на Э10).</p>
+    </section>
+  </main>
+
+  <!-- Дисклеймер-константа (01, строки 14–16; AGENTS.md §5.1) -->
+  <footer>
+    <p>Это концепт для хакатона. Все данные вымышленные. Не является
+       официальным сервисом вуза.</p>
+  </footer>
+</body>
+</html>

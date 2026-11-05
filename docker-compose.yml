@@ -1,5 +1,8 @@
 # «Пара» — запуск демо: docker compose up --build
 # Один сервис + именованный том БД (02 §8.1: para-data:/opt/para/data).
+# Тесты отдельно: docker compose --profile tests run --rm tests
+# (up его не поднимает — profiles; слои build-стадии переиспользуют кэш
+# основного сервиса: тот же Dockerfile, тот же target build).
 services:
   para:
     build: .
@@ -8,6 +11,18 @@ services:
     volumes:
       - para-data:/opt/para/data
     restart: unless-stopped
+
+  tests:
+    build:
+      context: .
+      target: build
+    profiles: ["tests"]
+    working_dir: /src
+    # Сборка вне /src/build (он занята образом) — во временный каталог.
+    command: >
+      bash -c "cmake -B /tmp/build-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
+      && cmake --build /tmp/build-tests -j\"$(nproc)\"
+      && ctest --test-dir /tmp/build-tests --output-on-failure"
 
 volumes:
   para-data:

@@ -1,6 +1,7 @@
-/* «Пара» — конфиг каркаса Э1 (шаги 2 и 4): без секретов (AGENTS.md §5.2).
+/* «Пара» — конфиг каркаса Э1 (шаги 2, 4, 7): без секретов (AGENTS.md §5.2).
    Секреты и ключи — только в переменных окружения сервера (см. env.example).
-   Сессии и фильтры добавляются на шагах 5–7 Э1. */
+   Безопасность — 02 §6: сессии (шаг 7) — своя таблица sessions, cookie —
+   SessionService (HttpOnly; Secure; SameSite=Lax); CSRF double-submit — Э8. */
 {
     "listeners": [
         {
@@ -15,7 +16,11 @@
     "app": {
         //number_of_threads: количество IO-потоков
         "number_of_threads": 1,
-        //enable_session: сессии включаются на шаге 7 Э1 (AuthCtrl + LoginFilter)
+        //enable_session: встроенные сессии Drogon НЕ используются (02 §6.1
+        //зафиксирован собственный вариант): cookie со случайным 128-бит
+        //токеном → таблица sessions (миграция 0004), флаги cookie задаёт
+        //SessionService::sessionCookie (HttpOnly; Secure; SameSite=Lax);
+        //проверка — LoginFilter (шаг 7 Э1).
         "enable_session": false,
         //upload_path: временные загрузки Drogon — на томе para-data (владелец
         //UID 10001); дефолт "uploads" в /opt/para недоступен на запись (Р-4 п.7)

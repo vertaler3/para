@@ -27,6 +27,12 @@ else()
     set(PARA_SQLITE3_TARGET SQLite::SQLite3)
 endif()
 
+# libargon2 (phc-winner-argon2, CC0/Apache-2.0 — 02 §2.2, Р-7): пароли —
+# только argon2id (02 §6.2); MD5/SHA256 из Drogon Utilities для паролей
+# запрещены. Заголовки/библиотека — apt-пакет libargon2-dev (Dockerfile).
+find_path(ARGON2_INCLUDE_DIR argon2.h REQUIRED)
+find_library(ARGON2_LIBRARY NAMES argon2 REQUIRED)
+
 # ##############################################################################
 # Требование: рантайм-бинарник без libdrogon.so/libtrantor.so (docs/decisions.md Р-1).
 # Факт (проверено 05.11.2026 в образе drogonframework/drogon:v1.9.14):
@@ -47,10 +53,27 @@ endif()
 add_executable(para
                src/main.cpp
                src/controllers/HealthCtrl.cpp
-               src/services/MigrationRunner.cpp)
+               src/controllers/AuthCtrl.cpp
+               src/services/MigrationRunner.cpp
+               src/services/PasswordHasher.cpp
+               src/services/SessionService.cpp
+               src/filters/LoginFilter.cpp
+               src/utils/LoginLimiter.cpp)
 
-target_include_directories(para PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(para PRIVATE ${PARA_DROGON_TARGETS} ${PARA_SQLITE3_TARGET})
+target_include_directories(para PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src
+                           ${CMAKE_CURRENT_BINARY_DIR}/generated
+                           ${ARGON2_INCLUDE_DIR})
+# CSP-шаблоны (views/*.csp → /login и т.д.): генерация drogon_ctl create
+# view в бинарный каталог (в репозитории только .csp-исходники).
+# drogon_create_views — функция из cmake-пакета Drogon (DrogonUtilities).
+drogon_create_views(para ${CMAKE_CURRENT_SOURCE_DIR}/views
+                        ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
+target_link_libraries(para PRIVATE
+                      ${PARA_DROGON_TARGETS}
+                      ${PARA_SQLITE3_TARGET}
+                      ${ARGON2_LIBRARY})
 
 # ##############################################################################
 # para-tests — doctest (vendored одиночный заголовок, MIT — docs/decisions.md Р-3).
@@ -58,13 +81,20 @@ target_link_libraries(para PRIVATE ${PARA_DROGON_TARGETS} ${PARA_SQLITE3_TARGET}
 add_executable(para-tests
                tests/unit/healthz_smoke.cpp
                tests/unit/migration_runner_test.cpp
+               tests/unit/auth_unit.cpp
                src/controllers/HealthCtrl.cpp
-               src/services/MigrationRunner.cpp)
+               src/services/MigrationRunner.cpp
+               src/services/PasswordHasher.cpp
+               src/utils/LoginLimiter.cpp)
 
 target_include_directories(para-tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-                                   ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(para-tests PRIVATE ${PARA_DROGON_TARGETS} ${PARA_SQLITE3_TARGET})
+                                   ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                                   ${ARGON2_INCLUDE_DIR})
+target_link_libraries(para-tests PRIVATE
+                      ${PARA_DROGON_TARGETS}
+                      ${PARA_SQLITE3_TARGET}
+                      ${ARGON2_LIBRARY})
 
 enable_testing()
 add_test(NAME para-tests COMMAND para-tests)
