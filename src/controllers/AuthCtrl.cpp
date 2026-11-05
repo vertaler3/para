@@ -4,6 +4,7 @@
 
 #include "services/PasswordHasher.h"
 #include "services/UserService.h"
+#include "utils/ApiError.h"
 
 using namespace para;
 using namespace drogon::orm;
@@ -15,13 +16,6 @@ HttpResponsePtr jsonResponse(Json::Value body, HttpStatusCode code)
     auto resp = HttpResponse::newHttpJsonResponse(std::move(body));
     resp->setStatusCode(code);
     return resp;
-}
-
-HttpResponsePtr errorResponse(const char* error, HttpStatusCode code)
-{
-    Json::Value body;
-    body["error"] = error;
-    return jsonResponse(std::move(body), code);
 }
 
 int64_t nowSec()
@@ -50,7 +44,9 @@ void AuthCtrl::login(const HttpRequestPtr& req,
     if (json == nullptr || !json->isMember("login") ||
         !json->isMember("password"))
     {
-        cb(errorResponse("bad_request", k400BadRequest));
+        cb(api::errorResponse("bad_request",
+                              "Ожидается JSON с полями login и password",
+                              k400BadRequest));
         return;
     }
     const std::string login = (*json)["login"].asString();
@@ -59,7 +55,10 @@ void AuthCtrl::login(const HttpRequestPtr& req,
     // Лимитер (02 §6.4): заблокирован → 429, попытка не проверяется.
     if (const int64_t wait = limiter_.blockedFor(login, nowSec()); wait > 0)
     {
-        auto resp = errorResponse("too_many_attempts", k429TooManyRequests);
+        auto resp = api::errorResponse("too_many_attempts",
+                                       "Слишком много попыток входа, "
+                                       "повторите позже",
+                                       k429TooManyRequests);
         resp->addHeader("Retry-After", std::to_string(wait));
         cb(resp);
         return;
@@ -81,7 +80,11 @@ void AuthCtrl::login(const HttpRequestPtr& req,
                 UserService::mirrorFailedAttempts(
                     app().getDbClient("para"), login,
                     limiter_.failures(login));
-                cb(errorResponse("invalid_credentials", k401Unauthorized));
+                // Единый message для неверного логина и неверного пароля —
+                // без деталей, что именно не подошло (02 §5.2).
+                cb(api::errorResponse("invalid_credentials",
+                                      "Неверный логин или пароль",
+                                      k401Unauthorized));
                 return;
             }
             limiter_.onSuccess(login);
@@ -94,7 +97,11 @@ void AuthCtrl::login(const HttpRequestPtr& req,
                  cb = std::move(cb)](bool ok, const std::string& token) {
                     if (!ok)
                     {
-                        cb(errorResponse("internal", k500InternalServerError));
+                        // 500 без стека и служебных строк наружу
+                        // (02 §5.1: детали — только в серверном логе).
+                        cb(api::errorResponse("internal",
+                                              "Внутренняя ошибка сервера",
+                                              k500InternalServerError));
                         return;
                     }
                     Json::Value body;

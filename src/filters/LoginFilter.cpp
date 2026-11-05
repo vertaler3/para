@@ -1,5 +1,7 @@
 #include "filters/LoginFilter.h"
 
+#include "utils/ApiError.h"
+
 namespace {
 
 bool isPublic(const std::string& path)
@@ -31,15 +33,11 @@ void LoginFilter::doFilter(const HttpRequestPtr& req,
     const std::string token = req->getCookie(para::SessionService::kCookieName);
     if (token.empty())
     {
-        // 401 без деталей (02 §6.3).
-        auto resp = HttpResponse::newHttpJsonResponse(
-            [] {
-                Json::Value body;
-                body["error"] = "unauthorized";
-                return body;
-            }());
-        resp->setStatusCode(k401Unauthorized);
-        fcb(resp);
+        // 401 без деталей (02 §6.3); формат тела — единый (02 §5.1), message
+        // не раскрывает разницу «нет cookie» / «сессия невалидна».
+        fcb(para::api::errorResponse("unauthorized",
+                                     "Требуется авторизация",
+                                     k401Unauthorized));
         return;
     }
     para::SessionService::findValid(
@@ -48,13 +46,9 @@ void LoginFilter::doFilter(const HttpRequestPtr& req,
          fccb = std::move(fccb)](std::optional<para::SessionInfo> session) {
             if (!session)
             {
-                auto resp = HttpResponse::newHttpJsonResponse([] {
-                    Json::Value body;
-                    body["error"] = "unauthorized";
-                    return body;
-                }());
-                resp->setStatusCode(k401Unauthorized);
-                fcb(resp);
+                fcb(para::api::errorResponse("unauthorized",
+                                             "Требуется авторизация",
+                                             k401Unauthorized));
                 return;
             }
             req->attributes()->insert("session", std::move(*session));
