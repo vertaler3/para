@@ -8,8 +8,9 @@
 using namespace drogon;
 
 // Тонкий контроллер входа (10–30 строк на эндпоинт, AGENTS.md §5.5):
-// логика — в сервисах (PasswordHasher, SessionService, LoginLimiter),
-// SQL — параметризованный, только в сервисах.
+// логика — в сервисах (UserService, PasswordHasher, SessionService,
+// LoginLimiter); SQL-строк в контроллере нет вовсе (AGENTS.md §5.5,
+// 02 §6.4 — все запросы параметризованные, живут в src/services).
 // /v1/auth/login — публичный; /v1/auth/logout и /v1/me — под LoginFilter.
 // GET /v1/me — минимальный профиль для смока Э1; полное развитие — Э2.
 class AuthCtrl : public HttpController<AuthCtrl>

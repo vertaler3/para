@@ -57,6 +57,7 @@ add_executable(para
                src/services/MigrationRunner.cpp
                src/services/PasswordHasher.cpp
                src/services/SessionService.cpp
+               src/services/UserService.cpp
                src/filters/LoginFilter.cpp
                src/utils/LoginLimiter.cpp)
 
