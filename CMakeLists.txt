@@ -54,10 +54,12 @@ add_executable(para
                src/main.cpp
                src/controllers/HealthCtrl.cpp
                src/controllers/AuthCtrl.cpp
+               src/controllers/SettingsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
                src/services/SessionService.cpp
+               src/services/SettingsService.cpp
                src/services/UserService.cpp
                src/filters/LoginFilter.cpp
                src/utils/LoginLimiter.cpp)
@@ -85,10 +87,12 @@ add_executable(para-tests
                tests/unit/migration_runner_test.cpp
                tests/unit/auth_unit.cpp
                tests/unit/ownership_guard_test.cpp
+               tests/unit/settings_service_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
+               src/services/SettingsService.cpp
                src/utils/LoginLimiter.cpp)
 
 target_include_directories(para-tests
