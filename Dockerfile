@@ -39,4 +39,8 @@ RUN mkdir -p /opt/para/data && chown -R 10001:10001 /opt/para/data
 WORKDIR /opt/para
 USER 10001
 EXPOSE 8080
-ENTRYPOINT ["/opt/para/para", "--config", "/etc/app/config.json"]
+# --seed: демо-контур сеет фикстуры при каждом старте — идемпотентно
+# (маркер 'fixtures' в schema_migrations, docs/decisions.md Р-5/Р-8;
+# повторный старт на томе ничего не дублирует). Прод-контур без демо-данных
+# (Э9) запускается без флага.
+ENTRYPOINT ["/opt/para/para", "--config", "/etc/app/config.json", "--seed"]
