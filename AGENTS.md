@@ -46,6 +46,29 @@
   ```
   неверный пароль → 401 `invalid_credentials` без деталей; 4-я попытка подряд → 429 + `Retry-After: 15`;
 - **Идемпотентность сидирования:** `docker compose restart para` → `users` до/после равны (маркер `fixtures` в schema_migrations, Р-5/Р-8); пересеивание фикстур с нуля (в т.ч. после ротации пароля) — `docker compose down -v`, затем `up` снова.
+- **BE-часть Э2** (фактически проверено 05.11.2026 в одноразовом контейнере `drogonframework/drogon:v1.9.14` — сборка в /tmp, не `docker compose`; compose-прогоны гейта поверх того же кода — ниже):
+  - **настройки (JSON, оба маршрута под LoginFilter; тело ошибок — 02 §5.1):**
+    ```bash
+    curl -s -c c.txt -X POST localhost:8080/v1/auth/login \
+      -H 'Content-Type: application/json' \
+      -d '{"login":"anya.demo","password":"<DEMO_PASSWORD>"}'
+    curl -s -b c.txt localhost:8080/v1/me                       # 200, profile: fio/faculty/program/course/group/student_card_no
+    curl -s -b c.txt localhost:8080/v1/notifications/settings   # 200 — дефолты DDL (тумблеры true, quiet 23:00–07:00, theme system, onboarding [])
+    curl -s -b c.txt -X PUT localhost:8080/v1/notifications/settings \
+      -H 'Content-Type: application/json' \
+      -d '{"theme":"dark","notify_deadlines":false,"user_id":999}'  # 200; user_id из тела игнорируется
+    curl -s -b c.txt localhost:8080/v1/notifications/settings   # 200 — сохранённое (theme dark, deadlines false)
+    curl -s localhost:8080/v1/notifications/settings            # 401 {"error":{"code":"unauthorized",…}}
+    ```
+    невалидная тема (`"theme":"pink"`) или не-JSON в `quiet_hours_json`/`onboarding_json` → 400 `bad_request`;
+  - **sqlite-проверка изоляции** (после PUT: строка изменена только у текущего пользователя):
+    ```bash
+    docker compose exec para sqlite3 /opt/para/data/para.db \
+      "SELECT user_id, notify_schedule, notify_deadlines, notify_applications, quiet_hours_json, theme, onboarding_json FROM settings;"
+    # строка user_id=1 (anya.demo) с новыми значениями; строк других пользователей нет/не изменены
+    ```
+    (в проверках сессии — тот же SELECT через sqlite3 C API в контейнере; вход в curl-цепочке замещался прямой вставкой валидной сессии в `sessions` — демо-пароль вне репо, §5.2);
+  - **тесты:** `ctest` зелёный в одноразовом контейнере (para-tests 16/16 кейсов, 219 утверждений: OwnershipGuard — своё/чужое/несуществующее + fail-closed при ошибке БД; SettingsService — дефолты/UPSERT/изоляция/валидация; security_tests); контурный прогон — `docker compose --profile tests run --rm tests` (команда выше).
 
 ## 5. Соглашения (нарушать нельзя)
 
@@ -60,7 +83,7 @@
 
 ## 6. Текущий статус
 
-- **Дата обновления:** 05.11.2026 · **Этап:** 1 — **закрыт (шаги 1–9)**, следующий этап — **Э2** (BE: OwnershipGuard, профиль `/v1/me`, настройки уведомлений; FE — параллельно; первый деплой на VPS — Э9, BE-гайд §11).
+- **Дата обновления:** 05.11.2026 · **Этап:** 2 — **BE-часть закрыта (шаги 1–4)**; **честная пометка:** FE-часть Э2 (профиль в UI, тема, онбординг-чеклист С5) — за FE-дорожкой, этой сессией не начиналась; следующий BE-этап — Э3 (расписание). Первый деплой на VPS — Э9 (BE-гайд §11).
 - Пакет решений 01–05 готов и отрецензирован; дорожки BE/FE (05 §4.5), гайды в `гайды/`.
 - **Артефакты Э1** (репозиторий `para/`, ветка `main`; корень репо — папка `para/`: штаб — задание, `решения/`, `гайды/` — канонические, в репо копии в `docs/`):
   - шаги 1–3 — каркас и Docker-контур (коммиты `d4d4565`, `e06924e`, ревью `cc37ab3`): дерево 05 §2, README/LICENSE MIT/`.gitignore`/env.example, CMake-скаффолд (`para`, `para-tests`, `security_tests`; `HealthCtrl` → GET `/healthz`), doctest v2.5.3 вендорен, Dockerfile multi-stage (`FROM --platform=linux/amd64`), docker-compose (порт 8080, том `para-data`, USER 10001); решения Р-1…Р-4;
@@ -68,7 +91,13 @@
   - три задачи закрытия (workflow, 05.11.2026): `42ab5a1` — ротация демо-пароля фикстур (все 5 `password_hash` перегенерированы argon2id t=2 m=19456 p=1, соль на аккаунт, верификация `argon2id_verify` в одноразовом контейнере; Р-9); `d3bc367` — формат ошибок API приведён к 02 §5.1 `{error:{code,message}}` (единый хелпер `src/utils/ApiError.h`; 6 ответов `AuthCtrl`/`LoginFilter`); актуализация README и AGENTS.md — данным коммитом;
   - гейт шагов 4–7: два раунда (раунд 0 красный — ENTRYPOINT без `--seed`, исправлено `0222161`; раунд 1 зелёный); ревью шагов 4–7: 8 находок, 2 обязательных применены (`d484eff`); medium/low (`foreign_keys=0`, FATAL MULTITHREAD в логе старта, CSP/nosniff, timing-оракул входа и др.) — без mustFix, учтены для плана Э8; журнал — `para/docs/agents-log/2026-11-05-э1-шаги-4-7-агентская-сессия.md`.
 - **Честный статус шага 8 (push):** этой сессией НЕ выполнялся — выполняется владельцем отдельным шагом после финального смока гейта закрытия Э1; remote `git@github.com:vertaler3/para.git` настроен (приватный GitHub, ветка `main`); после push — клон на второй машине и сборка строго по README (гайд BE §2 шаг 8). Шаг 9 (ctest + коммит + актуализация AGENTS.md) — выполнен данным коммитом.
-- Как проверить — команды раздела 4 (фактически проверенные); значение демо-пароля в репо не хранится (§5.2) — публикуется в комментарии к работе.
+- **Артефакты Э2 — BE-часть** (репозиторий `para/`, ветка `main`; `static/` и `views/` не тронуты — FE-дорожка):
+  - **шаг 1 — OwnershipGuard** (коммит `719194e`): `src/services/OwnershipGuard.{h,cpp}` — единственная функция `check()` по 02 §6.3: fetch-and-compare из (session_user_id, таблица, id из пути), вердикты Own/NotFound/Forbidden (+ Error — fail-closed при ошибке БД); белый список таблиц `Table{Applications,Grades,Notifications}` → фиксированные SQL-литералы, id — параметром (`$1`); правило код-ревью «контроллер с path-id обязан вызвать OwnershipGuard» зафиксировано в шапке заголовка; юнит-тесты на временной SQLite — 3 случая (своё → Own, чужое → Forbidden/403, несуществующее → NotFound/404) + fail-closed Error. В ходе шага пойман и исправлен двойной move колбэка в цепочке `>>` (пустой `std::function` → `std::bad_function_call` на error-пути БД); латентный аналог остался в `UserService::findByLogin/loadProfile` и `SessionService::findValid` (Э1-код, вне шага не правил) — учтено для плана Э8; журнал — `para/docs/agents-log/2026-11-05-э2-шаг-1-ownership-guard.md`.
+  - **шаг 2 — GET /v1/me** (правок не потребовалось — коммита нет): сверён с 02 §5.2 и §4.1 — все шесть полей отдаются (`profile.fio/faculty/program/course/group/student_card_no`, SQL — `UserService::loadProfile`, контроллер тонкий); проверено E2E на фикстурах: 200 с 6/6 полями (машинная сверка с `sql/fixtures.sql`), без cookie → 401 в формате 02 §5.1.
+  - **шаг 3 — настройки уведомлений** (коммит `aa9ae51`): `src/services/SettingsService.{h,cpp}` (load — SELECT строки settings по user_id, при отсутствии — дефолты DEFAULT из миграции 0004; save — UPSERT `ON CONFLICT(user_id) DO UPDATE`; applyPatch — частичное обновление, theme ∈ light/dark/system, `*_json` — валидный JSON) + тонкий `SettingsCtrl` — GET/PUT `/v1/notifications/settings` под LoginFilter; `user_id` из тела PUT игнорируется; страница /profile не обязательна — views/ не тронуты; юнит-тесты (para-tests 16/16 кейсов, 219 утверждений); журнал — `para/docs/agents-log/2026-11-05-э2-шаг-3-settings.md`.
+  - **шаг 4** — актуализация AGENTS.md (данным коммитом) + синхронизация копии `para/AGENTS.md`.
+- **Честный статус проверок Э2:** compose-команды (`docker compose up/build`, `--profile tests`) этой сессией НЕ запускались — их выполняет внешний гейт; проверки сессии — одноразовый контейнер `drogonframework/drogon:v1.9.14` (сборка 0 warnings, ctest 100%, E2E curl-цепочка на порту 18080 с временной БД и фикстурами; вход замещён прямой вставкой валидной сессии в `sessions`, демо-пароль вне репо не использовался).
+- Как проверить — команды раздела 4 (фактически проверенные, включая блок BE-части Э2); значение демо-пароля в репо не хранится (§5.2) — публикуется в комментарии к работе.
 
 ## 7. Протокол ведения (обязательный)
 
