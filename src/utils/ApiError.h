@@ -29,6 +29,12 @@ inline drogon::HttpResponsePtr errorResponse(const std::string& code,
     return resp;
 }
 
+// Проба свежести бинаря (прецедент Э5: /Subject para-e5-gate-r2): гейт
+// проверяет заголовок X-Para-Round в jsonResponse-ответах — если маркера
+// нет, гейт шёл на бинаре старой сборки, а не на текущем коде (прецеденты
+// Э3 раунд 2, Э5 раунд 2, Э6 раунд 2). Меняется каждый раунд правок.
+inline constexpr const char* kApiRound = "e6-gate-r2";
+
 // Успешный JSON-ответ с человекочитаемым UTF-8 (Э6 правки по гейту, раунд 1).
 // newHttpJsonResponse сериализует jsoncpp-ом с дефолтами: не-ASCII
 // экранируется \uXXXX («История России» → "\u0418...") — тело корректно для
@@ -47,6 +53,7 @@ inline drogon::HttpResponsePtr jsonResponse(Json::Value body,
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setStatusCode(status);
     resp->setContentTypeString("application/json");
+    resp->addHeader("X-Para-Round", kApiRound);
     resp->setBody(Json::writeString(b, body));
     return resp;
 }

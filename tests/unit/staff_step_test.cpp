@@ -308,6 +308,8 @@ TEST_CASE("api::jsonResponse: кириллица сырыми UTF-8 байтам
     CHECK(raw.find("\\u") == std::string::npos);  // ни одного литерального backslash-u-эскейпа
     CHECK(resp->contentTypeString().find("application/json") !=
           std::string::npos);
+    // Проба свежести бинаря: заголовок X-Para-Round (e6-gate-r2).
+    CHECK(resp->getHeader("x-para-round") == para::api::kApiRound);
     Json::Value back;
     REQUIRE(Json::Reader().parse(raw, back));
     CHECK(back["discipline"].asString() == "История России");
