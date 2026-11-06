@@ -51,12 +51,41 @@ bool sendVerdict(std::function<void(const HttpResponsePtr&)>& cb,
 
 }  // namespace
 
-void RoomsCtrl::getRooms(const HttpRequestPtr&,  // сессия каталогу не нужна:
+void RoomsCtrl::getRooms(const HttpRequestPtr& req,
                          std::function<void(const HttpResponsePtr&)>&& cb)
 {
     // Сессию проверил LoginFilter — доступ только по cookie (02 §6.3).
+    // query контракта 02 §5.2 (правки по гейту Э5а, раунд 1):
+    //   ?capacity=N — фильтр «вместимость не меньше» (найти аудиторию на
+    //     N человек); отсутствует → без фильтра; не целое → 400 (стиль
+    //     days/offset в ScheduleCtrl);
+    //   ?date=YYYY-MM-DD — принимается и валидируется (невалидная → 400,
+    //     единый стиль ?date= сетки); на выдачу каталога не влияет — поля
+    //     занятости дня в контракте каталога 02 §5.2 не описаны (занятость
+    //     дня — /v1/rooms/{id}/slots?date=).
+    std::optional<int64_t> minCapacity;
+    const auto parsed = req->getOptionalParameter<int64_t>("capacity");
+    if (parsed)
+    {
+        minCapacity = *parsed;
+    }
+    else if (!req->getParameter("capacity").empty())
+    {
+        cb(api::errorResponse("bad_request",
+                              "capacity — ожидается целое число",
+                              k400BadRequest));
+        return;
+    }
+    const std::string rawDate = req->getParameter("date");
+    if (!rawDate.empty() && !RoomsService::validDate(rawDate))
+    {
+        cb(api::errorResponse("bad_request",
+                              "date — ожидается дата YYYY-MM-DD",
+                              k400BadRequest));
+        return;
+    }
     RoomsService::catalog(
-        app().getDbClient("para"),
+        app().getDbClient("para"), minCapacity,
         [cb = std::move(cb)](RoomsService::Result r) mutable {
             sendResult(std::move(cb), std::move(r));
         });

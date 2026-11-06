@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 
 #include <drogon/orm/DbClient.h>
@@ -63,9 +64,17 @@ class RoomsService
     // GET /v1/rooms → {"rooms": [...]} — каталог по id (ORDER BY id):
     // id/name/building/capacity/features. Пустая таблица — 200 с пустым
     // rooms (заполнение каталога — фикстуры/админ, не ошибка выборки).
-    // query date/capacity 02 §5.2 — не в шаге 1 (постановка: «каталог
-    // комнат»; фильтры бессмысленны без полей занятости шага 2 — там же).
-    static void catalog(drogon::orm::DbClientPtr db, ResultCb cb);
+    // query контракта 02 §5.2 (правки по гейту Э5а, раунд 1 — до этого
+    // строка каталога была единственной с нереализованным query):
+    //   minCapacity (query capacity) — фильтр «вместимость не меньше»
+    //     (найти аудиторию на N человек), capacity >= $1;
+    //   query date — принимается и валидируется контроллером (YYYY-MM-DD;
+    //     невалидная → 400, единый стиль ?date= сетки), на выдачу каталога
+    //     НЕ влияет: поля занятости дня в контракте каталога 02 §5.2 не
+    //     описаны (сетка занятости — /v1/rooms/{id}/slots?date=).
+    static void catalog(drogon::orm::DbClientPtr db,
+                        const std::optional<int64_t>& minCapacity,
+                        ResultCb cb);
 
     // Существование аудитории (404 контроллера). Found — строка есть
     // (body — id/name/building для шапки сетки), NotFound — аудитории нет,

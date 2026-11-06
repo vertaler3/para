@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <future>
 #include <map>
+#include <optional>
 #include <string>
 
 #include <sqlite3.h>
@@ -184,13 +185,16 @@ struct Fixture
     }
 };
 
-RoomsService::Result catalogOf(const drogon::orm::DbClientPtr& db)
+RoomsService::Result catalogOf(const drogon::orm::DbClientPtr& db,
+                               std::optional<int64_t> minCapacity = {})
 {
     std::promise<RoomsService::Result> p;
     auto f = p.get_future();
-    RoomsService::catalog(db, [&p](RoomsService::Result r) {
-        p.set_value(std::move(r));
-    });
+    RoomsService::catalog(db,
+                          minCapacity,
+                          [&p](RoomsService::Result r) {
+                              p.set_value(std::move(r));
+                          });
     REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
     return f.get();
 }
@@ -408,6 +412,32 @@ TEST_CASE("RoomsService: catalog — пустая таблица, 200 с пус�
     const auto r = catalogOf(f.db);
     REQUIRE(r.ok);
     CHECK(r.body["rooms"].size() == 0);
+}
+
+TEST_CASE("RoomsService: catalog — фильтр capacity «вместимость не меньше»")
+{
+    // query контракта 02 §5.2 (правки по гейту Э5а, раунд 1): capacity=N —
+    // найти аудиторию на N человек (capacity >= N).
+    Fixture f;
+    const auto big = catalogOf(f.db, 30);
+    REQUIRE(big.ok);
+    REQUIRE(big.body["rooms"].size() == 1);
+    CHECK(big.body["rooms"][0]["id"].as<int64_t>() == 3);   // Б-204, 60
+    CHECK(big.body["rooms"][0]["capacity"].as<int64_t>() == 60);
+
+    const auto all = catalogOf(f.db, 10);
+    REQUIRE(all.ok);
+    CHECK(all.body["rooms"].size() == 3);  // все >= 10
+
+    const auto exact = catalogOf(f.db, 24);  // ровно 24 — включительно
+    REQUIRE(exact.ok);
+    CHECK(exact.body["rooms"].size() == 2);  // 1207 (24) и Б-204 (60)
+    CHECK(exact.body["rooms"][0]["capacity"].as<int64_t>() == 24);
+    CHECK(exact.body["rooms"][1]["capacity"].as<int64_t>() == 60);
+
+    const auto none = catalogOf(f.db, 100);
+    REQUIRE(none.ok);
+    CHECK(none.body["rooms"].size() == 0);  // 200 с пустым списком
 }
 
 TEST_CASE("RoomsService: slots — сетка 60 минут, три состояния 02 §5.2")

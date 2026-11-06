@@ -94,25 +94,37 @@ bool RoomsService::validDate(const std::string& date)
     return timeToDate(t) == date;
 }
 
-void RoomsService::catalog(DbClientPtr db, ResultCb cb)
+void RoomsService::catalog(DbClientPtr db,
+                           const std::optional<int64_t>& minCapacity,
+                           ResultCb cb)
 {
-    *db << "SELECT id, name, building, capacity, features FROM rooms "
-           "ORDER BY id" >>
-        [cb](const drogon::orm::Result& rows) mutable {
-            Json::Value body;
-            Json::Value arr(Json::arrayValue);
-            for (const auto& row : rows)
-                arr.append(roomJson(row));
-            body["rooms"] = std::move(arr);
-            cb(Result{true, std::move(body)});
-        } >>
-        // Колбэк КОПИРУЕТСЯ в обе ветки цепочки (result/exception) —
-        // стреляет ровно одна (урок Э2 шаг 1: move оставил бы второму
-        // замыканию пустой std::function → bad_function_call на error-пути).
-        [cb](const DrogonDbException& e) mutable {
-            LOG_ERROR << "RoomsService::catalog: " << e.base().what();
-            cb(Result{false, Json::Value()});  // fail-closed → 500
-        };
+    // Фильтры-or-empty (паттерн ApplicationsService::list): две полные
+    // SQL-строки, значение фильтра — параметром ($1), не конкатенация.
+    const std::string kAllSql =
+        "SELECT id, name, building, capacity, features FROM rooms "
+        "ORDER BY id";
+    const std::string kMinCapSql =
+        "SELECT id, name, building, capacity, features FROM rooms "
+        "WHERE capacity >= $1 ORDER BY id";
+
+    auto onRows = [cb](const drogon::orm::Result& rows) {
+        Json::Value body;
+        Json::Value arr(Json::arrayValue);
+        for (const auto& row : rows)
+            arr.append(roomJson(row));
+        body["rooms"] = std::move(arr);
+        cb(Result{true, std::move(body)});
+    };
+    auto onError = [cb](const DrogonDbException& e) {
+        LOG_ERROR << "RoomsService::catalog: " << e.base().what();
+        cb(Result{false, Json::Value()});  // fail-closed → 500
+    };
+
+    if (minCapacity.has_value())
+        *db << kMinCapSql << *minCapacity >> std::move(onRows) >>
+            std::move(onError);
+    else
+        *db << kAllSql >> std::move(onRows) >> std::move(onError);
 }
 
 void RoomsService::roomById(
