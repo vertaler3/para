@@ -58,6 +58,11 @@ class PdfBuilder
     // в любой декодированной форме текста (см. выше).
     static constexpr const char* kStampMarker = "DEMO-FAKE-DATA";
 
+    // Тег сборки в Info-словаре (/Subject) — проба свежести образа для
+    // гейта: если в PDF нет этой строки, проверка шла по бинарю старой
+    // сборки (прецедент Э3, раунд 2).
+    static constexpr const char* kBuildTag = "para-e5-gate-r2";
+
     // Собрать справку; fontPath — файл TTF с кириллицей (DejaVu Sans).
     // Любая ошибка libharu → ok=false (контроллер отвечает 500 без деталей,
     // 02 §5.1); память освобождает HPDF_Free (RAII-обёртка внутри).

@@ -2,10 +2,13 @@
 // содержит штамп»; 02 §3.2 поток 5):
 //  - справка собирается: %PDF- в начале, кириллица встроенным TTF
 //    (/FontFile2 — HPDF_LoadTTFontFromFile), %%EOF в конце;
-//  - МАРКЕР ШТАМПА в сырых байтах: kStampMarker (OCTAL-эскейпы UTF-8 «ДЕМО»
-//    из KEYWORDS Info-словаря — поведение libharu v2.4.6, Р-12) найден
+//  - МАРКЕР ШТАМПА: kStampMarker = "DEMO-FAKE-DATA" (ASCII-хвост — в сырых
+//    байтах и в любой декодированной форме; гейт Э5 раунд 1) найден
 //    в потоке И в файле, сохранённом на диск и прочитанном обратно
 //    (постановка шага: «сохранить PDF во временный файл и найти маркер»);
+//    раунд 2: «ДЕМО» — в сырых байтах как настоящие UTF-8 байты
+//    (revealKeywordsUtf8 — замена октал-эскейпов с сохранением длины) и
+//    /Subject (para-e5-gate-r2) — проба свежести сборки;
 //  - битый путь к шрифту → ok=false (fail без исключений).
 // Шрифт: env PARA_TEST_FONT → /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 // (пакет fonts-dejavu-core build-стадии Dockerfile, Р-12). Отсутствие
@@ -87,9 +90,14 @@ TEST_CASE("PdfBuilder: справка — %PDF-, встроенный TTF, ма�
     const std::string marker = PdfBuilder::kStampMarker;
     CHECK(marker == "DEMO-FAKE-DATA");
     CHECK(r.bytes.find(marker) != std::string::npos);
-    // Кириллическая часть штампа — в сырых байтах как OCTAL-эскейпы UTF-8.
-    CHECK(r.bytes.find("\\320\\224\\320\\225\\320\\234\\320\\236") !=
-          std::string::npos);
+    // Раунд 2 (гейт): «ДЕМО» — в сырых байтах как НАСТОЯЩИЕ UTF-8 байты
+    // (revealKeywordsUtf8 переписал значение /Keywords без октал-эскейпов,
+    // с сохранением длины), прямо за "/Keywords (".
+    const std::string demo = "ДЕМО";  // литерал в UTF-8 исходника
+    CHECK(r.bytes.find("/Keywords (" + demo) != std::string::npos);
+    // Проба свежести сборки: /Subject (para-e5-gate-r2) — по ней видно,
+    // что PDF построен бинарем с правками раунда 2.
+    CHECK(r.bytes.find("(para-e5-gate-r2)") != std::string::npos);
 }
 
 TEST_CASE("PdfBuilder: маркер находится в файле, сохранённом на диск")
@@ -123,9 +131,10 @@ TEST_CASE("PdfBuilder: маркер находится в файле, сохра
         const auto pos = content.find("/Keywords");
         REQUIRE(pos != std::string::npos);
         CHECK(content.find(marker, pos) != std::string::npos);
-        // Кириллическая часть (октал-эскейпы) — тоже в файле.
-        CHECK(content.find("\\320\\224\\320\\225\\320\\234\\320\\236",
-                           pos) != std::string::npos);
+        // Раунд 2: в файле «ДЕМО» — сырыми UTF-8 байтами (без октал-
+        // эскейпов) и /Subject с тегом сборки.
+        CHECK(content.find("ДЕМО", pos) != std::string::npos);
+        CHECK(content.find("(para-e5-gate-r2)") != std::string::npos);
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

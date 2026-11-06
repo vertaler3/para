@@ -238,8 +238,10 @@ void insertPlainMessageEvent(const drogon::orm::DbClientPtr& db,
                                 *body = eventJson(evRows[0]);
                                 // Итоговый статус заявки в ответе (правки
                                 // по гейту Э5 раунд 1) — то же поле, что
-                                // в need_info-ветке sendMessage.
+                                // в need_info-ветке sendMessage; раунд 2 —
+                                // алиас "status" под обоими именами.
                                 (*body)["application_status"] = status;
+                                (*body)["status"] = status;
                             } >>
                             [tx, fire](const DrogonDbException& e) {
                                 LOG_ERROR << "ApplicationsService: select "
@@ -794,15 +796,19 @@ void ApplicationsService::sendMessage(drogon::orm::DbClientPtr db,
                     {
                         case AppWorkflow::Outcome::Applied:
                             // Возврат в «В работе» — в ответе и событием
-                            // (need_info→in_progress), и полем
-                            // application_status (гейт Э5 раунд 1).
+                            // (need_info→in_progress), и полями status /
+                            // application_status (гейт Э5, раунды 1–2:
+                            // возврат читается в ответе под обоими именами).
                             fetchEventById(
                                 db, r.eventId,
                                 [cb](ApplicationsService::MessageResult m) mutable {
                                     if (m.status ==
                                         ApplicationsService::Message::Ok)
+                                    {
                                         m.body["application_status"] =
                                             "in_progress";
+                                        m.body["status"] = "in_progress";
+                                    }
                                     cb(std::move(m));
                                 });
                             return;

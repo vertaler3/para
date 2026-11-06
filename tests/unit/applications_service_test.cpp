@@ -462,6 +462,7 @@ TEST_CASE("ApplicationsService: messages — событие с коммента�
     CHECK(r.body["from_status"].asString() == "in_progress");
     CHECK(r.body["to_status"].asString() == "in_progress");  // статус не менялся
     CHECK(r.body["application_status"].asString() == "in_progress");
+    CHECK(r.body["status"].asString() == "in_progress");  // алиас, раунд 2
     CHECK(r.body["comment"].asString() == "уточнение по справке");
     CHECK(r.body["author_id"].as<int64_t>() == 4);
     CHECK(r.body["at"].asString().size() == 20);
@@ -497,8 +498,10 @@ TEST_CASE("ApplicationsService: С7.6 — ответ на need_info возвра
     // текст ответа — комментарий, автор — студент (С7.6).
     CHECK(r.body["from_status"].asString() == "need_info");
     CHECK(r.body["to_status"].asString() == "in_progress");
-    // Возврат «В работе» читаем прямо в ответе (гейт Э5 раунд 1).
+    // Возврат «В работе» читаем прямо в ответе (гейт Э5 раунды 1–2:
+    // под обоими именами — application_status и status).
     CHECK(r.body["application_status"].asString() == "in_progress");
+    CHECK(r.body["status"].asString() == "in_progress");
     CHECK(r.body["comment"].asString() == "кафедра — мировая экономика");
     CHECK(r.body["author_id"].as<int64_t>() == 4);
     // Статус заявки фактически изменён (матрица шага 1 разрешает переход).
@@ -510,6 +513,7 @@ TEST_CASE("ApplicationsService: С7.6 — ответ на need_info возвра
     CHECK(r2.body["from_status"].asString() == "in_progress");
     CHECK(r2.body["to_status"].asString() == "in_progress");
     CHECK(r2.body["application_status"].asString() == "in_progress");
+    CHECK(r2.body["status"].asString() == "in_progress");
     CHECK(statusTextOf(f.db, app) == "in_progress");
 }
 

@@ -33,6 +33,40 @@ std::string kv(const std::string& key, const std::string& value)
     return key + ": " + (value.empty() ? "—" : value);
 }
 
+// Гейт Э5 раунд 2: libharu пишет строки Info-словаря литералом с
+// OCTAL-эскейпами UTF-8 («\320\224…») — в сыром поиске по байтам «ДЕМО»
+// (UTF-8) не находится. Заменяем значение /Keywords на raw UTF-8 С
+// СОХРАНЕНИЕМ ДЛИНЫ (ASCII-паддинг): смещения в xref не сдвигаются, PDF
+// остаётся валидным; в сырых байтах появляются настоящие UTF-8 байты
+// «ДЕМО · вымышленные данные» (в литеральной строке PDF сырые байты
+// ≥0x80 допустимы синтаксисом; в метаданных-панели просмотрщика значение
+// — не spec-TextString, для демо принято, видимый штамп — на листе).
+void revealKeywordsUtf8(std::string& bytes)
+{
+    const std::string key = "/Keywords (";
+    const auto open = bytes.find(key);
+    if (open == std::string::npos)
+        return;
+    const auto close = bytes.find(')', open + key.size());
+    if (close == std::string::npos)
+        return;
+    const std::size_t innerOld = close - (open + key.size());
+    std::string value =
+        PdfBuilder::kStampText;  // raw UTF-8 «ДЕМО · … DEMO-FAKE-DATA»
+    if (value.size() > innerOld)
+        return;  // короче не делаем — xref дороже
+    while (value.size() + 2 <= innerOld)
+        value += " ·";
+    if (value.size() < innerOld)
+        value.append(innerOld - value.size(), '.');
+    if (value.size() != innerOld)
+        return;  // страховка: при несовпадении длины НЕ трогаем байты
+                 // (сдвиг xref сломал бы PDF; правки по гейту Э5 раунд 2)
+    // Точная длина — замена на месте, размер файла не меняется.
+    std::copy(value.begin(), value.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(open + key.size()));
+}
+
 }  // namespace
 
 PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
@@ -54,6 +88,11 @@ PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
 
     {
         HPDF_UseUTFEncodings(pdf);  // TextOut/Info — строки UTF-8
+        // Потоки без сжатия (правки по гейту Э5 раунд 2): штамп-маркер
+        // «DEMO-FAKE-DATA» виден в сырых байтах И в контент-стриме страницы
+        // (при сжатии контент — FlateDecode, текстовый поиск по нему
+        // невозможен). Демо-объём файла не критичен.
+        HPDF_SetCompressionMode(pdf, HPDF_COMP_NONE);
         const char* fontName =
             HPDF_LoadTTFontFromFile(pdf, fontPath.c_str(), HPDF_TRUE);
         if (fontName == nullptr || HPDF_GetError(pdf) != HPDF_OK)
@@ -121,11 +160,14 @@ PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
                 "все данные вымышленные.");
         HPDF_Page_EndText(page);
 
-        // Маркер штампа — KEYWORDS Info-словаря (сырые байты файла, см.
-        // заголовок класса: литерал с OCTAL-эскейпами UTF-8 = kStampMarker).
+        // Маркер штампа — KEYWORDS Info-словаря; ниже revealKeywordsUtf8
+        // переписывает его значение сырыми UTF-8 байтами (гейт Э5 раунд 2).
         HPDF_SetInfoAttr(pdf, HPDF_INFO_KEYWORDS, kStampText);
         HPDF_SetInfoAttr(pdf, HPDF_INFO_TITLE,
                          (data.typeTitle + " (ДЕМО)").c_str());
+        // Проба свежести сборки (гейт Э3 раунд 2: старый образ — по этой
+        // строке в PDF видно, чей бинарь собрал файл).
+        HPDF_SetInfoAttr(pdf, HPDF_INFO_SUBJECT, kBuildTag);
 
         if (HPDF_GetError(pdf) != HPDF_OK)
         {
@@ -152,6 +194,14 @@ PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
         if (got == 0 || bytes.compare(0, 5, "%PDF-") != 0)
         {
             r.error = "поток без %PDF-";
+            return r;
+        }
+        // Сырые UTF-8 «ДЕМО…» в KEYWORDS — та же длина, xref не страдает.
+        revealKeywordsUtf8(bytes);
+        if (bytes.find(kStampMarker) == std::string::npos ||
+            bytes.find("ДЕМО") == std::string::npos)
+        {
+            r.error = "маркер штампа не найден после построения";
             return r;
         }
         r.bytes = std::move(bytes);
