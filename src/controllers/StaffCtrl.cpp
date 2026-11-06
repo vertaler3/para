@@ -274,10 +274,9 @@ void StaffCtrl::scheduleChange(
                 case ScheduleChangeService::Outcome::Ok:
                 {
                     // 201 Created — внесено изменение + рассылка запущена
-                    // (02 §5.2: POST /v1/staff/schedule/changes → 201).
-                    auto resp = HttpResponse::newHttpJsonResponse(r.body);
-                    resp->setStatusCode(k201Created);
-                    cb(resp);
+                    // (02 §5.2); тело — читаемый UTF-8 (правки по гейту
+                    // раунд 1: сырой поиск «История России» в event).
+                    cb(api::jsonResponse(r.body, k201Created));
                     return;
                 }
                 case ScheduleChangeService::Outcome::NotFound:
@@ -308,7 +307,7 @@ void StaffCtrl::dashboard(
         app().getDbClient("para"),
         [cb = std::move(cb)](const StaffDashboard::Result& r) {
             if (r.ok)
-                cb(HttpResponse::newHttpJsonResponse(r.body));
+                cb(api::jsonResponse(r.body));  // читаемый UTF-8 (гейт раунд 1)
             else
                 cb(api::errorResponse("internal", "Внутренняя ошибка сервера",
                                       k500InternalServerError));
@@ -396,9 +395,7 @@ void StaffCtrl::publishAnnouncement(
         [cb = std::move(cb)](const AnnouncementsService::Result& r) {
             if (r.ok)
             {
-                auto resp = HttpResponse::newHttpJsonResponse(r.body);
-                resp->setStatusCode(k201Created);
-                cb(resp);
+                cb(api::jsonResponse(r.body, k201Created));
             }
             else
             {

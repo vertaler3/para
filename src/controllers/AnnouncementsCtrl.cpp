@@ -40,7 +40,7 @@ void AnnouncementsCtrl::feed(const HttpRequestPtr& req,
         cursor,
         [cb = std::move(cb)](const AnnouncementsService::Result& r) {
             if (r.ok)
-                cb(HttpResponse::newHttpJsonResponse(r.body));
+                cb(api::jsonResponse(r.body));  // читаемый UTF-8 (гейт раунд 1)
             else
                 cb(api::errorResponse("internal", "Внутренняя ошибка сервера",
                                       k500InternalServerError));

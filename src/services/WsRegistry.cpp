@@ -14,11 +14,14 @@ std::mutex gMutex;
 // user_id → соединения (несколько вкладок — несколько записей).
 std::unordered_map<int64_t, std::vector<WsRegistry::ConnectionPtr>> gConns;
 
-// Компактная сериализация события (одна строка — один кадр WS).
+// Компактная сериализация события (одна строка — один кадр WS); emitUTF8 —
+// кириллица сырыми байтами (правки по гейту Э6 раунд 1: сырой поиск
+// «История России» в кадре; json-парсеры декодируют обе формы одинаково).
 std::string toJsonString(const Json::Value& payload)
 {
     Json::StreamWriterBuilder b;
     b["indentation"] = "";  // без переводов строк — payload как есть
+    b["emitUTF8"] = true;
     return Json::writeString(b, payload);
 }
 

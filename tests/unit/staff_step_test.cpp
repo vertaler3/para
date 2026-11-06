@@ -31,6 +31,7 @@
 #include "services/ScheduleChangeService.h"
 #include "services/SessionService.h"
 #include "services/StaffDashboard.h"
+#include "utils/ApiError.h"
 
 namespace fs = std::filesystem;
 using para::AnnouncementsService;
@@ -149,6 +150,11 @@ struct Fixture
              "NULL DEFAULT 1, quiet_hours_json TEXT NOT NULL DEFAULT "
              "'{\"from\":\"23:00\",\"to\":\"07:00\"}', theme TEXT NOT NULL "
              "DEFAULT 'system', onboarding_json TEXT NOT NULL DEFAULT '[]');");
+        // WAL — как в прод-конфиге (initialization_queries config.json):
+        // без WAL плотный поллинг читателя (waitCount) ловит писателя
+        // INSERT'а уведомления — "database is locked" (поймано на гейте
+        // раунд 1); WAL разделяет читателей и писателя.
+        exec(raw, "PRAGMA journal_mode=WAL;");
         sqlite3_close(raw);
         db = drogon::orm::DbClient::newSqlite3Client("filename=" + dbPath, 1);
     }
@@ -285,6 +291,28 @@ struct InvalidateSpy
     }
 };
 
+TEST_CASE("api::jsonResponse: кириллица сырыми UTF-8 байтами (гейт раунд 1)")
+{
+    // Правки по гейту Э6 раунд 1: newHttpJsonResponse экранирует не-ASCII
+    // как \uXXXX — сырой поиск «История России» в телах переноса/дашборда/
+    // ленты не находил дисциплину/заголовок. Хелпер обязан отдавать
+    // читаемый UTF-8; JSON-семантика не меняется (парсеры декодируют
+    // обе формы одинаково).
+    Json::Value body(Json::objectValue);
+    body["discipline"] = "История России";
+    body["recipients"] = 2;
+    const auto resp = para::api::jsonResponse(body, drogon::k201Created);
+    CHECK(resp->getStatusCode() == drogon::k201Created);
+    const std::string raw(resp->getBody());
+    CHECK(raw.find("История России") != std::string::npos);
+    CHECK(raw.find("\\u") == std::string::npos);  // ни одного литерального backslash-u-эскейпа
+    CHECK(resp->contentTypeString().find("application/json") !=
+          std::string::npos);
+    Json::Value back;
+    REQUIRE(Json::Reader().parse(raw, back));
+    CHECK(back["discipline"].asString() == "История России");
+    CHECK(back["recipients"].asInt64() == 2);
+}
 }  // namespace
 
 TEST_CASE("ScheduleChangeService: перенос — prev_*, рассылка группе, кэш")
