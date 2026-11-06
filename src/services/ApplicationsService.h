@@ -165,6 +165,62 @@ class ApplicationsService
                             const std::string& text,
                             int64_t authorId,
                             MessageCb cb);
+
+    // ============================== Э5 шаг 3 — staff =======================
+
+    // GET /v1/staff/applications — очередь заявок (02 §5.2; С8.2: «фильтры
+    // (тип, статус, срок); карточки с подходящим сроком помечены „горит“»).
+    // Фильтры query — status (ключ словаря CHECK DDL), type (ключ каталога),
+    // overdue=1: их валидность проверяет контроллер; здесь — одна
+    // параметризованная SQL (filters-or-empty: «$1 = '' OR …» — без
+    // конкатенации строк, 02 §6.4; порядок $N в тексте = порядку биндинга).
+    // overdue («горит») — 3 дня ожидания в активном статусе (submitted/
+    // accepted/in_progress/need_info; С2.4 «обычно до 3 рабочих дней» —
+    // консервативно в календарных, бейдж загорается при приближении срока —
+    // 03 §4.8); терминальные и draft не «горят». Сортировка —
+    // a.updated_at ASC (очередь: дольше ждут — выше; idx_applications_queue).
+    // Владение НЕ проверяется (staff видит все — постановка шага 3) —
+    // это не student-owned выборка. В строке — карточка заявки + owner
+    // (fio/группа — С8.3 «Открывает заявку Дины: профиль…») + overdue.
+    struct QueueFilters
+    {
+        std::optional<std::string> status;
+        std::optional<std::string> type;
+        bool overdueOnly = false;
+    };
+    static void queue(drogon::orm::DbClientPtr db,
+                      const QueueFilters& filters,
+                      ResultCb cb);
+
+    // POST /v1/staff/applications/{id}/status (02 §5.2: body to_status,
+    // comment; «Смена статуса (автомат) + автоуведомление автору») —
+    // применяет AppWorkflow::apply (матрица шага 1; недопустимый переход →
+    // InvalidTransition → 409; несуществующий id → NotFound → 404 —
+    // OwnershipGuard здесь не нужен: staff видит все, постановка шага 3).
+    // Уведомление автору заявки (notifications, 02 §4.1: type 'application',
+    // deep_link на карточку заявки) — в ТОЙ ЖЕ транзакции через хук
+    // afterEvent. comment — причина (rejected) / вопрос (need_info).
+    // Ok → body — карточка заявки в новом статусе.
+    enum class StatusChange
+    {
+        Ok,
+        InvalidTransition,
+        NotFound,
+        Error
+    };
+    struct StatusChangeResult
+    {
+        StatusChange status = StatusChange::Error;
+        Json::Value body;
+    };
+    using StatusChangeCb = std::function<void(StatusChangeResult)>;
+
+    static void staffChangeStatus(drogon::orm::DbClientPtr db,
+                                  int64_t applicationId,
+                                  const std::string& toStatus,
+                                  const std::optional<std::string>& comment,
+                                  int64_t staffUserId,
+                                  StatusChangeCb cb);
 };
 
 }  // namespace para

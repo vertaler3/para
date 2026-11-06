@@ -260,7 +260,185 @@ void insertPlainMessageEvent(const drogon::orm::DbClientPtr& db,
     });
 }
 
+// ============================== Э5 шаг 3 — staff ===========================
+
+// Очередь (02 §5.2: query status, type, overdue=1; сортировка по
+// updated_at). Одна параметризованная SQL с «filters-or-empty»: текст $N
+// идёт в порядке биндинга ($1,$2,$3 — правило из хода шага 2). overdue —
+// 3 дня ожидания в активном статусе (см. заголовок метода). JOIN
+// profiles/groups — С8.3 (карточка сотрудника показывает студента); LEFT —
+// заявка без профиля не пропадает из очереди. «Горящие» считаются и без
+// фильтра overdue=1 (колонка overdue — бейдж в строках очереди, 03 §4.8).
+const std::string kQueueSql =
+    "SELECT a.id, a.type, a.status, a.payload_json, a.created_at,"
+    " a.updated_at, p.fio, g.name AS group_name,"
+    " (a.updated_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 days')"
+    "  AND a.status IN ('submitted','accepted','in_progress','need_info'))"
+    "  AS overdue"
+    " FROM applications a"
+    " LEFT JOIN profiles p ON p.user_id = a.user_id"
+    " LEFT JOIN groups g ON g.id = p.group_id"
+    " WHERE ($1 = '' OR a.status = $1)"
+    "   AND ($2 = '' OR a.type = $2)"
+    "   AND ($3 = '' OR ("
+    "         a.updated_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 days')"
+    "         AND a.status IN ('submitted','accepted','in_progress',"
+    "                          'need_info')))"
+    " ORDER BY a.updated_at ASC, a.id ASC";
+
+// Владелец заявки для уведомления — ВНУТРИ транзакции после UPDATE
+// (соединение закреплено; user_id NOT NULL по DDL).
+const std::string kSelectOwnerSql =
+    "SELECT user_id, type FROM applications WHERE id = $1";
+
+// Уведомление автору заявки (02 §4.1 notifications: type 'application';
+// deep_link — тап → таймлайн заявки, 4.5; title — «Тип: Статус» по меткам
+// models). Порядок $N в тексте = порядку биндинга.
+const std::string kInsertNotificationSql =
+    "INSERT INTO notifications (user_id, type, title, body, deep_link)"
+    " VALUES ($1, 'application', $2, $3, $4)";
+
+Json::Value queueJson(const Row& r)
+{
+    Json::Value a = appJson(r);  // id/type/type_title/status/payload/даты
+    Json::Value owner(Json::objectValue);
+    if (r["fio"].isNull())
+        owner["fio"] = Json::Value();
+    else
+        owner["fio"] = r["fio"].as<std::string>();
+    if (r["group_name"].isNull())
+        owner["group"] = Json::Value();
+    else
+        owner["group"] = r["group_name"].as<std::string>();
+    a["owner"] = std::move(owner);
+    a["overdue"] = r["overdue"].as<int64_t>() != 0;
+    return a;
+}
+
 }  // namespace
+
+void ApplicationsService::queue(drogon::orm::DbClientPtr db,
+                                const QueueFilters& filters,
+                                ResultCb cb)
+{
+    // Пустая строка = «без фильтра» (filters-or-empty в kQueueSql).
+    const std::string status = filters.status.value_or("");
+    const std::string type = filters.type.value_or("");
+    const std::string overdue = filters.overdueOnly ? "1" : "";
+    *db << kQueueSql << status << type << overdue >>
+        [cb](const drogon::orm::Result& rows) {
+            Json::Value arr(Json::arrayValue);
+            for (const auto& r : rows)
+                arr.append(queueJson(r));
+            Json::Value body;
+            body["applications"] = std::move(arr);
+            cb(Result{true, std::move(body)});
+        } >>
+        [cb](const DrogonDbException& e) {
+            LOG_ERROR << "ApplicationsService::queue: " << e.base().what();
+            cb(Result{false, Json::Value()});  // fail-closed → 500
+        };
+}
+
+void ApplicationsService::staffChangeStatus(
+    drogon::orm::DbClientPtr db,
+    int64_t applicationId,
+    const std::string& toStatus,
+    const std::optional<std::string>& comment,
+    int64_t staffUserId,
+    StatusChangeCb cb)
+{
+    // Хук: автоуведомление автору заявки В ТОЙ ЖЕ транзакции (05 §3 Э5 п.3:
+    // «UPDATE + событие таймлайна + INSERT в notifications»); fail() хука —
+    // откат всего перехода и Error (см. AppWorkflow::AfterEventTx).
+    AppWorkflow::AfterEventTx notify =
+        [applicationId, toStatus,
+         comment](const std::shared_ptr<Transaction>& tx,
+                  const std::function<void()>& fail) {
+            *tx << kSelectOwnerSql << applicationId >>
+                [tx, applicationId, toStatus, comment,
+                 fail](const drogon::orm::Result& rows) {
+                    if (rows.empty())
+                    {
+                        // Заявка удалена в гонке — некому уведомлять.
+                        // fail() = fire(Error) + rollback всей транзакции.
+                        LOG_WARN << "ApplicationsService: заявка "
+                                 << applicationId << " исчезла перед "
+                                                    "уведомлением";
+                        fail();
+                        return;
+                    }
+                    const int64_t ownerId =
+                        rows[0]["user_id"].as<int64_t>();
+                    const std::string type = rows[0]["type"].as<std::string>();
+                    const std::string title =
+                        std::string(models::applicationTypeTitle(type)) +
+                        ": " + std::string(models::applicationStatusTitle(toStatus));
+                    const std::string deepLink =
+                        "/applications/" + std::to_string(applicationId);
+                    *tx << kInsertNotificationSql << ownerId << title
+                        << comment << deepLink >>
+                        [](const drogon::orm::Result&) {
+                            // commit — при уничтожении tx (последний
+                            // держатель — этот колбэк).
+                        } >>
+                        [fail](const DrogonDbException& e) {
+                            LOG_ERROR << "ApplicationsService: insert"
+                                         " notification: "
+                                      << e.base().what();
+                            fail();
+                        };
+                } >>
+                [fail](const DrogonDbException& e) {
+                    LOG_ERROR << "ApplicationsService: select owner: "
+                              << e.base().what();
+                    fail();
+                };
+        };
+
+    AppWorkflow::apply(
+        db, applicationId, toStatus, comment, staffUserId,
+        [db, applicationId,
+         cb](AppWorkflow::ApplyResult r) {
+            switch (r.outcome)
+            {
+                case AppWorkflow::Outcome::Applied:
+                    // Карточка в новом статусе (по PK — после Apply).
+                    *db << kSelectAppSql << applicationId >>
+                        [cb](const drogon::orm::Result& rows) {
+                            if (rows.empty())
+                            {
+                                cb(StatusChangeResult{
+                                    StatusChange::NotFound, Json::Value()});
+                                return;
+                            }
+                            cb(StatusChangeResult{StatusChange::Ok,
+                                                  appJson(rows[0])});
+                        } >>
+                        [cb](const DrogonDbException& e) {
+                            LOG_ERROR << "ApplicationsService::"
+                                         "staffChangeStatus: select: "
+                                      << e.base().what();
+                            cb(StatusChangeResult{StatusChange::Error,
+                                                  Json::Value()});
+                        };
+                    return;
+                case AppWorkflow::Outcome::InvalidTransition:
+                    cb(StatusChangeResult{StatusChange::InvalidTransition,
+                                          Json::Value()});
+                    return;
+                case AppWorkflow::Outcome::NotFound:
+                    cb(StatusChangeResult{StatusChange::NotFound,
+                                          Json::Value()});
+                    return;
+                case AppWorkflow::Outcome::Error:
+                    cb(StatusChangeResult{StatusChange::Error,
+                                          Json::Value()});
+                    return;
+            }
+        },
+        std::move(notify));
+}
 
 Json::Value ApplicationsService::catalog()
 {

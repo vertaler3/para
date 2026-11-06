@@ -53,14 +53,15 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                         const std::string& toStatus,
                         const std::optional<std::string>& comment,
                         int64_t authorId,
-                        ApplyCb cb)
+                        ApplyCb cb,
+                        AfterEventTx afterEvent)
 {
     // 1. Текущий статус. cb копируется в обе ветки цепочки (стреляет ровно
     //    одна); move в первую лямбду оставил бы второй пустой std::function →
     //    bad_function_call на error-пути (урок Э2 шаг 1, OwnershipGuard.cpp).
     *db << kCurrentStatusSql << applicationId >>
-        [db, applicationId, toStatus, comment, authorId,
-         cb](const Result& rows) {
+        [db, applicationId, toStatus, comment, authorId, cb,
+         afterEvent](const Result& rows) {
             if (rows.empty())
             {
                 // Несуществующая заявка → 404 (владение не раскрываем).
@@ -100,9 +101,9 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
             };
 
             db->newTransactionAsync([fire, from, toStatus, comment, authorId,
-                                     applicationId,
-                                     eventId](const std::shared_ptr<
-                                         Transaction>& transaction) {
+                                     applicationId, eventId, afterEvent](
+                                        const std::shared_ptr<
+                                            Transaction>& transaction) {
                 if (!transaction)
                 {
                     // Таймаут ожидания соединения (02 §5.1: 500 без деталей).
@@ -111,10 +112,17 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                     fire(Outcome::Error, from);
                     return;
                 }
+                // fail хука: откат всей транзакции + исход Error (fire
+                // защищён once — не задублирует commit-callback).
+                const std::function<void()> fail = [fire, from,
+                                                    transaction]() {
+                    fire(Outcome::Error, from);
+                    transaction->rollback();
+                };
 
                 auto updateOk = [tx = transaction, from, toStatus, comment,
-                                 authorId, applicationId, eventId,
-                                 fire](const Result& r) {
+                                 authorId, applicationId, eventId, afterEvent,
+                                 fire, fail](const Result& r) {
                     if (r.affectedRows() == 0)
                     {
                         // Гонка: статус изменили параллельно — ничего не
@@ -136,12 +144,19 @@ void AppWorkflow::apply(drogon::orm::DbClientPtr db,
                     // деструкторе), commit-callback отдаёт Applied.
                     *tx << kInsertEventSql << applicationId << from
                         << toStatus << comment << authorId >>
-                        [tx, eventId](const Result&) {
+                        [tx, eventId, afterEvent,
+                         fail](const Result&) {
                             *tx << kLastRowIdSql >>
-                                [tx, eventId](const Result& rows) {
+                                [tx, eventId, afterEvent,
+                                 fail](const Result& rows) {
                                     if (!rows.empty())
                                         *eventId =
                                             rows[0]["id"].as<int64_t>();
+                                    // 5. Атомарные последствия перехода
+                                    //    (уведомление автору — Э5 шаг 3)
+                                    //    в той же транзакции, до коммита.
+                                    if (afterEvent)
+                                        afterEvent(tx, fail);
                                 } >>
                                 [tx](const DrogonDbException& e) {
                                     // Событие записано, id не прочитан —

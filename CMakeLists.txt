@@ -58,6 +58,7 @@ add_executable(para
                src/controllers/ScheduleCtrl.cpp
                src/controllers/GradesCtrl.cpp
                src/controllers/ApplicationsCtrl.cpp
+               src/controllers/StaffCtrl.cpp
                src/controllers/IcsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -73,6 +74,7 @@ add_executable(para
                src/services/IcsBuilder.cpp
                src/services/UserService.cpp
                src/filters/LoginFilter.cpp
+               src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
 
 target_include_directories(para PRIVATE

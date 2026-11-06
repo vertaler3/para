@@ -65,18 +65,31 @@ class AppWorkflow
     };
     using ApplyCb = std::function<void(ApplyResult)>;
 
+    // Хук Э5 шаг 3 — выполняется В ТОЙ ЖЕ транзакции после записи события
+    // (до коммита): автор уведомления/прочие атомарные последствия перехода
+    // (05 §3 Э5 п.3: «в одной транзакции: UPDATE + событие + INSERT в
+    // notifications»). Аргументы: tx (захватывается в колбэки хука — держит
+    // транзакцию живой до их завершения) и fail() — ошибка БД в хуке:
+    // откат ВСЕЙ транзакции (статус + событие + последствия) и исход Error.
+    // nullptr — без последствий (обычный переход).
+    using AfterEventTx = std::function<void(
+        const std::shared_ptr<drogon::orm::Transaction>& tx,
+        const std::function<void()>& fail)>;
+
     // Применить переход: чтение текущего статуса → проверка матрицы →
-    // транзакция (условный UPDATE + событие таймлайна). comment — причина
-    // отклонения / вопрос деканата (05 §3 Э5: «rejected (с причиной)»);
-    // nullopt → SQL NULL (колонка nullable по DDL 02 §4.1). authorId —
-    // пользователь сессии, инициировавший переход (студент при отмене/ответе,
-    // сотрудник при смене статуса). Колбэк стреляет ровно один раз.
+    // транзакция (условный UPDATE + событие таймлайна [+ afterEvent]).
+    // comment — причина отклонения / вопрос деканата (05 §3 Э5:
+    // «rejected (с причиной)»); nullopt → SQL NULL (колонка nullable по DDL
+    // 02 §4.1). authorId — пользователь сессии, инициировавший переход
+    // (студент при отмене/ответе, сотрудник при смене статуса). Колбэк
+    // стреляет ровно один раз.
     static void apply(drogon::orm::DbClientPtr db,
                       int64_t applicationId,
                       const std::string& toStatus,
                       const std::optional<std::string>& comment,
                       int64_t authorId,
-                      ApplyCb cb);
+                      ApplyCb cb,
+                      AfterEventTx afterEvent = nullptr);
 };
 
 }  // namespace para

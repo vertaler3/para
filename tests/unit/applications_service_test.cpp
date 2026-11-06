@@ -20,6 +20,7 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -72,7 +73,9 @@ void exec(sqlite3* db, const std::string& sql)
     }
 }
 
-// Схема — колонки/индексы/CHECK миграции 0003 (02 §4.1); FK не проверяются.
+// Схема — колонки/индексы/CHECK миграций 0003 (applications/
+// application_events) и 0004 (notifications) + profiles/groups из 0001
+// (JOIN очереди сотрудника); FK не проверяются — это работа миграций.
 struct Fixture
 {
     TempDir tmp;
@@ -94,6 +97,26 @@ struct Fixture
                                 SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
                                 nullptr) == SQLITE_OK);
         exec(raw,
+             "CREATE TABLE groups ("
+             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  name TEXT NOT NULL UNIQUE,"
+             "  course INTEGER NOT NULL);"
+             "CREATE TABLE profiles ("
+             "  user_id INTEGER PRIMARY KEY,"
+             "  fio TEXT NOT NULL,"
+             "  faculty TEXT NOT NULL,"
+             "  program TEXT NOT NULL,"
+             "  course INTEGER NOT NULL,"
+             "  group_id INTEGER NOT NULL,"
+             "  student_card_no TEXT NOT NULL UNIQUE);"
+             "INSERT INTO groups(id, name, course) VALUES (1, '1-ФМО', 1),"
+             " (2, '4-ФП', 4);"
+             "INSERT INTO profiles(user_id, fio, faculty, program, course,"
+             " group_id, student_card_no) VALUES"
+             " (4, 'Хакимова Дина Ринатовна', 'ФМО', 'Мировая экономика', 1,"
+             "  1, '24-1-004'),"
+             " (2, 'Соколов Олег Андреевич', 'ФМО', 'Мировая экономика', 1,"
+             "  1, '24-1-002');"
              "CREATE TABLE applications ("
              "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
              "  user_id INTEGER NOT NULL,"
@@ -120,21 +143,43 @@ struct Fixture
              "  at TEXT NOT NULL DEFAULT"
              "    (strftime('%Y-%m-%dT%H:%M:%SZ','now')));"
              "CREATE INDEX idx_app_events ON application_events"
-             " (application_id, at);");
+             " (application_id, at);"
+             "CREATE TABLE notifications ("
+             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  user_id INTEGER NOT NULL,"
+             "  type TEXT NOT NULL CHECK (type IN"
+             "    ('schedule','deadline','application','announcement')),"
+             "  title TEXT NOT NULL,"
+             "  body TEXT,"
+             "  deep_link TEXT,"
+             "  read_at TEXT,"
+             "  created_at TEXT NOT NULL DEFAULT"
+             "    (strftime('%Y-%m-%dT%H:%M:%SZ','now')));"
+             "CREATE INDEX idx_notifications_user ON notifications(user_id,"
+             " read_at, created_at);");
         sqlite3_close(raw);
     }
 
-    // Прямая вставка заявки в заданном статусе (id → имя для проверок).
+    // Прямая вставка заявки в заданном статусе (id → имя для проверок);
+    // updatedAt — фиксированное значение для тестов «горит» (пусто → now).
     int64_t seedApp(int64_t userId, const std::string& status,
-                    const std::string& payload = "{}")
+                    const std::string& payload = "{}",
+                    const std::string& type = "study_certificate",
+                    const std::string& updatedAt = "")
     {
         sqlite3* raw = nullptr;
         REQUIRE(sqlite3_open_v2(dbPath.c_str(), &raw, SQLITE_OPEN_READWRITE,
                                 nullptr) == SQLITE_OK);
-        exec(raw,
-             "INSERT INTO applications (user_id, type, status, payload_json)"
-             " VALUES (" + std::to_string(userId) + ", 'study_certificate'"
-             ", '" + status + "', '" + payload + "');");
+        std::string sql =
+            "INSERT INTO applications (user_id, type, status, payload_json";
+        if (!updatedAt.empty())
+            sql += ", updated_at";
+        sql += ") VALUES (" + std::to_string(userId) + ", '" + type + "', '" +
+               status + "', '" + payload + "'";
+        if (!updatedAt.empty())
+            sql += ", '" + updatedAt + "'";
+        sql += ");";
+        exec(raw, sql);
         const int64_t id = sqlite3_last_insert_rowid(raw);
         sqlite3_close(raw);
         return id;
@@ -496,4 +541,235 @@ TEST_CASE("ApplicationsService: нет заявки → NotFound; ошибка �
                               });
     REQUIRE(fut2.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
     CHECK_FALSE(fut2.get().ok);
+}
+
+ApplicationsService::Result queueOf(const drogon::orm::DbClientPtr& db,
+                                    const ApplicationsService::QueueFilters& filters)
+{
+    std::promise<ApplicationsService::Result> p;
+    auto f = p.get_future();
+    ApplicationsService::queue(db, filters, [&p](ApplicationsService::Result r) {
+        p.set_value(std::move(r));
+    });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+ApplicationsService::StatusChangeResult changeOf(
+    const drogon::orm::DbClientPtr& db,
+    int64_t appId,
+    const std::string& toStatus,
+    const std::optional<std::string>& comment,
+    int64_t staffUserId)
+{
+    std::promise<ApplicationsService::StatusChangeResult> p;
+    auto f = p.get_future();
+    ApplicationsService::staffChangeStatus(
+        db, appId, toStatus, comment, staffUserId,
+        [&p](ApplicationsService::StatusChangeResult r) {
+            p.set_value(std::move(r));
+        });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+int64_t countOf(const drogon::orm::DbClientPtr& db, const std::string& table)
+{
+    std::promise<int64_t> p;
+    auto f = p.get_future();
+    // table — доверенная константа теста (не пользовательский ввод).
+    *db << "SELECT COUNT(*) AS n FROM " + table >>
+        [&p](const drogon::orm::Result& rows) {
+            p.set_value(rows[0]["n"].as<int64_t>());
+        } >>
+        [&p](const DrogonDbException& e) {
+            p.set_exception(
+                std::make_exception_ptr(std::runtime_error(e.base().what())));
+        };
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+// Последнее уведомление пользователя (ORDER BY id DESC LIMIT 1) — для
+// проверки автоуведомления о смене статуса.
+std::unique_ptr<Json::Value> oneNotificationOf(
+    const drogon::orm::DbClientPtr& db, int64_t userId)
+{
+    std::promise<std::optional<Json::Value>> p;
+    auto f = p.get_future();
+    *db << "SELECT id, user_id, type, title, body, deep_link, read_at,"
+           " created_at FROM notifications WHERE user_id = $1"
+           " ORDER BY id DESC LIMIT 1"
+        << userId >>
+        [&p](const drogon::orm::Result& rows) {
+            if (rows.empty())
+            {
+                p.set_value(std::nullopt);
+                return;
+            }
+            const auto& r = rows[0];
+            Json::Value n(Json::objectValue);
+            n["id"] = r["id"].as<int64_t>();
+            n["user_id"] = r["user_id"].as<int64_t>();
+            n["type"] = r["type"].as<std::string>();
+            n["title"] = r["title"].as<std::string>();
+            if (r["body"].isNull())
+                n["body"] = Json::Value();
+            else
+                n["body"] = r["body"].as<std::string>();
+            if (r["deep_link"].isNull())
+                n["deep_link"] = Json::Value();
+            else
+                n["deep_link"] = r["deep_link"].as<std::string>();
+            if (r["read_at"].isNull())
+                n["read_at"] = Json::Value();
+            else
+                n["read_at"] = r["read_at"].as<std::string>();
+            p.set_value(std::move(n));
+        } >>
+        [&p](const DrogonDbException& e) {
+            p.set_exception(
+                std::make_exception_ptr(std::runtime_error(e.base().what())));
+        };
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    auto v = f.get();
+    return v ? std::make_unique<Json::Value>(std::move(*v)) : nullptr;
+}
+
+// Расклад очереди (Э5 шаг 3): «горит» = 3 дня ожидания в активном статусе —
+// старые updated_at ('2026-01-01') против свежих ('2099-01-01', никогда не
+// overdue) — детерминированно к любому времени прогона.
+TEST_CASE("Staff queue: фильтры status/type/overdue, сортировка, владелец")
+{
+    Fixture f;
+    // ids: 1 — Дина, старая активная (горит); 2 — Олег, свежая; 3 — Дина,
+    // старый черновик (draft не горит); 4 — Олег, старая терминальная.
+    const int64_t a = f.seedApp(4, "in_progress", "{}", "academic_certificate",
+                                "2026-01-01T00:00:00Z");
+    const int64_t b = f.seedApp(2, "submitted", "{}", "study_certificate",
+                                "2099-01-01T00:00:00Z");
+    const int64_t c = f.seedApp(4, "draft", "{}", "thesis_topic",
+                                "2026-01-01T00:00:00Z");
+    const int64_t d = f.seedApp(2, "issued", "{}", "academic_certificate",
+                                "2026-01-01T00:00:00Z");
+    CHECK(countOf(f.db, "applications") == 4);
+
+    // Без фильтров: все 4, по updated_at ASC (давние сверху), связи — по id.
+    const auto all = queueOf(f.db, {});
+    REQUIRE(all.ok);
+    REQUIRE(all.body["applications"].size() == 4);
+    CHECK(all.body["applications"][0]["id"].as<int64_t>() == a);
+    CHECK(all.body["applications"][1]["id"].as<int64_t>() == c);
+    CHECK(all.body["applications"][2]["id"].as<int64_t>() == d);
+    CHECK(all.body["applications"][3]["id"].as<int64_t>() == b);
+    // Владелец (С8.3: профиль в карточке очереди) и признак «горит».
+    CHECK(all.body["applications"][0]["owner"]["fio"].asString() ==
+          "Хакимова Дина Ринатовна");
+    CHECK(all.body["applications"][0]["owner"]["group"].asString() == "1-ФМО");
+    CHECK(all.body["applications"][1]["owner"]["fio"].asString() ==
+          "Хакимова Дина Ринатовна");
+    CHECK(all.body["applications"][3]["owner"]["fio"].asString() ==
+          "Соколов Олег Андреевич");
+    CHECK(all.body["applications"][0]["overdue"].asBool() == true);
+    CHECK(all.body["applications"][1]["overdue"].asBool() == false);  // draft
+    CHECK(all.body["applications"][2]["overdue"].asBool() == false);  // issued
+    CHECK(all.body["applications"][3]["overdue"].asBool() == false);  // свежая
+
+    // Фильтр статуса.
+    ApplicationsService::QueueFilters byStatusF;
+    byStatusF.status = "in_progress";
+    const auto byStatus = queueOf(f.db, byStatusF);
+    REQUIRE(byStatus.ok);
+    REQUIRE(byStatus.body["applications"].size() == 1);
+    CHECK(byStatus.body["applications"][0]["id"].as<int64_t>() == a);
+
+    // Фильтр типа.
+    ApplicationsService::QueueFilters byTypeF;
+    byTypeF.type = "academic_certificate";
+    const auto byType = queueOf(f.db, byTypeF);
+    REQUIRE(byType.ok);
+    REQUIRE(byType.body["applications"].size() == 2);
+    CHECK(byType.body["applications"][0]["id"].as<int64_t>() == a);
+    CHECK(byType.body["applications"][1]["id"].as<int64_t>() == d);
+
+    // overdue=1: только старая активная; draft/issued/свежая — мимо.
+    ApplicationsService::QueueFilters overdueF;
+    overdueF.overdueOnly = true;
+    const auto overdue = queueOf(f.db, overdueF);
+    REQUIRE(overdue.ok);
+    REQUIRE(overdue.body["applications"].size() == 1);
+    CHECK(overdue.body["applications"][0]["id"].as<int64_t>() == a);
+    CHECK(overdue.body["applications"][0]["overdue"].asBool() == true);
+
+    // Комбинация overdue + status.
+    ApplicationsService::QueueFilters comboF;
+    comboF.status = "submitted";
+    comboF.overdueOnly = true;
+    const auto combo = queueOf(f.db, comboF);
+    REQUIRE(combo.ok);
+    CHECK(combo.body["applications"].size() == 0);  // submitted — только свежая
+}
+
+TEST_CASE("Staff status change: автомат + событие + автоуведомление автору")
+{
+    Fixture f;
+    const int64_t app = f.seedApp(4, "in_progress", "{}",
+                                  "academic_certificate");
+    REQUIRE(countOf(f.db, "notifications") == 0);
+    REQUIRE(countOf(f.db, "application_events") == 0);
+
+    // in_progress → ready (валидный переход): статус, событие, уведомление.
+    const auto r = changeOf(f.db, app, "ready", std::nullopt, 5);
+    REQUIRE(r.status == ApplicationsService::StatusChange::Ok);
+    CHECK(r.body["status"].asString() == "ready");
+    CHECK(statusTextOf(f.db, app) == "ready");
+    CHECK(countOf(f.db, "application_events") == 1);
+    // Уведомление автору заявки (Дине, user 4), не сотруднику (02 §4.1):
+    // type 'application', title «Тип: Статус» по меткам models, deep_link
+    // на карточку заявки (4.5), непрочитанное.
+    REQUIRE(countOf(f.db, "notifications") == 1);
+    const auto n = oneNotificationOf(f.db, 4);
+    REQUIRE(n != nullptr);
+    CHECK((*n)["user_id"].as<int64_t>() == 4);
+    CHECK((*n)["type"].asString() == "application");
+    CHECK((*n)["title"].asString() == "Академическая справка: Готова");
+    CHECK((*n)["body"].isNull());  // комментарий не передан
+    CHECK((*n)["deep_link"].asString() == "/applications/" +
+                                              std::to_string(app));
+    CHECK((*n)["read_at"].isNull());
+
+    // rejected с причиной (из in_progress — из ready только issued, 05 §3
+    // Э5): комментарий — в body уведомления («rejected (с причиной)»).
+    const int64_t app2 = f.seedApp(2, "in_progress", "{}",
+                                   "study_certificate");
+    const auto r2 = changeOf(f.db, app2, "rejected",
+                             std::string("не выдаётся в демо-контуре"), 5);
+    REQUIRE(r2.status == ApplicationsService::StatusChange::Ok);
+    CHECK(statusTextOf(f.db, app2) == "rejected");
+    REQUIRE(countOf(f.db, "notifications") == 2);
+    const auto n2 = oneNotificationOf(f.db, 2);
+    REQUIRE(n2 != nullptr);
+    CHECK((*n2)["user_id"].as<int64_t>() == 2);  // автору этой заявки
+    CHECK((*n2)["title"].asString() == "Справка об обучении: Отклонена");
+    CHECK((*n2)["body"].asString() == "не выдаётся в демо-контуре");
+    CHECK(countOf(f.db, "application_events") == 2);
+
+    // Недопустимый переход (rejected → in_progress вне матрицы): 409 и БЕЗ
+    // уведомления/события — транзакция откатывается целиком.
+    const auto bad = changeOf(f.db, app2, "in_progress", std::nullopt, 5);
+    CHECK(bad.status == ApplicationsService::StatusChange::InvalidTransition);
+    CHECK(statusTextOf(f.db, app2) == "rejected");
+    CHECK(countOf(f.db, "notifications") == 2);
+    CHECK(countOf(f.db, "application_events") == 2);
+
+    // Несуществующая заявка → NotFound (OwnershipGuard не нужен — staff
+    // видит все; 404 различается от 409).
+    CHECK(changeOf(f.db, 999999, "accepted", std::nullopt, 5).status ==
+          ApplicationsService::StatusChange::NotFound);
+    CHECK(countOf(f.db, "notifications") == 2);
+
+    // Ошибка БД — fail-closed: Error, ничего не записано.
+    Fixture broken(/*withTables=*/false);
+    CHECK(changeOf(broken.db, app, "ready", std::nullopt, 5).status ==
+          ApplicationsService::StatusChange::Error);
 }

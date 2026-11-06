@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string_view>
+#include <utility>
 
 namespace para::models
 {
@@ -138,6 +139,33 @@ constexpr std::string_view applicationTypeTitle(std::string_view key)
         if (t.key == key)
             return t.title;
     return key;
+}
+
+// ============================================================================
+// Человекочитаемые статусы — для уведомлений о смене статуса (Э5 шаг 3:
+// «Статус заявки: …») и бейджей FE. Слова — таймлайн 01 §4.4 («подана →
+// принята → в работе → готова → выдана») и С7.5 («Требуется уточнение»).
+// ============================================================================
+constexpr std::string_view applicationStatusTitle(std::string_view status)
+{
+    // Пары (статус CHECK DDL, метка) — 9 значений словаря.
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 9>
+        kStatusTitles{{
+            {"draft", "Черновик"},
+            {"submitted", "Подана"},
+            {"accepted", "Принята"},
+            {"in_progress", "В работе"},
+            {"need_info", "Требуется уточнение"},
+            {"ready", "Готова"},
+            {"issued", "Выдана"},
+            {"rejected", "Отклонена"},
+            {"cancelled", "Отменена"},
+        }};
+    for (const auto& [s, title] : kStatusTitles)
+        if (s == status)
+            return title;
+    return status;  // неизвестный статус — сам ключ (не должен случаться:
+                    // словарь ограничен CHECK DDL)
 }
 
 }  // namespace para::models
