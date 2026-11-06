@@ -95,6 +95,7 @@ add_executable(para
                src/services/IcsBuilder.cpp
                src/services/UserService.cpp
                src/services/RoomsService.cpp
+               src/services/NotifyDispatcher.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
@@ -134,6 +135,7 @@ add_executable(para-tests
                tests/unit/applications_service_test.cpp
                tests/unit/pdf_builder_test.cpp
                tests/unit/rooms_service_test.cpp
+               tests/unit/notify_dispatcher_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -149,6 +151,7 @@ add_executable(para-tests
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/services/RoomsService.cpp
+               src/services/NotifyDispatcher.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
 
