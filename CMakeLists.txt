@@ -81,6 +81,7 @@ add_executable(para
                src/controllers/IcsCtrl.cpp
                src/controllers/RoomsCtrl.cpp
                src/controllers/WsCtrl.cpp
+               src/controllers/AnnouncementsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -98,6 +99,9 @@ add_executable(para
                src/services/RoomsService.cpp
                src/services/NotifyDispatcher.cpp
                src/services/ReminderService.cpp
+               src/services/ScheduleChangeService.cpp
+               src/services/StaffDashboard.cpp
+               src/services/AnnouncementsService.cpp
                src/services/WsRegistry.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
@@ -141,6 +145,7 @@ add_executable(para-tests
                tests/unit/notify_dispatcher_test.cpp
                tests/unit/reminder_service_test.cpp
                tests/unit/ws_registry_test.cpp
+               tests/unit/staff_step_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -158,6 +163,9 @@ add_executable(para-tests
                src/services/RoomsService.cpp
                src/services/NotifyDispatcher.cpp
                src/services/ReminderService.cpp
+               src/services/ScheduleChangeService.cpp
+               src/services/StaffDashboard.cpp
+               src/services/AnnouncementsService.cpp
                src/services/WsRegistry.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
