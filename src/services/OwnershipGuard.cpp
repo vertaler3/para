@@ -25,6 +25,8 @@ std::string_view sqlFor(OwnershipGuard::Table table)
             return "SELECT user_id FROM grades WHERE id = $1";
         case OwnershipGuard::Table::Notifications:
             return "SELECT user_id FROM notifications WHERE id = $1";
+        case OwnershipGuard::Table::RoomBookings:
+            return "SELECT user_id FROM room_bookings WHERE id = $1";
     }
     return {};  // недостижимо при полном switch над enum
 }
@@ -40,6 +42,8 @@ const char* labelFor(OwnershipGuard::Table table)
             return "grades";
         case OwnershipGuard::Table::Notifications:
             return "notifications";
+        case OwnershipGuard::Table::RoomBookings:
+            return "room_bookings";
     }
     return "?";  // недостижимо при полном switch над enum
 }

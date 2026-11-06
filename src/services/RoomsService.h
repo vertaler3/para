@@ -115,6 +115,78 @@ class RoomsService
                       int64_t userId,
                       const std::string& date,
                       std::function<void(SlotsResult)> cb);
+
+    // --- Брони (Э5а шаг 2; 02 §5.2) ----------------------------------------
+    // POST /v1/rooms/{id}/bookings — забронировать интервал. body: starts_at,
+    // ends_at (02 §5.2) — строки ISO 8601 UTC «…Z» (формат фикстур/сеток);
+    // слот 60 минут — частный случай (FE шлёт границы слота сетки), API
+    // принимает произвольный интервал ends_at > starts_at: пересекающий
+    // запрос 10:30–11:30 должен дойти до проверки пересечения (409), а не
+    // отсеиваться «не слот» на валидации.
+    //
+    // Двойная защита от двойной брони (гайд BE §8):
+    //   1) серверная проверка пересечений активных броней этой комнаты
+    //      (SELECT status='booked' — idx_bookings_active, см. шапку slots):
+    //      среди пересекающихся броней та, чьё starts_at совпадает с
+    //      предлагаемым, — «тот же слот» → SlotTaken (400 «двойная бронь»);
+    //      частичное перекрытие (10:30–11:30 против 10:00–11:00) → Conflict
+    //      (409 «конфликт, только что заняли» — случай FE-сетки, 03 §4.9.5);
+    //   2) частичный UNIQUE idx_bookings_active (room_id, starts_at)
+    //      WHERE status='booked' — гонка двух параллельных POST (серверная
+    //      проверка обеих прошла до INSERT'ов): исключение БД ловится и
+    //      маппится в SlotTaken (400), НЕ в 500 (постановка шага 2).
+    // Границы-касания не пересекаются: [10:00,11:00) и [11:00,12:00) —
+    // полуинтервалы, вторая бронь начинается в момент окончания первой.
+    enum class CreateStatus
+    {
+        Created,    // 201 + тело брони
+        SlotTaken,  // 400 — двойная бронь того же слота (сервер или UNIQUE)
+        Conflict,   // 409 — пересечение интервала («только что заняли»)
+        InvalidBody,  // 400 — не ISO «…Z» / ends_at <= starts_at
+        NotFound,   // 404 — аудитории нет
+        Error       // 500 — ошибка БД (fail-closed)
+    };
+    struct CreateResult
+    {
+        CreateStatus status = CreateStatus::Error;
+        Json::Value body;  // созданная бронь при Created
+    };
+    static void create(drogon::orm::DbClientPtr db,
+                       int64_t roomId,
+                       int64_t userId,
+                       const std::string& startsAt,
+                       const std::string& endsAt,
+                       std::function<void(CreateResult)> cb);
+
+    // GET /v1/room-bookings — МОИ активные брони (status='booked'), по
+    // starts_at (idx_bookings_user (user_id, starts_at) — 02 §4.2 «мои
+    // брони»); JOIN rooms — имя/корпус для строки списка «Мои брони».
+    // upcoming=true (?upcoming=1, 02 §5.2) — только предстоящие
+    // (ends_at >= nowIso); nowIso передаёт контроллер (SessionService::
+    // utcNow) — wall-clock в тестах не участвует. Отменённые не возвращаются.
+    static void myBookings(drogon::orm::DbClientPtr db,
+                           int64_t userId,
+                           bool upcoming,
+                           const std::string& nowIso,
+                           ResultCb cb);
+
+    // DELETE /v1/room-bookings/{id} — отмена СВОЕЙ активной брони. Владение
+    // проверяет КОНТРОЛЛЕР через OwnershipGuard::check(Table::RoomBookings)
+    // ДО вызова (правило код-ревью OwnershipGuard.h; шаг 8 автотеста
+    // 02 §9.3: чужая бронь по подставленному адресу → 403 — 01 §5.10).
+    // Выборка/UPDATE здесь — по PK БЕЗ user_id-условия: владение проверено
+    // ровно один раз, guard'ом (постановка Э4 шаг 2). Отмена — статус
+    // 'cancelled' (CHECK 0005), НЕ удаление строки: история/индексы целы.
+    enum class CancelStatus
+    {
+        Canceled,   // 204 — условный UPDATE перевёл booked → cancelled
+        NotActive,  // 409 — бронь не в booked (уже отменена/блокировка)
+        NotFound,   // 404 — строки нет (после Own — гонка; не маскируется)
+        Error       // 500 — ошибка БД (fail-closed)
+    };
+    static void cancelById(drogon::orm::DbClientPtr db,
+                           int64_t bookingId,
+                           std::function<void(CancelStatus)> cb);
 };
 
 }  // namespace para

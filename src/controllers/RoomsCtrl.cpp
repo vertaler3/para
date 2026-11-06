@@ -1,6 +1,8 @@
 #include "controllers/RoomsCtrl.h"
 
+#include "services/OwnershipGuard.h"
 #include "services/RoomsService.h"
+#include "services/SessionService.h"  // utcNow — фильтр upcoming
 #include "utils/ApiError.h"
 
 using namespace drogon;
@@ -21,6 +23,32 @@ void sendResult(std::function<void(const HttpResponsePtr&)> cb,
                               k500InternalServerError));
 }
 
+// Вердикт guard'а → ответ (02 §6.3/§5.1): чужое — 403 forbidden (дословный
+// пример 02 §5.1), не существующее — 404 not_found, ошибка БД — 500
+// (fail-closed). Own обрабатывает вызывающий (там нужен выборка/сервис).
+bool sendVerdict(std::function<void(const HttpResponsePtr&)>& cb,
+                 OwnershipGuard::Verdict v)
+{
+    switch (v)
+    {
+        case OwnershipGuard::Verdict::Own:
+            return false;  // владение подтверждено — продолжить
+        case OwnershipGuard::Verdict::NotFound:
+            cb(api::errorResponse("not_found", "Запись не найдена",
+                                  k404NotFound));
+            return true;
+        case OwnershipGuard::Verdict::Forbidden:
+            cb(api::errorResponse("forbidden", "Доступ только к своим данным",
+                                  k403Forbidden));
+            return true;
+        case OwnershipGuard::Verdict::Error:
+            cb(api::errorResponse("internal", "Внутренняя ошибка сервера",
+                                  k500InternalServerError));
+            return true;
+    }
+    return true;  // недостижимо при полном switch над enum
+}
+
 }  // namespace
 
 void RoomsCtrl::getRooms(const HttpRequestPtr&,  // сессия каталогу не нужна:
@@ -37,8 +65,7 @@ void RoomsCtrl::getRooms(const HttpRequestPtr&,  // сессия каталог�
 void RoomsCtrl::getSlots(const HttpRequestPtr& req,
                          std::function<void(const HttpResponsePtr&)>&& cb,
                          int64_t roomId)
-{
-    // Сессию проверил LoginFilter — user_id только из сессии (02 §6.3):
+{    // Сессию проверил LoginFilter — user_id только из сессии (02 §6.3):
     // «ваша бронь» в сетке — по нему (RoomsService::slots).
     const auto session = req->attributes()->get<para::SessionInfo>("session");
 
@@ -74,5 +101,151 @@ void RoomsCtrl::getSlots(const HttpRequestPtr& req,
                                           k500InternalServerError));
                     return;
             }
+        });
+}
+
+void RoomsCtrl::createBooking(const HttpRequestPtr& req,
+                              std::function<void(const HttpResponsePtr&)>&& cb,
+                              int64_t roomId)
+{
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // body: starts_at, ends_at (02 §5.2). Формат/интервал валидирует
+    // сервис (InvalidBody → 400); здесь — только наличие JSON-тела и строк.
+    const auto json = req->getJsonObject();
+    if (json == nullptr || !json->isMember("starts_at") ||
+        !json->isMember("ends_at") || !(*json)["starts_at"].isString() ||
+        !(*json)["ends_at"].isString())
+    {
+        cb(api::errorResponse(
+            "bad_request",
+            "Ожидается JSON-тело со строками starts_at и ends_at",
+            k400BadRequest));
+        return;
+    }
+    RoomsService::create(
+        app().getDbClient("para"),
+        roomId,
+        session.userId,
+        (*json)["starts_at"].asString(),
+        (*json)["ends_at"].asString(),
+        [cb = std::move(cb)](RoomsService::CreateResult r) mutable {
+            switch (r.status)
+            {
+                case RoomsService::CreateStatus::Created:
+                {
+                    auto resp =
+                        HttpResponse::newHttpJsonResponse(std::move(r.body));
+                    resp->setStatusCode(k201Created);
+                    cb(std::move(resp));
+                    return;
+                }
+                case RoomsService::CreateStatus::SlotTaken:
+                    // «Двойная бронь» того же слота — серверная проверка
+                    // или UNIQUE idx_bookings_active в гонке (гайд BE §8:
+                    // повторная бронь того же слота другим клиентом → 400).
+                    cb(api::errorResponse("slot_taken", "Слот уже занят",
+                                          k400BadRequest));
+                    return;
+                case RoomsService::CreateStatus::Conflict:
+                    // Пересечение интервалов — «конфликт, только что
+                    // заняли» (случай FE-сетки, 03 §4.9.5).
+                    cb(api::errorResponse(
+                        "conflict",
+                        "Интервал пересекается с активной бронью",
+                        k409Conflict));
+                    return;
+                case RoomsService::CreateStatus::InvalidBody:
+                    cb(api::errorResponse(
+                        "bad_request",
+                        "starts_at/ends_at — ожидается ISO 8601 UTC "
+                        "(YYYY-MM-DDTHH:MM:SSZ), ends_at позже starts_at",
+                        k400BadRequest));
+                    return;
+                case RoomsService::CreateStatus::NotFound:
+                    cb(api::errorResponse("not_found", "Аудитория не найдена",
+                                          k404NotFound));
+                    return;
+                case RoomsService::CreateStatus::Error:
+                    cb(api::errorResponse("internal",
+                                          "Внутренняя ошибка сервера",
+                                          k500InternalServerError));
+                    return;
+            }
+        });
+}
+
+void RoomsCtrl::myBookings(const HttpRequestPtr& req,
+                           std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // ?upcoming=1 (02 §5.2) — только предстоящие; отсутствие — все активные;
+    // иное значение → 400 (стиль overdue в StaffCtrl: известные значения —
+    // только те, что описаны контрактом).
+    bool upcoming = false;
+    const std::string raw = req->getParameter("upcoming");
+    if (raw == "1")
+        upcoming = true;
+    else if (!raw.empty())
+    {
+        cb(api::errorResponse("bad_request", "upcoming — ожидается 1",
+                              k400BadRequest));
+        return;
+    }
+    RoomsService::myBookings(
+        app().getDbClient("para"), session.userId, upcoming,
+        SessionService::utcNow(),
+        [cb = std::move(cb)](RoomsService::Result r) mutable {
+            sendResult(std::move(cb), std::move(r));
+        });
+}
+
+void RoomsCtrl::cancelBooking(const HttpRequestPtr& req,
+                              std::function<void(const HttpResponsePtr&)>&& cb,
+                              int64_t bookingId)
+{
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    auto db = app().getDbClient("para");
+    // Правило код-ревью (OwnershipGuard.h): path-id ЛИЧНОГО объекта → guard
+    // ДО любой отдачи данных (шаг 8 автотеста 02 §9.3: чужая бронь по
+    // подставленному адресу → 403; 02 §6.3: NotFound/Forbidden различаются).
+    // cb внешней лямбды — копия (стреляет один раз), Own-ветка move'ит её
+    // дальше — как в GradesCtrl::getGrade.
+    OwnershipGuard::check(
+        db, OwnershipGuard::Table::RoomBookings, session.userId, bookingId,
+        [db, bookingId, cb](OwnershipGuard::Verdict v) mutable {
+            if (sendVerdict(cb, v))
+                return;
+            RoomsService::cancelById(
+                db, bookingId,
+                [cb = std::move(cb)](RoomsService::CancelStatus s) mutable {
+                    switch (s)
+                    {
+                        case RoomsService::CancelStatus::Canceled:
+                        {
+                            auto resp = HttpResponse::newHttpResponse();
+                            resp->setStatusCode(k204NoContent);
+                            cb(std::move(resp));
+                            return;
+                        }
+                        case RoomsService::CancelStatus::NotActive:
+                            // Повторная отмена / блокировка — статус не
+                            // booked (в духе invalid_status_transition Э5).
+                            cb(api::errorResponse(
+                                "invalid_status_transition",
+                                "Отменить можно только активную бронь",
+                                k409Conflict));
+                            return;
+                        case RoomsService::CancelStatus::NotFound:
+                            cb(api::errorResponse("not_found",
+                                                  "Запись не найдена",
+                                                  k404NotFound));
+                            return;
+                        case RoomsService::CancelStatus::Error:
+                            cb(api::errorResponse(
+                                "internal", "Внутренняя ошибка сервера",
+                                k500InternalServerError));
+                            return;
+                    }
+                });
         });
 }

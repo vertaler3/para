@@ -1,5 +1,6 @@
 #include "services/RoomsService.h"
 
+#include <cctype>
 #include <cstdio>
 #include <ctime>
 #include <string>
@@ -183,8 +184,11 @@ void RoomsService::slots(DbClientPtr db,
                    "WHERE room_id = $1 AND status = 'booked' AND starts_at "
                    "< $2 AND ends_at > $3 ORDER BY starts_at"
                 << roomId << toIso << fromIso >>
-                [room = std::move(room), date, userId, cb = std::move(cb)](
-                    const drogon::orm::Result& rows) mutable {
+                // Колбэки-ветки копируют cb (стреляет ровно одна): move в
+                // success-ветке оставил бы error-ветке пустой std::function
+                // → bad_function_call на error-пути (урок Э2 шаг 1).
+                [room = std::move(room), date, userId, cb](
+                    const drogon::orm::Result& rows) {
                     // Строки дня → интервалы: слот занят, если есть
                     // пересечение (row.starts_at < slotEnd && row.ends_at >
                     // slotStart) — точное перекрытие, не совпадение начала;
@@ -241,6 +245,242 @@ void RoomsService::slots(DbClientPtr db,
                                    Json::Value()});  // fail-closed → 500
                 };
         });
+}
+
+// --- Брони (Э5а шаг 2) -----------------------------------------------------
+
+namespace {
+
+// Строгое «YYYY-MM-DDTHH:MM:SSZ» (формат фикстур и SessionService::utcNow).
+// Формат обязан быть единым: все сравнения меток в этом сервисе (пересечение,
+// «тот же слот», upcoming) — лексикографические по тексту; вход валидируется
+// строго, чтобы сравнение не соврало (2026-11-13T10:00 vs 2026-11-13 10:00).
+bool isIsoZ(const std::string& s)
+{
+    if (s.size() != 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' ||
+        s[13] != ':' || s[16] != ':' || s[19] != 'Z')
+        return false;
+    const auto digits = [&s](std::size_t i) {
+        return std::isdigit(static_cast<unsigned char>(s[i])) != 0;
+    };
+    for (std::size_t i = 0; i < 4; ++i)
+        if (!digits(i))
+            return false;
+    for (const std::size_t i : {5u, 8u, 11u, 14u, 17u})
+        if (!digits(i) || !digits(i + 1))
+            return false;
+    const int hour = std::stoi(s.substr(11, 2));
+    const int minute = std::stoi(s.substr(14, 2));
+    const int second = std::stoi(s.substr(17, 2));
+    if (hour > 23 || minute > 59 || second > 59)
+        return false;
+    return RoomsService::validDate(s.substr(0, 10));  // календарность даты
+}
+
+}  // namespace
+
+void RoomsService::create(DbClientPtr db,
+                          int64_t roomId,
+                          int64_t userId,
+                          const std::string& startsAt,
+                          const std::string& endsAt,
+                          std::function<void(CreateResult)> cb)
+{
+    if (!isIsoZ(startsAt) || !isIsoZ(endsAt) || endsAt <= startsAt)
+    {
+        cb(CreateResult{CreateStatus::InvalidBody, Json::Value()});
+        return;
+    }
+    roomById(
+        db,
+        roomId,
+        [db, roomId, userId, startsAt, endsAt, cb](  // копия: см. урок ниже
+            Lookup lookup, Json::Value) {
+            if (lookup == Lookup::Error)
+            {
+                cb(CreateResult{CreateStatus::Error, Json::Value()});
+                return;
+            }
+            if (lookup == Lookup::NotFound)
+            {
+                cb(CreateResult{CreateStatus::NotFound, Json::Value()});
+                return;
+            }
+            // Серверная проверка пересечений — только активные брони
+            // (status='booked', idx_bookings_active, см. шапку slots);
+            // параметры в тексте по порядку $1→$3 (урок Э5 шаг 2).
+            *db << "SELECT starts_at FROM room_bookings WHERE room_id = $1 "
+                   "AND status = 'booked' AND starts_at < $2 AND ends_at > $3"
+                << roomId << endsAt << startsAt >>
+                // Урок Э2 шаг 1 (двойной move в цепочке >>): каждая ветка
+                // копирует cb — move в success-ветке оставил бы error-ветке
+                // пустой std::function → bad_function_call на error-пути
+                // (поймано тестом «исключение БД на INSERT» этого шага).
+                [db, roomId, userId, startsAt, endsAt, cb](
+                    const drogon::orm::Result& rows) {
+                    // «Тот же слот» — пересекающаяся бронь с тем же starts_at
+                    // (уникальный ключ idx_bookings_active): двойная бронь —
+                    // 400 (гайд BE §8). Частичное перекрытие — 409 «только
+                    // что заняли» (случай FE-сетки, 03 §4.9.5).
+                    for (const auto& row : rows)
+                    {
+                        if (row["starts_at"].as<std::string>() == startsAt)
+                        {
+                            cb(CreateResult{CreateStatus::SlotTaken,
+                                            Json::Value()});
+                            return;
+                        }
+                    }
+                    if (rows.size() > 0)
+                    {
+                        cb(CreateResult{CreateStatus::Conflict, Json::Value()});
+                        return;
+                    }
+                    // INSERT: статус — литерал CHECK 0005; порядок $1→$4 =
+                    // порядку биндинга. Исключение БД здесь — нарушение
+                    // ограничения в гонке (UNIQUE idx_bookings_active:
+                    // серверная проверка обеих параллельных POST прошла до
+                    // INSERT'ов; прочие предусловия проверены выше) —
+                    // маппится в SlotTaken/400, НЕ в 500 (постановка шага 2).
+                    *db << "INSERT INTO room_bookings (room_id, user_id, "
+                           "starts_at, ends_at, status) VALUES "
+                           "($1, $2, $3, $4, 'booked')"
+                        << roomId << userId << startsAt << endsAt >>
+                        [db, roomId, startsAt, endsAt, cb](
+                            const drogon::orm::Result&) {
+                            // id вставленной строки: активная бронь
+                            // (room_id, starts_at) единственна по
+                            // idx_bookings_active — детерминированный
+                            // SELECT по ключу вместо last_insert_rowid
+                            // (пул соединений).
+                            *db << "SELECT id FROM room_bookings WHERE "
+                                   "room_id = $1 AND starts_at = $2 AND "
+                                   "status = 'booked'"
+                                << roomId << startsAt >>
+                                [roomId, startsAt, endsAt, cb](
+                                    const drogon::orm::Result& rows) {
+                                    Json::Value body(Json::objectValue);
+                                    if (!rows.empty())
+                                        body["id"] =
+                                            rows[0]["id"].as<int64_t>();
+                                    body["room_id"] = roomId;
+                                    body["starts_at"] = startsAt;
+                                    body["ends_at"] = endsAt;
+                                    body["status"] = "booked";
+                                    cb(CreateResult{CreateStatus::Created,
+                                                    std::move(body)});
+                                } >>
+                                [cb](const DrogonDbException& e) {
+                                    LOG_ERROR << "RoomsService::create(select "
+                                                 "id): "
+                                              << e.base().what();
+                                    cb(CreateResult{CreateStatus::Error,
+                                                    Json::Value()});
+                                };
+                        } >>
+                        [cb](const DrogonDbException& e) {
+                            LOG_ERROR << "RoomsService::create(insert): "
+                                      << e.base().what();
+                            cb(CreateResult{CreateStatus::SlotTaken,
+                                            Json::Value()});  // гонка → 400
+                        };
+                } >>
+                [cb](const DrogonDbException& e) {
+                    LOG_ERROR << "RoomsService::create(overlap check): "
+                              << e.base().what();
+                    cb(CreateResult{CreateStatus::Error, Json::Value()});
+                };
+        });
+}
+
+void RoomsService::myBookings(DbClientPtr db,
+                              int64_t userId,
+                              bool upcoming,
+                              const std::string& nowIso,
+                              ResultCb cb)
+{
+    // idx_bookings_user (user_id, starts_at): equality + ORDER BY (02 §4.2
+    // «мои брони»); JOIN rooms — имя/корпус для строки списка. upcoming —
+    // флаг-константа ветвления SQL (фильтры-or-empty — паттерн
+    // ApplicationsService::list), значения строк в SQL не подставляются.
+    const std::string kBase =
+        "SELECT b.id, b.room_id, b.starts_at, b.ends_at, b.status, "
+        "r.name AS room, r.building FROM room_bookings b "
+        "JOIN rooms r ON r.id = b.room_id "
+        "WHERE b.user_id = $1 AND b.status = 'booked'";
+    const std::string kUpcomingSql =
+        kBase + " AND b.ends_at >= $2 ORDER BY b.starts_at";
+    const std::string kAllSql = kBase + " ORDER BY b.starts_at";
+
+    auto onRows = [cb](const drogon::orm::Result& rows) {
+        Json::Value arr(Json::arrayValue);
+        for (const auto& r : rows)
+        {
+            Json::Value b(Json::objectValue);
+            b["id"] = r["id"].as<int64_t>();
+            b["room_id"] = r["room_id"].as<int64_t>();
+            b["room"] = r["room"].as<std::string>();
+            b["building"] = r["building"].as<std::string>();
+            b["starts_at"] = r["starts_at"].as<std::string>();
+            b["ends_at"] = r["ends_at"].as<std::string>();
+            b["status"] = r["status"].as<std::string>();
+            arr.append(std::move(b));
+        }
+        Json::Value body;
+        body["bookings"] = std::move(arr);
+        cb(Result{true, std::move(body)});
+    };
+    auto onError = [cb, userId](const DrogonDbException& e) {
+        LOG_ERROR << "RoomsService::myBookings(" << userId
+                  << "): " << e.base().what();
+        cb(Result{false, Json::Value()});  // fail-closed → 500
+    };
+
+    if (upcoming)
+        *db << kUpcomingSql << userId << nowIso >> std::move(onRows) >>
+            std::move(onError);
+    else
+        *db << kAllSql << userId >> std::move(onRows) >> std::move(onError);
+}
+
+void RoomsService::cancelById(DbClientPtr db,
+                              int64_t bookingId,
+                              std::function<void(CancelStatus)> cb)
+{
+    // Условный UPDATE booked→cancelled: 1 строка — отмена; 0 строк — не
+    // активная (уже cancelled/blocked) либо строки нет (гонка после Own —
+    // различаются SELECT'ом ниже). Владение проверил guard контроллера —
+    // здесь по PK без user_id-условия (постановка Э4 шаг 2).
+    *db << "UPDATE room_bookings SET status = 'cancelled' "
+           "WHERE id = $1 AND status = 'booked'"
+        << bookingId >>
+        // Ветки копируют cb (стреляет одна) — урок Э2 шаг 1: move в
+        // success-ветке оставил бы error-ветке пустой std::function.
+        [db, bookingId, cb](const drogon::orm::Result& result) {
+            if (result.affectedRows() > 0)
+            {
+                cb(CancelStatus::Canceled);  // → 204
+                return;
+            }
+            *db << "SELECT status FROM room_bookings WHERE id = $1"
+                << bookingId >>
+                [cb](const drogon::orm::Result& rows) {
+                    if (rows.empty())
+                        cb(CancelStatus::NotFound);  // → 404 (не маскируется)
+                    else
+                        cb(CancelStatus::NotActive);  // → 409 (не booked)
+                } >>
+                [cb](const DrogonDbException& e) {
+                    LOG_ERROR << "RoomsService::cancelById(select): "
+                              << e.base().what();
+                    cb(CancelStatus::Error);
+                };
+        } >>
+        [cb](const DrogonDbException& e) {
+            LOG_ERROR << "RoomsService::cancelById(update): "
+                      << e.base().what();
+            cb(CancelStatus::Error);  // fail-closed → 500
+        };
 }
 
 }  // namespace para

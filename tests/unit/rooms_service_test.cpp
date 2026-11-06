@@ -1,4 +1,4 @@
-// Юнит-тесты RoomsService (Э5а шаг 1; 02 §5.2, миграция 0005):
+// Юнит-тесты RoomsService (Э5а шаги 1–2; 02 §5.2, миграция 0005):
 //  - catalog — каталог аудиторий (поля 0005, порядок по id), пустая таблица —
 //    200 {"rooms":[]}, а не ошибка;
 //  - slots — сетка дня по 60 минут (08:00–22:00 UTC, 14 слотов) с тремя
@@ -9,16 +9,25 @@
 //    (IN ('booked','blocked') даёт SCAN — проверено EXPLAIN на этом шаге);
 //    отображение блокировок — шаг 3 Э5а; состояние зависит от user_id
 //    сессии (изоляция «моя/чужая»);
-//  - дата 2026-11-13 — вся сетка свободна (гейт Э5а бронирует её в шагах
-//    2–3: фикстуры её сознательно не касаются);
+//  - create (шаг 2) — бронь интервала: Created (201), «двойная бронь» того
+//    же слота → SlotTaken (400-класс), частичное пересечение → Conflict
+//    (409-класс), касания границ полуинтервалов НЕ пересекаются; исключение
+//    БД на INSERT (гонка UNIQUE / триггер в тесте) → SlotTaken (400), не
+//    Error/500; InvalidBody (строгий ISO «…Z», ends_at > starts_at);
+//  - myBookings (шаг 2) — только свои активные (booked), JOIN rooms,
+//    фильтр upcoming (ends_at >= nowIso, now передаётся явно);
+//  - cancelById (шаг 2) — своя booked → Canceled (204-класс), повторная →
+//    NotActive (409-класс), несуществующая → NotFound; guard-цепочка DELETE:
+//    чужая → Forbidden (403) — OwnershipGuard::check(Table::RoomBookings);
 //  - несуществующая комната → NotFound (404 контроллером), невалидная дата
 //    → Error (fail-closed, контроллер до сервиса отвечает 400);
 //  - ошибка БД — fail-closed (Error → 500 контроллером), не пустая сетка.
 // Данные копируют sql/fixtures.sql Э5а (3 аудитории; брони 1–2 демо-недели:
 // Олег room 1 11:00, Аня room 2 14:00 06.11) + помеченные дополнения теста:
-// бронь 3 (cancelled, не занимает) и блокировка 4 (blocked, dean — занимает).
-// Временная SQLite через настоящий DbClient — как в тестах Э3/Э4; дата
-// передаётся в сервис явно ("2026-11-06") — wall-clock в тестах не участвует.
+// бронь 3 (cancelled, не занимает) и блокировка 4 (blocked, dean —
+// занимает). Новые брони шага 2 — на 2026-11-13 (гейт-дата: фикстуры её не
+// касаются). Временная SQLite через настоящий DbClient — как в тестах Э3/Э4;
+// даты/now передаются в сервис явно — wall-clock в тестах не участвует.
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -29,9 +38,11 @@
 
 #include <doctest.hpp>
 
+#include "services/OwnershipGuard.h"
 #include "services/RoomsService.h"
 
 namespace fs = std::filesystem;
+using para::OwnershipGuard;
 using para::RoomsService;
 
 namespace {
@@ -204,6 +215,73 @@ std::size_t countState(const Json::Value& body, const std::string& state)
     return n;
 }
 
+// --- Шаг 2: брони ---------------------------------------------------------
+RoomsService::CreateResult createOf(const drogon::orm::DbClientPtr& db,
+                                    int64_t roomId,
+                                    int64_t userId,
+                                    const std::string& startsAt,
+                                    const std::string& endsAt)
+{
+    std::promise<RoomsService::CreateResult> p;
+    auto f = p.get_future();
+    RoomsService::create(db,
+                         roomId,
+                         userId,
+                         startsAt,
+                         endsAt,
+                         [&p](RoomsService::CreateResult r) {
+                             p.set_value(std::move(r));
+                         });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+RoomsService::Result myBookingsOf(const drogon::orm::DbClientPtr& db,
+                                  int64_t userId,
+                                  bool upcoming,
+                                  const std::string& nowIso)
+{
+    std::promise<RoomsService::Result> p;
+    auto f = p.get_future();
+    RoomsService::myBookings(db,
+                             userId,
+                             upcoming,
+                             nowIso,
+                             [&p](RoomsService::Result r) {
+                                 p.set_value(std::move(r));
+                             });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+RoomsService::CancelStatus cancelOf(const drogon::orm::DbClientPtr& db,
+                                    int64_t bookingId)
+{
+    std::promise<RoomsService::CancelStatus> p;
+    auto f = p.get_future();
+    RoomsService::cancelById(db, bookingId, [&p](RoomsService::CancelStatus s) {
+        p.set_value(s);
+    });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+OwnershipGuard::Verdict guardOf(const drogon::orm::DbClientPtr& db,
+                                int64_t sessionUserId,
+                                int64_t bookingId)
+{
+    // Ровно тот вызов, что делает RoomsCtrl::cancelBooking до любых данных.
+    std::promise<OwnershipGuard::Verdict> p;
+    auto f = p.get_future();
+    OwnershipGuard::check(db,
+                          OwnershipGuard::Table::RoomBookings,
+                          sessionUserId,
+                          bookingId,
+                          [&p](OwnershipGuard::Verdict v) { p.set_value(v); });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
 }  // namespace
 
 TEST_CASE("RoomsService: validDate — формат и календарность")
@@ -345,4 +423,229 @@ TEST_CASE("RoomsService: ошибка БД — fail-closed (Error → 500)")
     CHECK(slotsOf(f.db, 1, 1, "2026-11-06").status ==
           RoomsService::SlotsStatus::Error);
     CHECK(lookupOf(f.db, 1) == RoomsService::Lookup::Error);
+}
+
+TEST_CASE("RoomsService: create — бронь слота, сетка и «мои брони» обновляются")
+{
+    Fixture f;
+    // Бронь гейт-даты 13.11, слот 10:00–11:00 UTC (Аня).
+    const auto r = createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                            "2026-11-13T11:00:00Z");
+    REQUIRE(r.status == RoomsService::CreateStatus::Created);
+    CHECK(r.body["id"].as<int64_t>() > 0);
+    CHECK(r.body["room_id"].as<int64_t>() == 1);
+    CHECK(r.body["starts_at"].asString() == "2026-11-13T10:00:00Z");
+    CHECK(r.body["ends_at"].asString() == "2026-11-13T11:00:00Z");
+    CHECK(r.body["status"].asString() == "booked");
+
+    // Сетка того дня показывает бронь: для Ани — mine, для Олега — booked.
+    const auto gridAnya = slotsOf(f.db, 1, 1, "2026-11-13");
+    REQUIRE(gridAnya.status == RoomsService::SlotsStatus::Ok);
+    CHECK(gridAnya.body["slots"][2]["state"].asString() == "mine");   // 10:00
+    CHECK(countState(gridAnya.body, "free") == 13);
+    const auto gridOleg = slotsOf(f.db, 1, 2, "2026-11-13");
+    REQUIRE(gridOleg.status == RoomsService::SlotsStatus::Ok);
+    CHECK(gridOleg.body["slots"][2]["state"].asString() == "booked");
+
+    // «Мои брони»: JOIN rooms (имя/корпус); у Ани кроме новой — активная
+    // фикстурная бронь id 2 (06.11 14:00, room 2) → всего 2.
+    const auto mine = myBookingsOf(f.db, 1, false, "2026-11-13T09:00:00Z");
+    REQUIRE(mine.ok);
+    REQUIRE(mine.body["bookings"].size() == 2);
+    bool found13 = false;
+    for (const auto& b : mine.body["bookings"])
+    {
+        if (b["starts_at"].asString() == "2026-11-13T10:00:00Z")
+        {
+            found13 = true;
+            CHECK(b["room"].asString() == "1207");
+            CHECK(b["building"].asString() == "Корпус А");
+            CHECK(b["status"].asString() == "booked");
+        }
+    }
+    CHECK(found13);
+    // Изоляция: у Олега только его активная фикстурная бронь id 1
+    // (06.11 11:00); брони Ани не видны.
+    const auto oleg = myBookingsOf(f.db, 2, false, "2026-11-13T09:00:00Z");
+    REQUIRE(oleg.ok);
+    REQUIRE(oleg.body["bookings"].size() == 1);
+    CHECK(oleg.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T11:00:00Z");
+}
+
+TEST_CASE("RoomsService: create — дубль слота 400-класс, пересечение 409-класс")
+{
+    Fixture f;
+    REQUIRE(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                     "2026-11-13T11:00:00Z").status ==
+            RoomsService::CreateStatus::Created);
+
+    // Тот же слот другим студентом → SlotTaken (400 «двойная бронь»,
+    // гайд BE §8 «повторная бронь того же слота другим клиентом → 400»).
+    CHECK(createOf(f.db, 1, 2, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::SlotTaken);
+    // Тот же слот тем же студентом — тоже двойная бронь.
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::SlotTaken);
+    // Другая комната — тот же слот свободен (пересечение по комнате).
+    CHECK(createOf(f.db, 2, 2, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::Created);
+
+    // Частичное перекрытие (10:30–11:30 против 10:00–11:00) → Conflict
+    // (409 «конфликт, только что заняли», случай FE-сетки 03 §4.9.5).
+    CHECK(createOf(f.db, 1, 2, "2026-11-13T10:30:00Z",
+                   "2026-11-13T11:30:00Z").status ==
+          RoomsService::CreateStatus::Conflict);
+    // Пересечение И «тот же starts_at» — SlotTaken (это и ловит UNIQUE).
+    CHECK(createOf(f.db, 1, 2, "2026-11-13T10:00:00Z",
+                   "2026-11-13T12:00:00Z").status ==
+          RoomsService::CreateStatus::SlotTaken);
+
+    // Касания границ полуинтервалов НЕ пересекаются: [11:00,12:00) и
+    // [09:00,10:00) против [10:00,11:00) — обе бронируются.
+    CHECK(createOf(f.db, 1, 2, "2026-11-13T11:00:00Z",
+                   "2026-11-13T12:00:00Z").status ==
+          RoomsService::CreateStatus::Created);
+    CHECK(createOf(f.db, 1, 2, "2026-11-13T09:00:00Z",
+                   "2026-11-13T10:00:00Z").status ==
+          RoomsService::CreateStatus::Created);
+
+    // В соседней комнате пересечение 10:30–11:30 не конфликтует ни с чем.
+    CHECK(createOf(f.db, 3, 2, "2026-11-13T10:30:00Z",
+                   "2026-11-13T11:30:00Z").status ==
+          RoomsService::CreateStatus::Created);
+}
+
+TEST_CASE("RoomsService: create — InvalidBody, NotFound, fail-closed")
+{
+    Fixture f;
+    // Не ISO «…Z» / интервал не валиден → InvalidBody (400 bad_request).
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::InvalidBody);  // нет Z
+    CHECK(createOf(f.db, 1, 1, "2026-11-13 10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::InvalidBody);  // пробел вместо T
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T25:00:00Z",
+                   "2026-11-13T26:00:00Z").status ==
+          RoomsService::CreateStatus::InvalidBody);  // часы > 23
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T10:00:00Z").status ==
+          RoomsService::CreateStatus::InvalidBody);  // нулевой интервал
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T11:00:00Z",
+                   "2026-11-13T10:00:00Z").status ==
+          RoomsService::CreateStatus::InvalidBody);  // конц раньше начала
+    CHECK(createOf(f.db, 1, 1, "abc", "def").status ==
+          RoomsService::CreateStatus::InvalidBody);
+
+    // Комнаты нет → NotFound (404 контроллером).
+    CHECK(createOf(f.db, 999999, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::NotFound);
+}
+
+TEST_CASE("RoomsService: create — исключение БД на INSERT → SlotTaken (400)")
+{
+    // Ветка гонки UNIQUE (серверная проверка обеих параллельных POST прошла
+    // до INSERT'ов): в тесте воспроизводится триггером ABORT на INSERT —
+    // серверная проверка молчит (броней нет), INSERT падает — сервис
+    // обязан отдать SlotTaken (400 «двойная бронь»), НЕ Error/500
+    // (постановка шага 2: «поймай исключение БД и отдай 400, а не 500»).
+    Fixture f;
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open_v2(f.dbPath.c_str(),
+                            &raw,
+                            SQLITE_OPEN_READWRITE,
+                            nullptr) == SQLITE_OK);
+    exec(raw,
+         "CREATE TRIGGER deny_booking BEFORE INSERT ON room_bookings "
+         "BEGIN SELECT RAISE(ABORT, 'test: deny'); END;");
+    sqlite3_close(raw);
+
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::SlotTaken);
+}
+
+TEST_CASE("RoomsService: myBookings — booked only и фильтр upcoming")
+{
+    Fixture f;
+    REQUIRE(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                     "2026-11-13T11:00:00Z").status ==
+            RoomsService::CreateStatus::Created);   // id 5, предстоящая
+    REQUIRE(createOf(f.db, 2, 1, "2026-11-13T08:00:00Z",
+                     "2026-11-13T09:00:00Z").status ==
+            RoomsService::CreateStatus::Created);   // id 6, уже прошла
+    // Отменённая (fixtures id 3, user 3) в «моих брони» не возвращается.
+    const auto markAll = myBookingsOf(f.db, 3, false, "2026-11-13T09:30:00Z");
+    REQUIRE(markAll.ok);
+    CHECK(markAll.body["bookings"].size() == 0);
+
+    // У Ани: фикстурная id 2 (06.11 14:00) + созданные id 6 (13.11 08:00)
+    // и id 5 (13.11 10:00) — три активных, по starts_at.
+    const auto all = myBookingsOf(f.db, 1, false, "2026-11-13T09:30:00Z");
+    REQUIRE(all.ok);
+    REQUIRE(all.body["bookings"].size() == 3);
+    CHECK(all.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T14:00:00Z");
+    CHECK(all.body["bookings"][1]["starts_at"].asString() ==
+          "2026-11-13T08:00:00Z");  // ORDER BY starts_at
+    CHECK(all.body["bookings"][2]["starts_at"].asString() ==
+          "2026-11-13T10:00:00Z");
+
+    // upcoming (?upcoming=1): только предстоящие (ends_at >= now).
+    // Фикстурная (ends 06.11T15:00) и прошедшая 08:00–09:00 — вне.
+    const auto up = myBookingsOf(f.db, 1, true, "2026-11-13T09:30:00Z");
+    REQUIRE(up.ok);
+    REQUIRE(up.body["bookings"].size() == 1);
+    CHECK(up.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-13T10:00:00Z");
+
+    // Отмена убирает бронь из списка (активные — только booked).
+    REQUIRE(cancelOf(f.db, 5) == RoomsService::CancelStatus::Canceled);
+    const auto after = myBookingsOf(f.db, 1, false, "2026-11-13T09:30:00Z");
+    REQUIRE(after.ok);
+    REQUIRE(after.body["bookings"].size() == 2);
+    CHECK(after.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T14:00:00Z");
+    CHECK(after.body["bookings"][1]["starts_at"].asString() ==
+          "2026-11-13T08:00:00Z");
+}
+
+TEST_CASE("RoomsService: cancelById и guard-цепочка DELETE (своя/чужая)")
+{
+    Fixture f;
+    // Своя активная брони фикстур: id 1 — Олег (room 1, 06.11 11:00),
+    // id 2 — Аня (room 2, 06.11 14:00).
+    // Чужая → Forbidden через OwnershipGuard::check(Table::RoomBookings)
+    // (правило код-ревью; шаг 8 автотеста 02 §9.3).
+    CHECK(guardOf(f.db, 1, 1) == OwnershipGuard::Verdict::Forbidden);
+    CHECK(guardOf(f.db, 2, 2) == OwnershipGuard::Verdict::Forbidden);
+    CHECK(guardOf(f.db, 2, 1) == OwnershipGuard::Verdict::Own);
+    CHECK(guardOf(f.db, 1, 999999) == OwnershipGuard::Verdict::NotFound);
+
+    // Своя → Canceled; сетка освобождается (cancelled слот не занимает).
+    REQUIRE(cancelOf(f.db, 1) == RoomsService::CancelStatus::Canceled);
+    const auto grid = slotsOf(f.db, 1, 2, "2026-11-06");
+    REQUIRE(grid.status == RoomsService::SlotsStatus::Ok);
+    CHECK(grid.body["slots"][3]["state"].asString() == "free");  // 11:00
+    // Повторная отмена → NotActive (409, статус не booked).
+    CHECK(cancelOf(f.db, 1) == RoomsService::CancelStatus::NotActive);
+    // Несуществующая → NotFound (после Own — гонка; не маскируется).
+    CHECK(cancelOf(f.db, 999999) == RoomsService::CancelStatus::NotFound);
+    // Отмена заблокированного слота (id 4, dean, blocked) — не booked.
+    CHECK(cancelOf(f.db, 4) == RoomsService::CancelStatus::NotActive);
+}
+
+TEST_CASE("RoomsService: брони — ошибка БД fail-closed (Error → 500)")
+{
+    Fixture f(/*withRooms=*/false, /*withTables=*/false);
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T11:00:00Z").status ==
+          RoomsService::CreateStatus::Error);
+    CHECK_FALSE(myBookingsOf(f.db, 1, false, "2026-11-13T09:00:00Z").ok);
+    CHECK(cancelOf(f.db, 1) == RoomsService::CancelStatus::Error);
 }

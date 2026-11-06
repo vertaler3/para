@@ -177,6 +177,7 @@ add_test(NAME para-tests COMMAND para-tests)
 add_executable(security_tests
                tests/security_tests.cpp
                src/services/GradesService.cpp
+               src/services/RoomsService.cpp
                src/services/OwnershipGuard.cpp)
 
 target_include_directories(security_tests

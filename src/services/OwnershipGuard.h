@@ -45,9 +45,11 @@ class OwnershipGuard
     // (switch), конкатенация строк в SQL запрещена (AGENTS §5.5, 02 §6.4).
     enum class Table
     {
-        Applications,   // applications/{id}   (миграция 0003)
-        Grades,         // grades/{id}         (миграция 0002)
-        Notifications,  // notifications/{id}  (миграция 0004)
+        Applications,   // applications/{id}     (миграция 0003)
+        Grades,         // grades/{id}           (миграция 0002)
+        Notifications,  // notifications/{id}    (миграция 0004)
+        RoomBookings,   // room-bookings/{id}    (миграция 0005 — Э5а шаг 2:
+                        // DELETE чужой брони → 403, AGENTS §5.3 «…бронь»)
     };
 
     // Единственная функция guard'а (02 §6.3: «одна функция, проверяющая
