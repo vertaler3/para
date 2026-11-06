@@ -79,6 +79,7 @@ add_executable(para
                src/controllers/StaffCtrl.cpp
                src/controllers/PdfCtrl.cpp
                src/controllers/IcsCtrl.cpp
+               src/controllers/RoomsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -93,6 +94,7 @@ add_executable(para
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/services/UserService.cpp
+               src/services/RoomsService.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
@@ -131,6 +133,7 @@ add_executable(para-tests
                tests/unit/app_workflow_test.cpp
                tests/unit/applications_service_test.cpp
                tests/unit/pdf_builder_test.cpp
+               tests/unit/rooms_service_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -145,6 +148,7 @@ add_executable(para-tests
                src/services/PdfBuilder.cpp
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
+               src/services/RoomsService.cpp
                src/utils/LoginLimiter.cpp)
 
 target_include_directories(para-tests
