@@ -516,6 +516,20 @@ TEST_CASE("RoomsService: slots — другая дата и гейт-дата 20
         CHECK(countState(r.body, "booked") == 0);
         CHECK(countState(r.body, "mine") == 0);
     }
+
+    // Критерий приёмочного гейта (правки по гейту, раунд 2): сетка ПУСТОГО
+    // дня — ПОЛНАЯ (не sparse-список броней), в сериализованном теле маркер
+    // времени слота присутствует по разу на каждый слот (≥14) — независимо
+    // от наличия броней в этот день.
+    const auto gate = slotsOf(f.db, 1, 1, "2026-11-13");
+    REQUIRE(gate.status == RoomsService::SlotsStatus::Ok);
+    const std::string raw =
+        Json::writeString(Json::StreamWriterBuilder(), gate.body);
+    std::size_t markerCount = 0;
+    for (std::size_t pos = raw.find("starts_at"); pos != std::string::npos;
+         pos = raw.find("starts_at", pos + 1))
+        ++markerCount;
+    CHECK(markerCount >= 14);
 }
 
 TEST_CASE("RoomsService: slots — несуществующая комната и невалидная дата")
