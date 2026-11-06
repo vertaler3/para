@@ -61,6 +61,7 @@
     "custom_config": {
         "db_path": "/opt/para/data/para.db",
         "migrations_dir": "sql/migrations",
-        "fixtures_path": "sql/fixtures.sql"
+        "fixtures_path": "sql/fixtures.sql",
+        "font_path": "/opt/para/fonts/DejaVuSans.ttf"
     }
 }

@@ -13,6 +13,18 @@ WORKDIR /src
 COPY . .
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ninja-build ccache libargon2-dev \
+      git zlib1g-dev fonts-dejavu-core \
+ # libharu v2.4.6 из исходников (02 §8.1; лицензия zlib/libPNG, pin — Р-12):
+ # build-стадия видит пин коммита тега; файл шрифта — в рантайм-слой ниже
+ && git clone -q --depth 1 --branch v2.4.6 \
+      https://github.com/libharu/libharu.git /tmp/libharu \
+ && test "$(git -C /tmp/libharu rev-parse HEAD)" \
+      = "3467749fd1c0ab6ca6ed424d053b1ea53c1bf67c" \
+ || { echo "libharu v2.4.6 pin mismatch — остановлено (Р-12)"; exit 1; } \
+ && cmake -S /tmp/libharu -B /tmp/libharu/build -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=OFF -DLIBHPDF_EXAMPLES=OFF \
+ && cmake --build /tmp/libharu/build -j"$(nproc)" \
+ && cmake --install /tmp/libharu/build \
  && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)"
 
@@ -34,6 +46,10 @@ COPY --from=build /src/build/para      /opt/para/para
 COPY --from=build /src/views           /opt/para/views
 COPY --from=build /src/static          /opt/para/static
 COPY --from=build /src/sql             /opt/para/sql
+# TTF с кириллицей для PDF-справок (Э5, Р-12): из apt-пакета fonts-dejavu-core
+# build-стадии; лицензия bitstream-vera (пермиссивная) — Р-12.
+COPY --from=build /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+     /opt/para/fonts/DejaVuSans.ttf
 COPY config.json /etc/app/config.json
 RUN mkdir -p /opt/para/data && chown -R 10001:10001 /opt/para/data
 WORKDIR /opt/para

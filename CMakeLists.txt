@@ -33,6 +33,24 @@ endif()
 find_path(ARGON2_INCLUDE_DIR argon2.h REQUIRED)
 find_library(ARGON2_LIBRARY NAMES argon2 REQUIRED)
 
+# libharu (Э5 шаг 4, docs/decisions.md Р-12): PDF-справки со штампом «ДЕМО».
+# ЛИЦЕНЗИЯ zlib/libPNG (пермиссивная, без копилефта) — проверена по LICENSE
+# тега v2.4.6. Собирается ИЗ ИСХОДНИКОВ на build-слое Dockerfile
+# (02 §8.1: пин коммита тега v2.4.6; пакета libhpdf-dev в noble нет).
+# Локально/в контейнере — собранный префикс: -DHPDF_ROOT=/path/to/prefix
+# (include/ + lib/libhpdf.a); в системе — /usr/local после cmake --install.
+# Статическая библиотека тянет zlib (HPDF_USE... сжатие потоков).
+set(HPDF_ROOT "" CACHE PATH "libharu install prefix (include/ + lib/)")
+find_path(HPDF_INCLUDE_DIR hpdf.h HINTS ${HPDF_ROOT}/include /usr/local/include)
+find_library(HPDF_LIBRARY NAMES hpdf HINTS ${HPDF_ROOT}/lib /usr/local/lib)
+find_package(ZLIB REQUIRED)
+if(NOT HPDF_INCLUDE_DIR OR NOT HPDF_LIBRARY)
+    message(FATAL_ERROR
+            "libharu не найдена: собери её на build-слое (Dockerfile Э5) или "
+            "передай -DHPDF_ROOT=<prefix с include/hpdf.h и lib/libhpdf.a>")
+endif()
+message(STATUS "para: libharu — ${HPDF_LIBRARY} (${HPDF_INCLUDE_DIR})")
+
 # ##############################################################################
 # Требование: рантайм-бинарник без libdrogon.so/libtrantor.so (docs/decisions.md Р-1).
 # Факт (проверено 05.11.2026 в образе drogonframework/drogon:v1.9.14):
@@ -59,6 +77,7 @@ add_executable(para
                src/controllers/GradesCtrl.cpp
                src/controllers/ApplicationsCtrl.cpp
                src/controllers/StaffCtrl.cpp
+               src/controllers/PdfCtrl.cpp
                src/controllers/IcsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -70,6 +89,7 @@ add_executable(para
                src/services/GradesService.cpp
                src/services/AppWorkflow.cpp
                src/services/ApplicationsService.cpp
+               src/services/PdfBuilder.cpp
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/services/UserService.cpp
@@ -80,7 +100,8 @@ add_executable(para
 target_include_directories(para PRIVATE
                            ${CMAKE_CURRENT_SOURCE_DIR}/src
                            ${CMAKE_CURRENT_BINARY_DIR}/generated
-                           ${ARGON2_INCLUDE_DIR})
+                           ${ARGON2_INCLUDE_DIR}
+                           ${HPDF_INCLUDE_DIR})
 # CSP-шаблоны (views/*.csp → /login и т.д.): генерация drogon_ctl create
 # view в бинарный каталог (в репозитории только .csp-исходники).
 # drogon_create_views — функция из cmake-пакета Drogon (DrogonUtilities).
@@ -90,7 +111,9 @@ drogon_create_views(para ${CMAKE_CURRENT_SOURCE_DIR}/views
 target_link_libraries(para PRIVATE
                       ${PARA_DROGON_TARGETS}
                       ${PARA_SQLITE3_TARGET}
-                      ${ARGON2_LIBRARY})
+                      ${ARGON2_LIBRARY}
+                      ${HPDF_LIBRARY}
+                      ZLIB::ZLIB)
 
 # ##############################################################################
 # para-tests — doctest (vendored одиночный заголовок, MIT — docs/decisions.md Р-3).
@@ -107,6 +130,7 @@ add_executable(para-tests
                tests/unit/ics_service_token_test.cpp
                tests/unit/app_workflow_test.cpp
                tests/unit/applications_service_test.cpp
+               tests/unit/pdf_builder_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -118,6 +142,7 @@ add_executable(para-tests
                src/services/GradesService.cpp
                src/services/AppWorkflow.cpp
                src/services/ApplicationsService.cpp
+               src/services/PdfBuilder.cpp
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/utils/LoginLimiter.cpp)
@@ -125,11 +150,14 @@ add_executable(para-tests
 target_include_directories(para-tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                    ${CMAKE_CURRENT_SOURCE_DIR}/tests
-                                   ${ARGON2_INCLUDE_DIR})
+                                   ${ARGON2_INCLUDE_DIR}
+                                   ${HPDF_INCLUDE_DIR})
 target_link_libraries(para-tests PRIVATE
                       ${PARA_DROGON_TARGETS}
                       ${PARA_SQLITE3_TARGET}
-                      ${ARGON2_LIBRARY})
+                      ${ARGON2_LIBRARY}
+                      ${HPDF_LIBRARY}
+                      ZLIB::ZLIB)
 
 enable_testing()
 add_test(NAME para-tests COMMAND para-tests)
