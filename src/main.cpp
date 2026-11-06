@@ -2,7 +2,9 @@
 #include <string>
 
 #include "services/MigrationRunner.h"
+#include "services/NotifyDispatcher.h"
 #include "services/ReminderService.h"
+#include "services/WsRegistry.h"
 
 int main(int argc, char* argv[]) {
     //Load config file: --config <path> — его передаёт ENTRYPOINT Dockerfile
@@ -39,6 +41,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Точка интеграции WS-канала (Э6 шаг 3; 02 §3.2 поток 3): NotifyDispatcher
+    // пушит событие {type,title,body,deep_link} живым соединениям через
+    // реестр WsRegistry (WsCtrl регистрирует их по user_id сессии, удаляет
+    // по закрытию). До run() — колбэк обязан быть установлен до первого notify.
+    para::NotifyDispatcher::setPushFn(
+        [](int64_t userId, const Json::Value& payload) {
+            para::WsRegistry::send(userId, payload);
+        });
+
     //Run HTTP framework, the method will block in the internal event loop.
     //LoginFilter не регистрируется явно: HttpFilter<T> в Drogon создаётся
     //и регистрируется автоматически по имени класса ("LoginFilter") —
@@ -52,10 +63,14 @@ int main(int argc, char* argv[]) {
     // HttpAppFramework.h v1.9.14) — только тогда существует getLoop(),
     // в котором живёт runEvery. Идемпотентность тика — метки
     // reminded/sent_at в БД: перезапуск не дублирует напоминания.
+    // Клиент берётся ПО ИМЕНИ «para» (как в LoginFilter): getDbClient()
+    // без параметров ищет клиента с именем «default» и возвращает пустой
+    // указатель — сегфолт первого тика (поймано E2E шага 3, gdb под qemu
+    // недоступен — стек: getDbClient(name="default") = nullptr).
     drogon::app().registerBeginningAdvice([] {
         drogon::app().getLoop()->runEvery(60.0, [] {
             para::ReminderService::runMinuteTick(
-                drogon::app().getDbClient(), {});
+                drogon::app().getDbClient("para"), {});
         });
     });
 
