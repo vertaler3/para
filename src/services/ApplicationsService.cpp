@@ -166,8 +166,11 @@ void fetchEventById(const drogon::orm::DbClientPtr& db,
 // статуса заявки (строка исчезла → NotFound) → INSERT..VALUES события
 // (from=to=этот статус) → SELECT строки события по last_insert_rowid() →
 // commit. Транзакция закрепляет единственное соединение клиента — между
-// SELECT и INSERT другой запрос не вклинится. Колбэк стреляет ровно один
-// раз (commit-callback / error-ветки), как в AppWorkflow::apply.
+// SELECT и INSERT другой запрос не вклинится. В тело ответа добавляется
+// "application_status" — итоговый статус заявки (правки по гейту Э5
+// раунд 1: возврат/неизменность статуса читается прямо в ответе, без
+// второго GET). Колбэк стреляет ровно один раз (commit-callback /
+// error-ветки), как в AppWorkflow::apply.
 void insertPlainMessageEvent(const drogon::orm::DbClientPtr& db,
                              int64_t applicationId,
                              const std::string& text,
@@ -215,12 +218,14 @@ void insertPlainMessageEvent(const drogon::orm::DbClientPtr& db,
                 // 2. Событие from=to=этот статус (С7: текст — комментарий).
                 *tx << kInsertMessageEventSql << applicationId << status
                     << status << text << authorId >>
-                    [tx, body, fire](const drogon::orm::Result&) {
+                    [tx, body, status,
+                     fire](const drogon::orm::Result&) {
                         // 3. Строка события (id = last_insert_rowid() этого
                         //    INSERT — между ними на соединении транзакции
                         //    ничего не вклинится).
                         *tx << kSelectEventSql >>
-                            [tx, body, fire](const drogon::orm::Result& evRows) {
+                            [tx, body, status,
+                             fire](const drogon::orm::Result& evRows) {
                                 if (evRows.empty())
                                 {
                                     LOG_ERROR << "ApplicationsService: "
@@ -231,6 +236,10 @@ void insertPlainMessageEvent(const drogon::orm::DbClientPtr& db,
                                     return;
                                 }
                                 *body = eventJson(evRows[0]);
+                                // Итоговый статус заявки в ответе (правки
+                                // по гейту Э5 раунд 1) — то же поле, что
+                                // в need_info-ветке sendMessage.
+                                (*body)["application_status"] = status;
                             } >>
                             [tx, fire](const DrogonDbException& e) {
                                 LOG_ERROR << "ApplicationsService: select "
@@ -767,6 +776,9 @@ void ApplicationsService::sendMessage(drogon::orm::DbClientPtr db,
             const std::string status = rows[0]["status"].as<std::string>();
             if (status != "need_info")
             {
+                // Обычное сообщение (без смены статуса): application_status
+                // добавляется внутри insertPlainMessageEvent из фактического
+                // статуса транзакции (правки по гейту Э5 раунд 1).
                 insertPlainMessageEvent(db, applicationId, text, authorId,
                                         std::move(cb));
                 return;
@@ -781,7 +793,18 @@ void ApplicationsService::sendMessage(drogon::orm::DbClientPtr db,
                     switch (r.outcome)
                     {
                         case AppWorkflow::Outcome::Applied:
-                            fetchEventById(db, r.eventId, std::move(cb));
+                            // Возврат в «В работе» — в ответе и событием
+                            // (need_info→in_progress), и полем
+                            // application_status (гейт Э5 раунд 1).
+                            fetchEventById(
+                                db, r.eventId,
+                                [cb](ApplicationsService::MessageResult m) mutable {
+                                    if (m.status ==
+                                        ApplicationsService::Message::Ok)
+                                        m.body["application_status"] =
+                                            "in_progress";
+                                    cb(std::move(m));
+                                });
                             return;
                         case AppWorkflow::Outcome::InvalidTransition:
                             // Гонка: статус уже ушли с need_info (проверка

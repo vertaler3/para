@@ -82,12 +82,14 @@ TEST_CASE("PdfBuilder: справка — %PDF-, встроенный TTF, ма�
     CHECK(r.bytes.find("%%EOF") != std::string::npos);
     // Кириллица — встроенным TTF (/FontFile2), не стандартным шрифтом.
     CHECK(r.bytes.find("/FontFile2") != std::string::npos);
-    // МАРКЕР: OCTAL-эскейпы UTF-8 «ДЕМО» из KEYWORDS — в сырых байтах.
+    // МАРКЕР ШТАМПА (ASCII-хвост — выживает в сырых байтах и в любой
+    // декодированной форме; правки по гейту Э5 раунд 1, Р-12).
     const std::string marker = PdfBuilder::kStampMarker;
-    CHECK(!marker.empty());
+    CHECK(marker == "DEMO-FAKE-DATA");
     CHECK(r.bytes.find(marker) != std::string::npos);
-    // ASCII-часть штампа — тоже читаема в Info-словаре.
-    CHECK(r.bytes.find("DEMO-FAKE-DATA") != std::string::npos);
+    // Кириллическая часть штампа — в сырых байтах как OCTAL-эскейпы UTF-8.
+    CHECK(r.bytes.find("\\320\\224\\320\\225\\320\\234\\320\\236") !=
+          std::string::npos);
 }
 
 TEST_CASE("PdfBuilder: маркер находится в файле, сохранённом на диск")
@@ -121,6 +123,9 @@ TEST_CASE("PdfBuilder: маркер находится в файле, сохра
         const auto pos = content.find("/Keywords");
         REQUIRE(pos != std::string::npos);
         CHECK(content.find(marker, pos) != std::string::npos);
+        // Кириллическая часть (октал-эскейпы) — тоже в файле.
+        CHECK(content.find("\\320\\224\\320\\225\\320\\234\\320\\236",
+                           pos) != std::string::npos);
     }
     std::error_code ec;
     fs::remove_all(dir, ec);
