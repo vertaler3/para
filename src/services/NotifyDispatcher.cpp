@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <ctime>
+#include <map>
 #include <mutex>
 #include <utility>
 
@@ -145,6 +146,16 @@ std::chrono::system_clock::time_point NotifyDispatcher::nowUtc()
     if (gClock)
         return gClock();
     return std::chrono::system_clock::now();
+}
+
+std::string NotifyDispatcher::toIsoUtc(std::chrono::system_clock::time_point tp)
+{
+    return timeToIsoUtc(std::chrono::system_clock::to_time_t(tp));
+}
+
+std::string NotifyDispatcher::nowIsoUtc()
+{
+    return toIsoUtc(nowUtc());
 }
 
 bool NotifyDispatcher::inQuietHours(const std::string& quietHoursJson,
@@ -330,6 +341,103 @@ void NotifyDispatcher::resetForTests()
     gPushFn = nullptr;
     gClock = nullptr;
     gPendingDigest.clear();
+}
+
+void NotifyDispatcher::flushDigest(DbClientPtr db, FlushCb cb)
+{
+    if (!db || !cb)
+    {
+        if (cb)
+            cb(DigestFlush{});
+        return;
+    }
+
+    // 1. Забрать очередь целиком (доставленные повторно не шлются: элемент
+    //    существует ровно в одном экземпляре — либо в очереди, либо уже
+    //    отправлен в решение notify()).
+    std::vector<DeferredNotification> batch = takePendingDigest();
+    if (batch.empty())
+    {
+        cb(DigestFlush{});
+        return;
+    }
+
+    // 2. Группировка по владельцу (map — детерминированный порядок доставки).
+    std::map<int64_t, std::vector<DeferredNotification>> groups;
+    for (auto& item : batch)
+        groups[item.userId].push_back(std::move(item));
+
+    auto state = std::make_shared<DigestFlush>();
+    auto remainingUsers = std::make_shared<std::atomic<int>>(
+        static_cast<int>(groups.size()));
+    auto remainingItems = std::make_shared<std::atomic<int>>(
+        static_cast<int>(batch.size()));
+    auto finished = std::make_shared<std::atomic<bool>>(false);
+    auto finish = [state, cb, finished] {
+        bool expected = false;
+        if (finished->compare_exchange_strong(expected, true))
+            cb(*state);
+    };
+    auto checkDone = [remainingUsers, remainingItems, finish] {
+        if (remainingUsers->load() == 0 && remainingItems->load() == 0)
+            finish();
+    };
+
+    // Тихие часы считаются на момент тика: владелец вне своего интервала →
+    // его очередь готова (первый тик после конца его тихих часов).
+    const int minute = minuteOfDayOf(nowUtc());
+
+    for (auto& [userId, items] : groups)
+    {
+        SettingsService::load(
+            db,
+            userId,
+            [db, userId, items = std::move(items), minute, state,
+             remainingUsers, remainingItems, checkDone](
+                SettingsRecord settings) mutable {
+                if (inQuietHours(settings.quietHoursJson, minute))
+                {
+                    // Владелец ещё в тихих часах: вернуть группу в очередь
+                    // (элементы, отложенные параллельно только что, не тронуты).
+                    const std::size_t held = items.size();
+                    {
+                        std::lock_guard<std::mutex> lock(gMutex);
+                        for (auto& it : items)
+                            gPendingDigest.push_back(std::move(it));
+                    }
+                    items.clear();
+                    state->held += held;
+                    remainingItems->fetch_sub(static_cast<int>(held));
+                }
+                else
+                {
+                    // Первый тик после конца тихих часов: доставить разом.
+                    // Каждый элемент — через notify(): создаст строку и
+                    // пуш, применит тумблер (настройки могли измениться
+                    // за ночь); тихие часы здесь уже не отложат — тик
+                    // проверил интервал владельца. Любой исход = элемент
+                    // обработан, повторно не шлётся (удалён из очереди).
+                    for (const auto& it : items)
+                    {
+                        NotifyInput in;
+                        in.userId = userId;
+                        in.type = it.type;
+                        in.title = it.title;
+                        in.body = it.body;
+                        in.deepLink = it.deepLink;
+                        notify(db, in,
+                               [state, remainingItems,
+                                checkDone](NotifyOutcome) {
+                                   state->delivered += 1;
+                                   remainingItems->fetch_sub(1);
+                                   checkDone();
+                               });
+                    }
+                }
+                remainingUsers->fetch_sub(1);
+                checkDone();
+            });
+    }
 }
 
 }  // namespace para

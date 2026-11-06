@@ -106,6 +106,13 @@ class NotifyDispatcher
     static void setClock(ClockFn fn);
     static std::chrono::system_clock::time_point nowUtc();
 
+    // ISO «YYYY-MM-DDTHH:MM:SSZ» — единый формат времени DDL/фикстур
+    // (strftime 02 §4.1); все времена UTC (02 §4.3). nowIsoUtc — для меток
+    // и окон тиков ReminderService (шаг 2 Э6), SAME часам, что и решение
+    // диспетчера (тестовый шов единый).
+    static std::string toIsoUtc(std::chrono::system_clock::time_point tp);
+    static std::string nowIsoUtc();
+
     // Тихие часы (02 §5.6; 01 §5.6): minuteOfDayUtc ∈ [0;1440) попадает в
     // интервал [from,to) из quiet_hours_json (дефолт DDL
     // {"from":"23:00","to":"07:00"}); допускаются синонимы start/end.
@@ -146,6 +153,26 @@ class NotifyDispatcher
     // очередь — единственное их место (в notifications они не создаются).
     static std::vector<DeferredNotification> takePendingDigest();
     static std::size_t pendingDigestCount();
+
+    // Итог разбора дайджеста: delivered — извлечённые элементы, отправленные
+    // в решение notify() (строка+push, либо SuppressedByToggle, если владелец
+    // выключил тумблер за ночь — повторно не шлются); held — владелец ещё в
+    // своих тихих часах, элементы вернулись в очередь.
+    struct DigestFlush
+    {
+        std::size_t delivered = 0;
+        std::size_t held = 0;
+    };
+    using FlushCb = std::function<void(DigestFlush)>;
+
+    // Утренний дайджест (02 §4 поток 4: «ночью копится в утренний дайджест»).
+    // Разбирает очередь на тике таймера: элемент готов, когда владелец ВНЕ
+    // своих тихих часов (первый тик после их конца); готовые доставляются
+    // разом — каждый через notify() (повторная проверка тумблера — настройки
+    // могли измениться за ночь; второй раз тихие часы не отложат, тик уже
+    // проверил). Не готовые — возвращаются в очередь. cb стреляет один раз
+    // после обработки всех групп (не ждёт завершения INSERT'ов).
+    static void flushDigest(drogon::orm::DbClientPtr db, FlushCb cb);
 
     // Тестовый шов: сброс push-колбэка, часов и очереди (между кейсами —
     // статики живут в одном бинарнике на все TEST_CASE).
