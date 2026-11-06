@@ -1,5 +1,6 @@
 #include "services/RoomsService.h"
 
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <ctime>
@@ -171,19 +172,20 @@ void RoomsService::slots(DbClientPtr db,
                 cb(SlotsResult{SlotsStatus::NotFound, Json::Value()});  // 404
                 return;
             }
-            // Активные брони дня (пересекающие [from, to)). Статус —
-            // SQL-литерал CHECK 0005, НЕ пользовательский ввод; параметры
-            // в тексте по порядку $1→$3 = порядку биндинга (урок Э5 шаг 2:
-            // $N индексируется по первому вхождению). status='booked'
-            // имплицирует условие частичного индекса idx_bookings_active
-            // ((room_id, starts_at) WHERE status='booked'): equality +
-            // диапазон + ORDER BY — один индекс, без TEMP B-TREE
-            // (EXPLAIN QUERY PLAN проверен). Блокировки ('blocked') —
-            // шаг 3 Э5а, в сетке шага 1 не участвуют (см. шапку .h).
-            *db << "SELECT user_id, starts_at, ends_at FROM room_bookings "
-                   "WHERE room_id = $1 AND status = 'booked' AND starts_at "
-                   "< $2 AND ends_at > $3 ORDER BY starts_at"
-                << roomId << toIso << fromIso >>
+            // Строки дня, занимающие слоты (шаг 3): UNION ALL двух
+            // статус-веток — 'booked' (idx_bookings_active, EXPLAIN SEARCH)
+            // и 'blocked' (блокировки деканата, единичные строки). Статусы —
+            // SQL-литералы CHECK 0005; параметры в тексте по порядку
+            // $1→$6 = порядку биндинга (урок Э5 шаг 2: $N — по первому
+            // вхождению). Сортировка не нужна —occupied собирается в C++.
+            *db << "SELECT user_id, starts_at, ends_at, status FROM "
+                   "room_bookings WHERE room_id = $1 AND status = 'booked' "
+                   "AND starts_at < $2 AND ends_at > $3 "
+                   "UNION ALL "
+                   "SELECT user_id, starts_at, ends_at, status FROM "
+                   "room_bookings WHERE room_id = $4 AND status = 'blocked' "
+                   "AND starts_at < $5 AND ends_at > $6"
+                << roomId << toIso << fromIso << roomId << toIso << fromIso >>
                 // Колбэки-ветки копируют cb (стреляет ровно одна): move в
                 // success-ветке оставил бы error-ветке пустой std::function
                 // → bad_function_call на error-пути (урок Э2 шаг 1).
@@ -192,7 +194,9 @@ void RoomsService::slots(DbClientPtr db,
                     // Строки дня → интервалы: слот занят, если есть
                     // пересечение (row.starts_at < slotEnd && row.ends_at >
                     // slotStart) — точное перекрытие, не совпадение начала;
-                    // «mine» — строка текущей сессии.
+                    // «mine» — только своя АКТИВНАЯ бронь (status='booked' и
+                    // user_id сессии); всё остальное пересечение — «занято»
+                    // (чужая бронь или блокировка деканата, шаг 3).
                     struct Occupied
                     {
                         std::string startsAt;
@@ -204,8 +208,10 @@ void RoomsService::slots(DbClientPtr db,
                     for (const auto& row : rows)
                         occupied.push_back({row["starts_at"].as<std::string>(),
                                             row["ends_at"].as<std::string>(),
-                                            row["user_id"].as<int64_t>() ==
-                                                userId});
+                                            row["status"].as<std::string>() ==
+                                                    "booked" &&
+                                                row["user_id"].as<int64_t>() ==
+                                                    userId});
 
                     Json::Value slotsArr(Json::arrayValue);
                     for (int hour = kFirstSlotHour; hour < kLastSlotHour;
@@ -336,53 +342,82 @@ void RoomsService::create(DbClientPtr db,
                         cb(CreateResult{CreateStatus::Conflict, Json::Value()});
                         return;
                     }
-                    // INSERT: статус — литерал CHECK 0005; порядок $1→$4 =
-                    // порядку биндинга. Исключение БД здесь — нарушение
-                    // ограничения в гонке (UNIQUE idx_bookings_active:
-                    // серверная проверка обеих параллельных POST прошла до
-                    // INSERT'ов; прочие предусловия проверены выше) —
-                    // маппится в SlotTaken/400, НЕ в 500 (постановка шага 2).
-                    *db << "INSERT INTO room_bookings (room_id, user_id, "
-                           "starts_at, ends_at, status) VALUES "
-                           "($1, $2, $3, $4, 'booked')"
-                        << roomId << userId << startsAt << endsAt >>
-                        [db, roomId, startsAt, endsAt, cb](
-                            const drogon::orm::Result&) {
-                            // id вставленной строки: активная бронь
-                            // (room_id, starts_at) единственна по
-                            // idx_bookings_active — детерминированный
-                            // SELECT по ключу вместо last_insert_rowid
-                            // (пул соединений).
-                            *db << "SELECT id FROM room_bookings WHERE "
-                                   "room_id = $1 AND starts_at = $2 AND "
-                                   "status = 'booked'"
-                                << roomId << startsAt >>
-                                [roomId, startsAt, endsAt, cb](
-                                    const drogon::orm::Result& rows) {
-                                    Json::Value body(Json::objectValue);
-                                    if (!rows.empty())
-                                        body["id"] =
-                                            rows[0]["id"].as<int64_t>();
-                                    body["room_id"] = roomId;
-                                    body["starts_at"] = startsAt;
-                                    body["ends_at"] = endsAt;
-                                    body["status"] = "booked";
-                                    cb(CreateResult{CreateStatus::Created,
-                                                    std::move(body)});
+                    // Шаг 3: блокировки деканата ('blocked') тоже закрывают
+                    // слоты — бронирование поверх блокировки исключено.
+                    // Отдельный запрос (не IN): 'booked' ветка выше держит
+                    // idx_bookings_active; blocked-строки единичны.
+                    // UNIQUE частичный индекс blocked НЕ защищает — это
+                    // единственная линия проверки.
+                    *db << "SELECT 1 FROM room_bookings WHERE room_id = $1 "
+                           "AND status = 'blocked' AND starts_at < $2 AND "
+                           "ends_at > $3"
+                        << roomId << endsAt << startsAt >>
+                        [db, roomId, userId, startsAt, endsAt,
+                         cb](const drogon::orm::Result& rows) {
+                            if (rows.size() > 0)
+                            {
+                                cb(CreateResult{CreateStatus::Blocked,
+                                                Json::Value()});
+                                return;
+                            }
+                            // INSERT: статус — литерал CHECK 0005; порядок
+                            // $1→$4 = порядку биндинга. Исключение БД здесь
+                            // — нарушение ограничения в гонке (UNIQUE
+                            // idx_bookings_active: серверная проверка обеих
+                            // параллельных POST прошла до INSERT'ов; прочие
+                            // предусловия проверены выше) — маппится в
+                            // SlotTaken/400, НЕ в 500 (постановка шага 2).
+                            *db << "INSERT INTO room_bookings (room_id, "
+                                   "user_id, starts_at, ends_at, status) "
+                                   "VALUES ($1, $2, $3, $4, 'booked')"
+                                << roomId << userId << startsAt << endsAt >>
+                                [db, roomId, startsAt, endsAt, cb](
+                                    const drogon::orm::Result&) {
+                                    // id вставленной строки: активная бронь
+                                    // (room_id, starts_at) единственна по
+                                    // idx_bookings_active — детерминированный
+                                    // SELECT по ключу вместо
+                                    // last_insert_rowid (пул соединений).
+                                    *db << "SELECT id FROM room_bookings "
+                                           "WHERE room_id = $1 AND starts_at "
+                                           "= $2 AND status = 'booked'"
+                                        << roomId << startsAt >>
+                                        [roomId, startsAt, endsAt, cb](
+                                            const drogon::orm::Result& rows) {
+                                            Json::Value body(Json::objectValue);
+                                            if (!rows.empty())
+                                                body["id"] =
+                                                    rows[0]["id"]
+                                                        .as<int64_t>();
+                                            body["room_id"] = roomId;
+                                            body["starts_at"] = startsAt;
+                                            body["ends_at"] = endsAt;
+                                            body["status"] = "booked";
+                                            cb(CreateResult{
+                                                CreateStatus::Created,
+                                                std::move(body)});
+                                        } >>
+                                        [cb](const DrogonDbException& e) {
+                                            LOG_ERROR << "RoomsService::create"
+                                                         "(select id): "
+                                                      << e.base().what();
+                                            cb(CreateResult{
+                                                CreateStatus::Error,
+                                                Json::Value()});
+                                        };
                                 } >>
                                 [cb](const DrogonDbException& e) {
-                                    LOG_ERROR << "RoomsService::create(select "
-                                                 "id): "
+                                    LOG_ERROR << "RoomsService::create(insert): "
                                               << e.base().what();
-                                    cb(CreateResult{CreateStatus::Error,
+                                    cb(CreateResult{CreateStatus::SlotTaken,
                                                     Json::Value()});
                                 };
                         } >>
                         [cb](const DrogonDbException& e) {
-                            LOG_ERROR << "RoomsService::create(insert): "
+                            LOG_ERROR << "RoomsService::create(blocked check): "
                                       << e.base().what();
-                            cb(CreateResult{CreateStatus::SlotTaken,
-                                            Json::Value()});  // гонка → 400
+                            cb(CreateResult{CreateStatus::Error,
+                                            Json::Value()});
                         };
                 } >>
                 [cb](const DrogonDbException& e) {
@@ -481,6 +516,206 @@ void RoomsService::cancelById(DbClientPtr db,
                       << e.base().what();
             cb(CancelStatus::Error);  // fail-closed → 500
         };
+}
+
+// --- Блокировка деканатом (Э5а шаг 3) --------------------------------------
+
+void RoomsService::block(DbClientPtr db,
+                         int64_t roomId,
+                         int64_t staffUserId,
+                         const std::string& startsAt,
+                         const std::string& endsAt,
+                         const std::string& reason,
+                         std::function<void(BlockResult)> cb)
+{
+    // Тело валидирует сервис (как create: строгий ISO «…Z», ends > starts);
+    // reason проверяет контроллер (непустая строка) — он же кладёт его в
+    // текст уведомления.
+    if (!isIsoZ(startsAt) || !isIsoZ(endsAt) || endsAt <= startsAt)
+    {
+        cb(BlockResult{BlockStatus::InvalidBody, Json::Value()});
+        return;
+    }
+    roomById(
+        db,
+        roomId,
+        [db, roomId, staffUserId, startsAt, endsAt, reason, cb](
+            Lookup lookup, Json::Value room) {
+            if (lookup == Lookup::Error)
+            {
+                cb(BlockResult{BlockStatus::Error, Json::Value()});
+                return;
+            }
+            if (lookup == Lookup::NotFound)
+            {
+                cb(BlockResult{BlockStatus::NotFound, Json::Value()});
+                return;
+            }
+            const std::string roomName = room["name"].asString();
+
+            // Транзакция (как AppWorkflow::apply): снятие пересекающихся
+            // активных броней + уведомления авторам + INSERT блокировки —
+            // атомарно; ошибка любого шага → rollback + Error (fail-closed,
+            // 02 §5.1: 500 без деталей). Результат отдаёт commit-callback —
+            // ответ клиенту не опережает фиксацию (урок E2E этого шага:
+            // fire до коммита читался sqlite-SELECT'ом как «бронь не
+            // снята»).
+            auto once = std::make_shared<std::atomic_bool>(false);
+            auto fire = [cb, once](BlockStatus status, Json::Value body) {
+                bool expected = false;
+                if (!once->compare_exchange_strong(expected, true))
+                    return;
+                if (status == BlockStatus::Error)
+                {
+                    LOG_WARN << "RoomsService::block: ошибка БД, транзакция "
+                                "откатывается";
+                }
+                cb(BlockResult{status, std::move(body)});
+            };
+
+            db->newTransactionAsync(
+                [roomId, staffUserId, startsAt, endsAt, reason, roomName,
+                 fire](const std::shared_ptr<Transaction>& tx) {
+                    if (!tx)
+                    {
+                        LOG_ERROR << "RoomsService::block: транзакция "
+                                     "недоступна (timeout)";
+                        fire(BlockStatus::Error, Json::Value());
+                        return;
+                    }
+                    // Линейная цепочка из 2 SQL + INSERT + rowid-SELECT,
+                    // БЕЗ рекурсивного шага: самоссылающийся shared_ptr на
+                    // функцию держит замыкание → tx не освобождает
+                    // соединение после «коммита» (поймано зависанием E2E
+                    // на первом же запросе после блокировки). Порядок важен:
+                    //   1) уведомления вставляются SELECT'ом по ЕЩЁ активным
+                    //      броням — по одной на каждую снятую строку (текст
+                    //      общий; словарь type CHECK 0004 — 'schedule':
+                    //      бронь 5.10 живёт в шапке расписания 03 §4.9.5;
+                    //      deep_link — экран «Мои брони»);
+                    //   2) UPDATE снимает те же строки (status='cancelled',
+                    //      строки сохраняются — история); affectedRows —
+                    //      счётчик снятий для тела ответа;
+                    //   3) INSERT блокировки status='blocked'
+                    //      (user_id = staff);
+                    //   4) id — last_insert_rowid() на соединении
+                    //      транзакции (как AppWorkflow::apply).
+                    // Параметры в тексте по порядку $1→$N = порядку биндинга
+                    // (урок Э5 шаг 2, в т.ч. для INSERT..SELECT). Колбэки
+                    // копируют захваты (урок Э2: стреляет ровно одна ветка).
+                    const auto cancelledCount = std::make_shared<int64_t>(0);
+                    const auto blockId = std::make_shared<int64_t>(0);
+                    const std::string kNotifySql =
+                        "INSERT INTO notifications (user_id, type, title, "
+                        "body, deep_link) SELECT user_id, 'schedule', $1, "
+                        "$2, $3 FROM room_bookings WHERE room_id = $4 AND "
+                        "status = 'booked' AND starts_at < $5 AND ends_at "
+                        "> $6";
+                    const std::string kCancelSql =
+                        "UPDATE room_bookings SET status = 'cancelled' "
+                        "WHERE room_id = $1 AND status = 'booked' AND "
+                        "starts_at < $2 AND ends_at > $3";
+                    const std::string kInsertBlockSql =
+                        "INSERT INTO room_bookings (room_id, user_id, "
+                        "starts_at, ends_at, status) VALUES ($1, $2, $3, "
+                        "$4, 'blocked')";
+                    const std::string title = "Бронь снята деканатом";
+                    const std::string bodyText = "Бронь аудитории " +
+                        roomName + " (" + startsAt + "–" + endsAt +
+                        ") снята: " + reason;
+                    const std::string deepLink = "/room-bookings";
+
+                    *tx << kNotifySql << title << bodyText << deepLink
+                        << roomId << endsAt << startsAt >>
+                        // Промежуточные лямбды захватывают и то, что нужно
+                        // ВЛОЖЕННЫМ (kInsertBlockSql/blockId — локалы
+                        // функции: без этого вложенный захват недоступен).
+                        [tx, roomId, staffUserId, startsAt, endsAt,
+                         cancelledCount, kCancelSql, kInsertBlockSql,
+                         blockId, fire](const drogon::orm::Result&) {
+                            *tx << kCancelSql << roomId << endsAt << startsAt
+                                >>
+                                [tx, roomId, staffUserId, startsAt, endsAt,
+                                 cancelledCount, kInsertBlockSql, blockId,
+                                 fire](const drogon::orm::Result& r) {
+                                    *cancelledCount =
+                                        static_cast<int64_t>(
+                                            r.affectedRows());
+                                    *tx << kInsertBlockSql << roomId
+                                        << staffUserId << startsAt << endsAt
+                                        >>
+                                        [tx, blockId,
+                                         fire](const drogon::orm::Result&) {
+                                            *tx << "SELECT "
+                                                   "last_insert_rowid() "
+                                                   "AS id" >>
+                                                [blockId](
+                                                    const drogon::orm::Result&
+                                                        rows) {
+                                                    if (!rows.empty())
+                                                        *blockId =
+                                                            rows[0]["id"]
+                                                                .as<int64_t>();
+                                                    // Тело ответа собирает
+                                                    // commit-callback.
+                                                } >>
+                                                [fire](const DrogonDbException&
+                                                           e) {
+                                                    LOG_ERROR
+                                                        << "RoomsService::"
+                                                           "block(rowid): "
+                                                        << e.base().what();
+                                                    fire(BlockStatus::Error,
+                                                         Json::Value());
+                                                };
+                                        } >>
+                                        [fire](const DrogonDbException& e) {
+                                            LOG_ERROR << "RoomsService::block"
+                                                         "(insert): "
+                                                      << e.base().what();
+                                            fire(BlockStatus::Error,
+                                                 Json::Value());
+                                        };
+                                } >>
+                                [fire](const DrogonDbException& e) {
+                                    LOG_ERROR << "RoomsService::block"
+                                                 "(cancel): "
+                                              << e.base().what();
+                                    fire(BlockStatus::Error, Json::Value());
+                                };
+                        } >>
+                        [fire](const DrogonDbException& e) {
+                            LOG_ERROR << "RoomsService::block(notify): "
+                                      << e.base().what();
+                            fire(BlockStatus::Error, Json::Value());
+                        };
+
+                    // Commit-callback: success → Created с телом ПОСЛЕ
+                    // коммита; commit-fail → Error (после rollback callback
+                    // не стреляет вовсе — v1.9.14; once-ограничитель
+                    // страхует оба пути).
+                    tx->setCommitCallback(
+                        [roomId, roomName, startsAt, endsAt, reason,
+                         cancelledCount, blockId,
+                         fire](bool committed) {
+                            if (!committed)
+                            {
+                                fire(BlockStatus::Error, Json::Value());
+                                return;
+                            }
+                            Json::Value body(Json::objectValue);
+                            body["id"] = *blockId;
+                            body["room_id"] = roomId;
+                            body["room"] = roomName;
+                            body["starts_at"] = startsAt;
+                            body["ends_at"] = endsAt;
+                            body["status"] = "blocked";
+                            body["reason"] = reason;
+                            body["cancelled"] = *cancelledCount;
+                            fire(BlockStatus::Created, std::move(body));
+                        });
+                });
+        });
 }
 
 }  // namespace para

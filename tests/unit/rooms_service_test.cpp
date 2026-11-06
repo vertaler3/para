@@ -2,23 +2,33 @@
 //  - catalog — каталог аудиторий (поля 0005, порядок по id), пустая таблица —
 //    200 {"rooms":[]}, а не ошибка;
 //  - slots — сетка дня по 60 минут (08:00–22:00 UTC, 14 слотов) с тремя
-//    состояниями 02 §5.2: free / booked (чужая активная бронь) / mine
-//    («ваша бронь»); cancelled слот НЕ занимает; blocked (блокировка
-//    сотрудника) в сетке ШАГА 1 не участвует — запрос по status='booked'
-//    имплицирует условие частичного индекса idx_bookings_active
-//    (IN ('booked','blocked') даёт SCAN — проверено EXPLAIN на этом шаге);
-//    отображение блокировок — шаг 3 Э5а; состояние зависит от user_id
-//    сессии (изоляция «моя/чужая»);
-//  - create (шаг 2) — бронь интервала: Created (201), «двойная бронь» того
-//    же слота → SlotTaken (400-класс), частичное пересечение → Conflict
-//    (409-класс), касания границ полуинтервалов НЕ пересекаются; исключение
-//    БД на INSERT (гонка UNIQUE / триггер в тесте) → SlotTaken (400), не
-//    Error/500; InvalidBody (строгий ISO «…Z», ends_at > starts_at);
+//    состояниями 02 §5.2: free / booked (чужая активная бронь ИЛИ блокировка
+//    деканата — шаг 3: заблокированный слот честно не «свободно») / mine
+//    («ваша бронь» — только своя АКТИВНАЯ); cancelled слот НЕ занимает;
+//    выборка — UNION ALL статус-веток ('booked' ветка держит
+//    idx_bookings_active — проверено EXPLAIN на шаге 1); состояние зависит
+//    от user_id сессии (изоляция «моя/чужая»);
+//  - create (шаги 2–3) — бронь интервала: Created (201), «двойная бронь»
+//    того же слота → SlotTaken (400-класс), частичное пересечение →
+//    Conflict (409-класс), пересечение с блокировкой деканата → Blocked
+//    (409-класс, шаг 3 — бронь поверх блокировки невозможна), касания
+//    границ полуинтервалов НЕ пересекаются; исключение БД на INSERT (гонка
+//    UNIQUE / триггер в тесте) → SlotTaken (400), не Error/500; InvalidBody
+//    (строгий ISO «…Z», ends_at > starts_at);
+//  - block (шаг 3) — блокировка деканатом в транзакции: снимает
+//    пересекающиеся активные брони (status='cancelled'), уведомление
+//    автору каждой (notifications type 'schedule', deep_link
+//    '/room-bookings'), INSERT status='blocked' (user_id = staff);
+//    не пересекавшиеся брони не тронуты; повторная блокировка — 201;
+//    InvalidBody/NotFound/fail-closed;
 //  - myBookings (шаг 2) — только свои активные (booked), JOIN rooms,
 //    фильтр upcoming (ends_at >= nowIso, now передаётся явно);
 //  - cancelById (шаг 2) — своя booked → Canceled (204-класс), повторная →
 //    NotActive (409-класс), несуществующая → NotFound; guard-цепочка DELETE:
 //    чужая → Forbidden (403) — OwnershipGuard::check(Table::RoomBookings);
+//  - StaffFilter (шаг 3) — студент на staff-роуте → 403 «Доступ только для
+//    сотрудников» (ответ фильтра), staff → цепочка продолжается, без
+//    атрибута сессии — fail-closed 403;
 //  - несуществующая комната → NotFound (404 контроллером), невалидная дата
 //    → Error (fail-closed, контроллер до сервиса отвечает 400);
 //  - ошибка БД — fail-closed (Error → 500 контроллером), не пустая сетка.
@@ -37,9 +47,13 @@
 #include <sqlite3.h>
 
 #include <doctest.hpp>
+#include <drogon/drogon.h>
+#include <drogon/DrClassMap.h>
 
+#include "filters/StaffFilter.h"
 #include "services/OwnershipGuard.h"
 #include "services/RoomsService.h"
+#include "services/SessionService.h"  // SessionInfo — атрибут LoginFilter
 
 namespace fs = std::filesystem;
 using para::OwnershipGuard;
@@ -124,7 +138,21 @@ struct Fixture
                  " room_bookings(room_id, starts_at) WHERE status ="
                  " 'booked';"
                  "CREATE INDEX idx_bookings_user ON room_bookings(user_id,"
-                 " starts_at);");
+                 " starts_at);"
+                 // notifications (0004) — для снятых броней шага 3 (CHECK
+                 // type — словарь уведомлений).
+                 "CREATE TABLE notifications ("
+                 "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                 "  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE"
+                 " CASCADE,"
+                 "  type TEXT NOT NULL CHECK (type IN ('schedule','deadline',"
+                 " 'application','announcement')),"
+                 "  title TEXT NOT NULL,"
+                 "  body TEXT,"
+                 "  deep_link TEXT,"
+                 "  read_at TEXT,"
+                 "  created_at TEXT NOT NULL DEFAULT"
+                 " (strftime('%Y-%m-%dT%H:%M:%SZ','now')));");
             if (withRooms)
             {
                 // 3 аудитории каталога — точные строки sql/fixtures.sql Э5а.
@@ -282,6 +310,64 @@ OwnershipGuard::Verdict guardOf(const drogon::orm::DbClientPtr& db,
     return f.get();
 }
 
+// --- Шаг 3: блокировка деканатом ------------------------------------------
+RoomsService::BlockResult blockOf(const drogon::orm::DbClientPtr& db,
+                                  int64_t roomId,
+                                  int64_t staffUserId,
+                                  const std::string& startsAt,
+                                  const std::string& endsAt,
+                                  const std::string& reason)
+{
+    std::promise<RoomsService::BlockResult> p;
+    auto f = p.get_future();
+    RoomsService::block(db,
+                        roomId,
+                        staffUserId,
+                        startsAt,
+                        endsAt,
+                        reason,
+                        [&p](RoomsService::BlockResult r) {
+                            p.set_value(std::move(r));
+                        });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
+struct NotifyRow
+{
+    std::string type;
+    std::string title;
+    std::string body;
+    std::string deepLink;
+};
+
+std::vector<NotifyRow> notificationsOf(const drogon::orm::DbClientPtr& db,
+                                       int64_t userId)
+{
+    // Прямая проверка INSERT в notifications (автору снятой брони).
+    std::promise<std::vector<NotifyRow>> p;
+    auto f = p.get_future();
+    *db << "SELECT type, title, body, deep_link FROM notifications WHERE "
+           "user_id = $1 ORDER BY id"
+        << userId >>
+        [&p](const drogon::orm::Result& rows) {
+            std::vector<NotifyRow> out;
+            out.reserve(rows.size());
+            for (const auto& r : rows)
+                out.push_back({r["type"].as<std::string>(),
+                               r["title"].as<std::string>(),
+                               r["body"].as<std::string>(),
+                               r["deep_link"].as<std::string>()});
+            p.set_value(std::move(out));
+        } >>
+        [&p](const drogon::orm::DrogonDbException& e) {
+            FAIL(e.base().what());
+            p.set_value({});
+        };
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
 }  // namespace
 
 TEST_CASE("RoomsService: validDate — формат и календарность")
@@ -366,14 +452,19 @@ TEST_CASE("RoomsService: slots — сетка 60 минут, три состоя
     REQUIRE(mark.status == RoomsService::SlotsStatus::Ok);
     CHECK(mark.body["slots"][6]["state"].asString() == "booked");
 
-    // Блокировка сотрудника (dean, room 3 10:00, status='blocked') в сетке
-    // шага 1 НЕ участвует — контракт «состояние по активным броням
-    // status='booked'» (см. шапку RoomsService.h; отображение блокировок —
-    // шаг 3 Э5а). Слот 10:00 остаётся «free» для всех.
+    // Блокировка сотрудника (dean, room 3 10:00, status='blocked') —
+    // «занято» для студента и для самого staff (шаг 3: заблокированный
+    // слот честно не «свободно»; отменить его через DELETE брони нельзя —
+    // это не «ваша бронь»).
     const auto stud = slotsOf(f.db, 3, 1, "2026-11-06");
     REQUIRE(stud.status == RoomsService::SlotsStatus::Ok);
-    CHECK(stud.body["slots"][2]["state"].asString() == "free");  // 10:00
-    CHECK(countState(stud.body, "free") == 14);
+    CHECK(stud.body["slots"][2]["state"].asString() == "booked");  // 10:00
+    CHECK(countState(stud.body, "free") == 13);
+    CHECK(countState(stud.body, "booked") == 1);
+    const auto deanGrid = slotsOf(f.db, 3, 5, "2026-11-06");
+    REQUIRE(deanGrid.status == RoomsService::SlotsStatus::Ok);
+    CHECK(deanGrid.body["slots"][2]["state"].asString() == "booked");
+    CHECK(deanGrid.body["slots"][2]["state"].asString() != "mine");
 }
 
 TEST_CASE("RoomsService: slots — другая дата и гейт-дата 2026-11-13 свободны")
@@ -648,4 +739,179 @@ TEST_CASE("RoomsService: брони — ошибка БД fail-closed (Error →
           RoomsService::CreateStatus::Error);
     CHECK_FALSE(myBookingsOf(f.db, 1, false, "2026-11-13T09:00:00Z").ok);
     CHECK(cancelOf(f.db, 1) == RoomsService::CancelStatus::Error);
+}
+
+TEST_CASE("RoomsService: block — снимает пересекающуюся бронь, уведомление автору")
+{
+    Fixture f;
+    // Фикстуры: id 1 — Олег, room 1, 06.11 11:00–12:00 (booked).
+    // Деканат (user 5) блокирует 06.11 10:30–11:30 — бронь Олега снята.
+    const auto r = blockOf(f.db, 1, 5, "2026-11-06T10:30:00Z",
+                           "2026-11-06T11:30:00Z", "Мероприятие деканата");
+    REQUIRE(r.status == RoomsService::BlockStatus::Created);
+    CHECK(r.body["id"].as<int64_t>() > 0);
+    CHECK(r.body["room_id"].as<int64_t>() == 1);
+    CHECK(r.body["room"].asString() == "1207");
+    CHECK(r.body["status"].asString() == "blocked");
+    CHECK(r.body["reason"].asString() == "Мероприятие деканата");
+    CHECK(r.body["cancelled"].as<int64_t>() == 1);
+
+    // Снятая бронь: status='cancelled' — из «моих брони» исчезла.
+    const auto oleg = myBookingsOf(f.db, 2, false, "2026-11-06T10:00:00Z");
+    REQUIRE(oleg.ok);
+    CHECK(oleg.body["bookings"].size() == 0);
+
+    // Уведомление автору снятой брони (02 §4.1 notifications; словарь
+    // type CHECK 0004: 'schedule'; deep_link — экран «Мои брони»).
+    const auto notes = notificationsOf(f.db, 2);
+    REQUIRE(notes.size() == 1);
+    CHECK(notes[0].type == "schedule");
+    CHECK(notes[0].title == "Бронь снята деканатом");
+    CHECK(notes[0].body.find("1207") != std::string::npos);
+    CHECK(notes[0].body.find("Мероприятие деканата") != std::string::npos);
+    CHECK(notes[0].deepLink == "/room-bookings");
+    // У других пользователей уведомлений нет.
+    CHECK(notificationsOf(f.db, 1).empty());
+    CHECK(notificationsOf(f.db, 3).empty());
+
+    // Сетка дня: заблокированный слот 11:00 — «занято» для всех, включая
+    // staff (это не «ваша бронь» — отменить её через DELETE брони нельзя).
+    const auto gridAnya = slotsOf(f.db, 1, 1, "2026-11-06");
+    REQUIRE(gridAnya.status == RoomsService::SlotsStatus::Ok);
+    CHECK(gridAnya.body["slots"][3]["state"].asString() == "booked");  // 11:00
+    const auto gridDean = slotsOf(f.db, 1, 5, "2026-11-06");
+    REQUIRE(gridDean.status == RoomsService::SlotsStatus::Ok);
+    CHECK(gridDean.body["slots"][3]["state"].asString() == "booked");
+
+    // Не пересекавшаяся бронь (id 2 Ани, room 2) не тронута.
+    const auto anya = myBookingsOf(f.db, 1, false, "2026-11-06T10:00:00Z");
+    REQUIRE(anya.ok);
+    REQUIRE(anya.body["bookings"].size() == 1);
+    CHECK(anya.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T14:00:00Z");
+
+    // Повторная блокировка того же слота — новая строка, 201, снятий нет.
+    const auto again = blockOf(f.db, 1, 5, "2026-11-06T10:30:00Z",
+                               "2026-11-06T11:30:00Z", "Повтор");
+    REQUIRE(again.status == RoomsService::BlockStatus::Created);
+    CHECK(again.body["cancelled"].as<int64_t>() == 0);
+}
+
+TEST_CASE("RoomsService: block — несколько броней; create поверх блокировки")
+{
+    Fixture f;
+    // Две активные брони room 1 на 13.11: Аня 10:00–11:00, Олег 11:00–12:00.
+    REQUIRE(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                     "2026-11-13T11:00:00Z").status ==
+            RoomsService::CreateStatus::Created);
+    REQUIRE(createOf(f.db, 1, 2, "2026-11-13T11:00:00Z",
+                     "2026-11-13T12:00:00Z").status ==
+            RoomsService::CreateStatus::Created);
+
+    // Блокировка 10:30–11:30 пересекает обе — обе сняты, каждому автору
+    // уведомление (2 броней → 2 уведомления).
+    const auto r = blockOf(f.db, 1, 5, "2026-11-13T10:30:00Z",
+                           "2026-11-13T11:30:00Z", "Санобработка");
+    REQUIRE(r.status == RoomsService::BlockStatus::Created);
+    CHECK(r.body["cancelled"].as<int64_t>() == 2);
+    // 13.11-брони обе сняты; у Ани и Олега остаются только их активные
+    // ФИКСТУРНЫЕ брони 06.11 (не пересекаются с блокировкой 13.11).
+    const auto anyaAfter = myBookingsOf(f.db, 1, false, "2026-11-13T10:00:00Z");
+    REQUIRE(anyaAfter.ok);
+    REQUIRE(anyaAfter.body["bookings"].size() == 1);
+    CHECK(anyaAfter.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T14:00:00Z");
+    const auto olegAfter = myBookingsOf(f.db, 2, false, "2026-11-13T10:00:00Z");
+    REQUIRE(olegAfter.ok);
+    REQUIRE(olegAfter.body["bookings"].size() == 1);
+    CHECK(olegAfter.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-06T11:00:00Z");
+    CHECK(notificationsOf(f.db, 1).size() == 1);
+    CHECK(notificationsOf(f.db, 2).size() == 1);
+
+    // Заблокированный интервал не бронируется (шаг 3: Blocked, 409-класс).
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T11:00:00Z",
+                   "2026-11-13T12:00:00Z").status ==
+          RoomsService::CreateStatus::Blocked);
+    // Касание границы блокировки (10:00–10:30) — бронируется.
+    CHECK(createOf(f.db, 1, 1, "2026-11-13T10:00:00Z",
+                   "2026-11-13T10:30:00Z").status ==
+          RoomsService::CreateStatus::Created);
+    // Другая комната не затронута блокировкой room 1.
+    CHECK(createOf(f.db, 2, 2, "2026-11-13T11:00:00Z",
+                   "2026-11-13T12:00:00Z").status ==
+          RoomsService::CreateStatus::Created);
+}
+
+TEST_CASE("RoomsService: block — InvalidBody, NotFound, fail-closed")
+{
+    Fixture f;
+    CHECK(blockOf(f.db, 1, 5, "2026-11-13T12:00:00",
+                  "2026-11-13T13:00:00Z", "причина").status ==
+          RoomsService::BlockStatus::InvalidBody);  // нет Z
+    CHECK(blockOf(f.db, 1, 5, "2026-11-13T13:00:00Z",
+                  "2026-11-13T12:00:00Z", "причина").status ==
+          RoomsService::BlockStatus::InvalidBody);  // конц раньше начала
+    CHECK(blockOf(f.db, 999999, 5, "2026-11-13T12:00:00Z",
+                  "2026-11-13T13:00:00Z", "причина").status ==
+          RoomsService::BlockStatus::NotFound);
+
+    Fixture broken(/*withRooms=*/false, /*withTables=*/false);
+    CHECK(blockOf(broken.db, 1, 5, "2026-11-13T12:00:00Z",
+                  "2026-11-13T13:00:00Z", "причина").status ==
+          RoomsService::BlockStatus::Error);
+}
+
+TEST_CASE("StaffFilter: студент → 403, staff → цепочка, без атрибута — 403")
+{
+    // Синглтон фильтра из DrClassMap (тот же механизм, что в проде;
+    // StaffFilter.cpp слинкован в para-tests). Атрибут "session" кладёт
+    // LoginFilter — фильтр fail-closed без него. StaffFilter — глобальный
+    // класс (без namespace para, как LoginFilter).
+    const auto& base = drogon::DrClassMap::getSingleInstance("StaffFilter");
+    REQUIRE(base != nullptr);
+    auto* filter = dynamic_cast<StaffFilter*>(base.get());
+    REQUIRE(filter != nullptr);
+
+    struct Outcome
+    {
+        drogon::HttpResponsePtr resp;
+        bool chained = false;
+    };
+    auto run = [filter](para::SessionInfo session) {
+        auto req = drogon::HttpRequest::newHttpRequest();
+        if (session.userId != 0)
+            req->attributes()->insert("session", session);
+        std::promise<Outcome> p;
+        auto f = p.get_future();
+        filter->doFilter(
+            req,
+            [&p](const drogon::HttpResponsePtr& resp) {
+                p.set_value(Outcome{resp, false});
+            },
+            [&p]() { p.set_value(Outcome{nullptr, true}); });
+        REQUIRE(f.wait_for(std::chrono::seconds(10)) ==
+                std::future_status::ready);
+        return f.get();
+    };
+
+    // Студент на staff-роуте → 403 «Доступ только для сотрудников»
+    // (02 §5.1; шаг 7 автотеста 02 §9.3 — Э8, здесь юнит фильтра).
+    const auto stud = run(para::SessionInfo{1, "anya.demo", "student"});
+    CHECK_FALSE(stud.chained);
+    REQUIRE(stud.resp != nullptr);
+    CHECK(stud.resp->getStatusCode() == drogon::k403Forbidden);
+    CHECK(stud.resp->getJsonObject()->operator[]("error")["code"]
+              .asString() == "forbidden");
+
+    // Staff → цепочка продолжается (ответ не строится фильтром).
+    const auto staff = run(para::SessionInfo{5, "dean.demo", "staff"});
+    CHECK(staff.chained);
+    CHECK(staff.resp == nullptr);
+
+    // Fail-closed: атрибута нет (фильтр вызван без LoginFilter) → 403.
+    const auto none = run(para::SessionInfo{});
+    CHECK_FALSE(none.chained);
+    REQUIRE(none.resp != nullptr);
+    CHECK(none.resp->getStatusCode() == drogon::k403Forbidden);
 }

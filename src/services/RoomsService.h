@@ -20,30 +20,22 @@ namespace para {
 // демо-конвенция шага 1 (в решениях не зафиксированы); FE рисует их как
 // есть, сдвиг окна — правка этой константы без схемы.
 //
-// Состояние слота — по активным броням (status='booked'), пересекающим
-// слот:
+// Состояние слота — по строкам room_bookings, пересекающим слот и
+// занимающим его (шаг 3 Э5а):
 //   "free"   — свободно;
-//   "booked" — занято (чужая активная бронь — формулировка 02 §5.2);
-//   "mine"   — ваша бронь (строка принадлежит user_id сессии).
+//   "booked" — занято (чужая активная бронь ИЛИ блокировка деканата:
+//              заблокированный слот не «ваша бронь» и не тапается —
+//              честная сетка для FE; статус-литералы CHECK 0005);
+//   "mine"   — ваша бронь (активная бронь, user_id = сессии).
 // Ровно три состояния 02 §5.2. Отменённая бронь (status='cancelled') слот
-// НЕ занимает — статус снимает бронирование. Блокировки сотрудника
-// (status='blocked') — механика ШАГА 3 Э5а (гайд BE §8): их отображение
-// в сетке решается там же; шаг 1 осознанно не смешивает статусы — запрос
-// по status='booked' в точности имплицирует условие частичного индекса
-// idx_bookings_active ... WHERE status='booked' (02 §4.2 «активные брони
-// по аудитории и времени»); статус IN ('booked','blocked') индекс НЕ
-// использует (EXPLAIN: SCAN вместо SEARCH — проверено на этом шаге).
-// Статус — фиксированный SQL-литерал из CHECK 0005, не пользовательский
-// ввод.
+// НЕ занимает. Выборка — UNION ALL двух статус-веток: 'booked' ветка в
+// точности имплицирует условие частичного индекса idx_bookings_active
+// (02 §4.2; EXPLAIN: SEARCH), 'blocked' ветка читает единичные строки
+// деканата (SCAN); общий статус IN ('booked','blocked') индекс НЕ
+// использует целиком (проверено EXPLAIN на шаге 1) — потому две ветки.
 //
-// Выборка брони дня — room_id + диапазон starts_at: idx_bookings_active
-// ((room_id, starts_at) WHERE status='booked') покрывает equality по
-// room_id, диапазон по starts_at И порядок ORDER BY starts_at — один
-// индекс на запрос (EXPLAIN QUERY PLAN проверен: SEARCH ... USING INDEX
-// idx_bookings_active, без TEMP B-TREE). Пересечение слота и брони —
-// row.starts_at < slotEnd AND row.ends_at > slotStart — считается в C++
-// по строкам дня (точное «перекрытие», не «совпадение начала»: шаг 2
-// бронирует ровно слоты, но контракт БД допускает произвольные интервалы).
+// Пересечение слота и строки — row.starts_at < slotEnd AND row.ends_at >
+// slotStart — точное перекрытие по строкам дня, не «совпадение начала».
 //
 // Даты/метки — строки ISO 8601 UTC проекта («…Z», как в фикстурах и
 // ScheduleService): календарный день [dateT00:00:00Z, date+1T00:00:00Z).
@@ -142,6 +134,7 @@ class RoomsService
         Created,    // 201 + тело брони
         SlotTaken,  // 400 — двойная бронь того же слота (сервер или UNIQUE)
         Conflict,   // 409 — пересечение интервала («только что заняли»)
+        Blocked,    // 409 — интервал пересекает блокировку деканата (шаг 3)
         InvalidBody,  // 400 — не ISO «…Z» / ends_at <= starts_at
         NotFound,   // 404 — аудитории нет
         Error       // 500 — ошибка БД (fail-closed)
@@ -151,6 +144,11 @@ class RoomsService
         CreateStatus status = CreateStatus::Error;
         Json::Value body;  // созданная бронь при Created
     };
+    // Проверка пересечений (шаг 3): активные брони ('booked' —
+    // idx_bookings_active: тот же слот → SlotTaken, перекрытие → Conflict)
+    // И блокировки деканата ('blocked': перекрытие/тот же слот → Blocked —
+    // бронирование поверх блокировки исключено; UNIQUE частичный индекс
+    // blocked-строки не защищает — только серверная проверка).
     static void create(drogon::orm::DbClientPtr db,
                        int64_t roomId,
                        int64_t userId,
@@ -187,6 +185,44 @@ class RoomsService
     static void cancelById(drogon::orm::DbClientPtr db,
                            int64_t bookingId,
                            std::function<void(CancelStatus)> cb);
+
+    // POST /v1/staff/rooms/{id}/block — блокировка интервала деканатом
+    // (Э5а шаг 3; 02 §5.2: body starts_at, ends_at, reason; 01 §5.10:
+    // «активная бронь снимается, автору уходит уведомление»). Атомарно в
+    // одной транзакции (как AppWorkflow::apply):
+    //   1) активные брони комнаты, пересекающие интервал
+    //      ('booked' — idx_bookings_active), получают status='cancelled'
+    //      (строки сохраняются — история; 'blocked' статус для СНЯТОЙ брони
+    //      не используется: блокировка — ОТДЕЛЬНАЯ строка этого статуса);
+    //   2) автору каждой снятой брони — уведомление
+    //      (notifications: type 'schedule' — словарь CHECK 0004
+    //      ('schedule','deadline','application','announcement'); бронь 5.10
+    //      живёт в шапке расписания 03 §4.9.5; deep_link '/room-bookings');
+    //   3) INSERT строки блокировки status='blocked' (user_id = staff).
+    // Уведомление внутри транзакции: ошибка откатывает блокировку вместе
+    // со снятиями (паттерн staff-статуса Э5 шаг 3).
+    // Блокировки НЕ мешают друг другу (UNIQUE частичный — только 'booked'),
+    // повторная блокировка того же слота — новая строка, 201.
+    enum class BlockStatus
+    {
+        Created,      // 201 + тело блокировки
+        InvalidBody,  // 400 — не ISO «…Z» / ends_at <= starts_at
+        NotFound,     // 404 — аудитории нет
+        Error         // 500 — ошибка БД (fail-closed: транзакция откатится)
+    };
+    struct BlockResult
+    {
+        BlockStatus status = BlockStatus::Error;
+        Json::Value body;  // {id, room_id, room, starts_at, ends_at,
+                           //  status:"blocked", reason, cancelled}
+    };
+    static void block(drogon::orm::DbClientPtr db,
+                      int64_t roomId,
+                      int64_t staffUserId,
+                      const std::string& startsAt,
+                      const std::string& endsAt,
+                      const std::string& reason,
+                      std::function<void(BlockResult)> cb);
 };
 
 }  // namespace para

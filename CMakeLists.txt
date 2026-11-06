@@ -149,6 +149,7 @@ add_executable(para-tests
                src/services/IcsService.cpp
                src/services/IcsBuilder.cpp
                src/services/RoomsService.cpp
+               src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
 
 target_include_directories(para-tests

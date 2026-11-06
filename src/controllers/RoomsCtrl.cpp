@@ -154,6 +154,13 @@ void RoomsCtrl::createBooking(const HttpRequestPtr& req,
                         "Интервал пересекается с активной бронью",
                         k409Conflict));
                     return;
+                case RoomsService::CreateStatus::Blocked:
+                    // Пересечение с блокировкой деканата (шаг 3): бронь
+                    // поверх блокировки невозможна.
+                    cb(api::errorResponse("blocked",
+                                          "Интервал заблокирован деканатом",
+                                          k409Conflict));
+                    return;
                 case RoomsService::CreateStatus::InvalidBody:
                     cb(api::errorResponse(
                         "bad_request",
@@ -247,5 +254,65 @@ void RoomsCtrl::cancelBooking(const HttpRequestPtr& req,
                             return;
                     }
                 });
+        });
+}
+
+void RoomsCtrl::blockRoom(const HttpRequestPtr& req,
+                          std::function<void(const HttpResponsePtr&)>&& cb,
+                          int64_t roomId)
+{
+    // Сессию и РОЛЬ проверили фильтры (LoginFilter, StaffFilter — 02 §6.3:
+    // студент на /v1/staff/* → 403); staffUserId — только из сессии.
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // body: starts_at, ends_at, reason (02 §5.2). Формат интервала валидирует
+    // сервис; здесь — наличие JSON, строки и непустой reason.
+    const auto json = req->getJsonObject();
+    if (json == nullptr || !json->isMember("starts_at") ||
+        !json->isMember("ends_at") || !json->isMember("reason") ||
+        !(*json)["starts_at"].isString() || !(*json)["ends_at"].isString() ||
+        !(*json)["reason"].isString() ||
+        (*json)["reason"].asString().empty())
+    {
+        cb(api::errorResponse(
+            "bad_request",
+            "Ожидается JSON-тело со строками starts_at, ends_at и reason",
+            k400BadRequest));
+        return;
+    }
+    RoomsService::block(
+        app().getDbClient("para"),
+        roomId,
+        session.userId,
+        (*json)["starts_at"].asString(),
+        (*json)["ends_at"].asString(),
+        (*json)["reason"].asString(),
+        [cb = std::move(cb)](RoomsService::BlockResult r) mutable {
+            switch (r.status)
+            {
+                case RoomsService::BlockStatus::Created:
+                {
+                    auto resp =
+                        HttpResponse::newHttpJsonResponse(std::move(r.body));
+                    resp->setStatusCode(k201Created);
+                    cb(std::move(resp));
+                    return;
+                }
+                case RoomsService::BlockStatus::InvalidBody:
+                    cb(api::errorResponse(
+                        "bad_request",
+                        "starts_at/ends_at — ожидается ISO 8601 UTC "
+                        "(YYYY-MM-DDTHH:MM:SSZ), ends_at позже starts_at",
+                        k400BadRequest));
+                    return;
+                case RoomsService::BlockStatus::NotFound:
+                    cb(api::errorResponse("not_found", "Аудитория не найдена",
+                                          k404NotFound));
+                    return;
+                case RoomsService::BlockStatus::Error:
+                    cb(api::errorResponse("internal",
+                                          "Внутренняя ошибка сервера",
+                                          k500InternalServerError));
+                    return;
+            }
         });
 }
