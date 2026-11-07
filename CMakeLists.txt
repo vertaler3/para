@@ -86,6 +86,7 @@ add_executable(para
                src/controllers/PeopleCtrl.cpp
                src/controllers/GradebookCtrl.cpp
                src/controllers/RatingCtrl.cpp
+               src/controllers/LibraryCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -111,6 +112,7 @@ add_executable(para
                src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
                src/services/PeopleService.cpp
+               src/services/LibraryService.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp
@@ -158,6 +160,7 @@ add_executable(para-tests
                tests/unit/notifications_feed_test.cpp
                tests/unit/people_service_test.cpp
                tests/unit/gradebook_rating_test.cpp
+               tests/unit/library_service_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -183,6 +186,7 @@ add_executable(para-tests
                src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
                src/services/PeopleService.cpp
+               src/services/LibraryService.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
