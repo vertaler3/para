@@ -1,56 +1,73 @@
-<!DOCTYPE html>
-<!-- Страница входа (шаг 7 Э1). Вайрфрейм: 03 §4.1. Минимальная
-     семантическая разметка БЕЗ стилей: CSS/токены/иконки — FE-дорожка
-     (AGENTS.md §5.8; договорённость — docs/decisions.md Р-7).
-     Пользовательские данные в шаблоне отсутствуют: строки — серверные
-     константы, поэтому {{}}-интеграций нет. -->
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Пара — вход</title>
-</head>
-<body>
-  <header>
-    <h1>пара</h1>
-    <p>деканат в кармане</p>
-  </header>
-
-  <main>
-    <form method="post" action="/v1/auth/login">
-      <label for="login">Логин</label>
-      <input id="login" name="login" type="text" autocomplete="username" required>
-
-      <label for="password">Пароль</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
-
-      <button type="submit">Войти</button>
-      <!-- Состояние ошибки (01, экран входа): «Неверный логин или пароль»,
-           без раскрытия, что именно неверно. Оживит FE-дорожка. -->
-      <p role="alert" hidden>Неверный логин или пароль</p>
+<%c++
+/* Страница входа (шаг 7 Э1). История решения Р-7 (docs/decisions.md):
+   минимальная семантическая разметка БЕЗ стилей — логика/SQL в сервисах,
+   CSS/токены — владение FE-дорожки (AGENTS.md §5.8, договорённость Э1).
+   Э7, оформление FE-дорожки: разметка приведена к design-drafts/login.html
+   (бриф «спокойно видеть главное», пивот палитры — Р-16); partials head
+   и footer подключены директивой view (синтаксис drogon v1.9.14 — см.
+   partials/head.csp; имя шаблона — имя файла без расширения). Шапки
+   (topbar) и таб-бара у гостя НЕТ — экран входа без навигации (03 §4.1),
+   колокольчик и табы — после входа; skip-link и офлайн-баннер — в самом
+   шаблоне (в topbar их нет у этого экрана). Поведение формы — fetch POST
+   /v1/auth/login, «Входим…», ошибки у формы (03 §5.1/§5.3) — в
+   static/js/app.js. Пользовательские данные в шаблоне отсутствуют:
+   строки — серверные константы, экранирования не требуется (02 §6.4);
+   демо-пароль в разметку не подставляется (AGENTS.md §5.2). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN; как в design-drafts). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="login">
+<a class="skip" href="#main">К содержимому</a>
+<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text>Нет сети. Проверьте подключение — и попробуйте ещё раз.</span> <button type="button" class="offline-retry" data-offline-retry>Повторить</button></div>
+<main id="main" class="shell">
+  <div class="login-layout">
+    <header class="login-intro">
+      <p class="brand"><span class="brand-symbol" aria-hidden="true"></span>пара</p>
+      <p class="muted small">деканат в кармане</p>
+      <p class="eyebrow">Ваш студенческий кабинет</p>
+      <h1 class="serif">Хороший день<br>начинается с ясности.</h1>
+      <p class="muted small">Расписание, учёба и дела в кампусе — в одном месте.</p>
+    </header>
+    <form id="login-form" class="surface" method="post" action="/v1/auth/login">
+      <h2>Войти в кабинет</h2>
+      <div class="field">
+        <label for="login">Логин</label>
+        <input id="login" name="login" type="text" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Пароль</label>
+        <div class="password-wrap">
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <button type="button" class="icon-button" id="toggle-password" aria-label="Показать пароль" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+      </div>
+      <!-- data-offline-label — helper-текст офлайна на самой кнопке
+           (03 §5.4: «Нужна сеть для входа»), ставит/снимает applyOffline -->
+      <button class="button primary full section" type="submit" data-network-action data-offline-label="Нужна сеть для входа">Войти</button>
+      <!-- Текст ошибки — только при ответе сервера (03 §4.1: под кнопкой,
+           поля не очищаются; для invalid_credentials фокус переводится в
+           пароль). Заполняет static/js/app.js. -->
+      <p id="login-error" class="field-error" role="alert" hidden></p>
     </form>
-
-    <!-- Карточка «Демо-доступы для жюри» (03 §4.1). Значение единого
-         демо-пароля в разметку НЕ подставляется: оно публикуется в
-         комментарии к работе (AGENTS.md §5.2, §8); подстановка логина по
-         тапу — FE. Пометка про пароль — по заданию шага 7. -->
-    <section aria-label="Демо-доступы для жюри">
-      <h2>Демо-доступы для жюри</h2>
-      <ul>
-        <li>anya.demo — студентка 1 курса</li>
-        <li>oleg.demo — студент 1 курса</li>
-        <li>mark.demo — студент 4 курса</li>
-        <li>dina.demo — студентка 4 курса</li>
-        <li>dean.demo — сотрудник деканата</li>
-      </ul>
-      <p>Единый демо-пароль будет опубликован позже (появится на Э10).</p>
+    <!-- Карточка «Демо-доступы для жюри» (03 §4.1). Тап по строке подставляет
+         логин в поле (static/js/app.js, data-demo-login); пароль НЕ
+         подставляется: единый демо-пароль публикуется в комментарии к работе,
+         в репозитории и разметке его нет (AGENTS.md §5.2). -->
+    <section class="section" aria-labelledby="demo-access-title">
+      <div class="section-title"><h2 id="demo-access-title">Демо-доступы для жюри</h2></div>
+      <div class="login-roles">
+        <button type="button" class="role-button" data-demo-login="anya.demo" aria-pressed="false"><div><strong>anya.demo</strong><span>студентка 1 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="oleg.demo" aria-pressed="false"><div><strong>oleg.demo</strong><span>студент 1 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="mark.demo" aria-pressed="false"><div><strong>mark.demo</strong><span>студент 4 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="dina.demo" aria-pressed="false"><div><strong>dina.demo</strong><span>студентка 4 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="dean.demo" aria-pressed="false"><div><strong>dean.demo</strong><span>сотрудник деканата</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+      </div>
+      <p class="caption">Тап по строке подставляет логин в форму. Единый демо-пароль публикуется в комментарии к работе.</p>
     </section>
-  </main>
-
-  <!-- Дисклеймер-константа (01, строки 14–16; AGENTS.md §5.1) -->
-  <footer>
-    <p>Это концепт для хакатона. Все данные вымышленные. Не является
-       официальным сервисом вуза.</p>
-  </footer>
+  </div>
+</main>
+<%view footer %>
 </body>
 </html>
