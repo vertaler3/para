@@ -7,11 +7,13 @@
 //    6 дисциплин, 10 работ), пустое состояние (Аня) — average null и
 //    counters 0/0; пересдача (attempt 2) суммируется с первой попыткой
 //    (постановка: «сумма score/max по дисциплине» — поведение зафиксировано);
-//  - rating — факультет студента ИЗ БД (query не подменяет), своя строка
-//    полная, чужие — «И. Фамилия» (NameMask; полное имя чужих в ответе
-//    отсутствует); студенты без оценок — в конце с average null; staff —
-//    все маскированы, query faculty применяется только ему; limit — после
-//    сортировки; сортировка оценённых по среднему DESC;
+//  - rating — ОБЩИЙ (все студенты; гейт Э6а р1: маскирование — механизм
+//    приватности, «Поиск студентов ограничен своим факультетом» касается
+//    search, не рейтинга), своя строка полная, чужие — «И. Фамилия»
+//    (NameMask; полное имя чужих в ответе отсутствует — CHECK по всем
+//    фикстурным ФИО); ?faculty= — фильтр для любого запрашивающего;
+//    студенты без оценок — в конце с average null; staff — все
+//    маскированы; limit — после сортировки; оценённые по среднему DESC;
 //  - fail-closed: нет таблицы grades → Error (LEFT JOIN не «спасает»).
 // Данные — срез sql/fixtures.sql: оценки Марка (10 строк, «Мировая
 // экономика» 30+30+18=78 при пороге 82, «История МЭО» 25/60), группы
@@ -319,52 +321,65 @@ TEST_CASE("gradebook: пересдача (attempt 2) суммируется — 
     CHECK(r.body["counters"]["works"].as<int64_t>() == 11);
 }
 
-TEST_CASE("rating: своя строка полная, чужая — маска (02 §5.2)")
+TEST_CASE("rating: общий рейтинг — своя строка полная, чужие маскированы "
+          "(гейт Э6а р1)")
 {
     Fixture f;
-    // Марк (МЭО): факультет из БД, своя строка — полное ФИО.
+    // Марк: рейтинг ОБЩИЙ (все студенты), своя строка — полное ФИО, чужие —
+    // маскированы. Оценённый Марк первый, null-строки по user_id.
     auto r = ratingOf(f, 3);
     REQUIRE(r.status == RatingService::Status::Ok);
-    CHECK(r.body["faculty"].asString() ==
-          "Факультет мировой экономики и политики");
+    CHECK(r.body["faculty"].isNull());  // query faculty не задан
     const auto& lines = r.body["rating"];
-    REQUIRE(lines.size() == 1);
+    REQUIRE(lines.size() == 4);
     CHECK(lines[0]["rank"].as<int64_t>() == 1);
     CHECK(lines[0]["user_id"].as<int64_t>() == 3);
     CHECK(lines[0]["fio"].asString() == "Ливанов Марк Сергеевич");
     CHECK(lines[0]["average"].as<int64_t>() == 83);
     CHECK(lines[0]["self"].asBool() == true);
+    CHECK(lines[1]["user_id"].as<int64_t>() == 1);
+    CHECK(lines[1]["fio"].asString() == "А. Соколова");
+    CHECK(lines[1]["average"].isNull());
+    CHECK(lines[1]["self"].asBool() == false);
+    CHECK(lines[2]["fio"].asString() == "О. Родионов");
+    CHECK(lines[3]["fio"].asString() == "Д. Хакимова");
     CHECK(r.body["masked"].asBool() == true);
+    // Чужих полных ФИО нет (гейт: «чужих полных ФИО нет»).
+    Json::StreamWriterBuilder bAll;
+    bAll["emitUTF8"] = true;
+    bAll["indentation"] = "";
+    const std::string rawAll = Json::writeString(bAll, r.body);
+    CHECK(rawAll.find("Соколова Анна Игоревна") == std::string::npos);
+    CHECK(rawAll.find("Родионов Олег Павлович") == std::string::npos);
+    CHECK(rawAll.find("Хакимова Дина Ринатовна") == std::string::npos);
 
-    // Аня (ФМО): своя строка полная, Олег — «О. Родионов» (маска; обе
-    // average null — оценок нет, в конце списка).
+    // Гейт Э6а р1 «рейтингАниБезПолныхФИО»: рейтинг Ани — ни одного
+    // полного ФИО чужих, «М. Ливанов» ПРИСУТСТВУЕТ (Аня видит рейтинг
+    // всех факультетов, маскирование скрывает имена).
     auto ra = ratingOf(f, 1);
     REQUIRE(ra.status == RatingService::Status::Ok);
-    CHECK(ra.body["faculty"].asString() ==
-          "Факультет международных отношений (ФМО)");
     const auto& fl = ra.body["rating"];
-    REQUIRE(fl.size() == 2);
-    CHECK(fl[0]["user_id"].as<int64_t>() == 1);
-    CHECK(fl[0]["fio"].asString() == "Соколова Анна Игоревна");
-    CHECK(fl[0]["average"].isNull());
-    CHECK(fl[0]["self"].asBool() == true);
-    CHECK(fl[1]["user_id"].as<int64_t>() == 2);
-    CHECK(fl[1]["fio"].asString() == "О. Родионов");
-    CHECK(fl[1]["average"].isNull());
-    CHECK(fl[1]["self"].asBool() == false);
-    // Полное имя чужого наружу не уходит вовсе: сериализованный ответ
-    // (emitUTF8 — сырая кириллица, как api::jsonResponse) содержит маску
-    // «О. Родионов», но НЕ полное «Родионов Олег Павлович».
+    REQUIRE(fl.size() == 4);
+    CHECK(fl[0]["user_id"].as<int64_t>() == 3);
+    CHECK(fl[0]["fio"].asString() == "М. Ливанов");
+    CHECK(fl[0]["self"].asBool() == false);
+    CHECK(fl[1]["user_id"].as<int64_t>() == 1);
+    CHECK(fl[1]["fio"].asString() == "Соколова Анна Игоревна");  // своя
+    CHECK(fl[1]["self"].asBool() == true);
+    CHECK(fl[2]["fio"].asString() == "О. Родионов");
+    CHECK(fl[3]["fio"].asString() == "Д. Хакимова");
     Json::StreamWriterBuilder b;
     b["emitUTF8"] = true;
     b["indentation"] = "";
     const std::string raw = Json::writeString(b, ra.body);
-    CHECK(raw.find("О. Родионов") != std::string::npos);
+    CHECK(raw.find("М. Ливанов") != std::string::npos);   // гейт-чек
+    CHECK(raw.find("Ливанов Марк Сергеевич") == std::string::npos);
     CHECK(raw.find("Родионов Олег Павлович") == std::string::npos);
+    CHECK(raw.find("Хакимова Дина Ринатовна") == std::string::npos);
 }
 
-TEST_CASE("rating: staff — все факультеты (или ?faculty=), все маскированы; "
-          "сортировка оценённых по среднему")
+TEST_CASE("rating: staff — все маскированы; ?faculty= — фильтр для любого "
+          "запрашивающего; сортировка оценённых по среднему")
 {
     Fixture f;
     // dean без faculty: все 4 студента; оценённый Марк первый, остальные
@@ -392,14 +407,16 @@ TEST_CASE("rating: staff — все факультеты (или ?faculty=), в�
           "Факультет международных отношений (ФМО)");
     CHECK(rf.body["rating"].size() == 2);
 
-    // Студент НЕ может открыть чужой факультет через query (Р-15-стиль):
-    // Аня с faculty=МЭО всё равно видит рейтинг ФМО.
+    // Студент с ?faculty= — рейтинг чужого факультета (общий рейтинг,
+    // гейт Э6а р1: маскирование — механизм приватности, не факультет).
     auto rw = ratingOf(f, 1,
                        std::string("Факультет мировой экономики и политики"));
     REQUIRE(rw.status == RatingService::Status::Ok);
     CHECK(rw.body["faculty"].asString() ==
-          "Факультет международных отношений (ФМО)");
-    CHECK(rw.body["rating"].size() == 2);
+          "Факультет мировой экономики и политики");
+    REQUIRE(rw.body["rating"].size() == 1);
+    CHECK(rw.body["rating"][0]["user_id"].as<int64_t>() == 3);
+    CHECK(rw.body["rating"][0]["fio"].asString() == "М. Ливанов");
 }
 
 TEST_CASE("rating: сортировка оценённых по среднему; limit — после сортировки")

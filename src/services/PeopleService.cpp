@@ -5,6 +5,7 @@
 #include <drogon/drogon.h>
 
 #include "services/ScheduleService.h"
+#include "utils/NameMask.h"
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -93,12 +94,17 @@ Json::Value teacherJson(const Row& r)
     return p;
 }
 
-Json::Value studentRowJson(const Row& r)
+// Строка студента каталога. Правило гейта Э6а раунда 1 (уточнение Р-15):
+// «полное имя чужих из БД наружу не уходит вовсе» (02 §5.2) — правило
+// ВСЕГО каталога, не только рейтинга: чужому отдаётся МАСКИРОВАННОЕ
+// «И. Фамилия», полное — только в строке самого запрашивающего.
+Json::Value studentRowJson(const Row& r, bool self)
 {
     Json::Value p(Json::objectValue);
     p["id"] = r["id"].as<int64_t>();
     p["role"] = "student";
-    p["fio"] = r["fio"].as<std::string>();
+    p["fio"] = self ? r["fio"].as<std::string>()
+                    : maskFullName(r["fio"].as<std::string>());
     p["group"] = r["group_name"].as<std::string>();
     p["email"] = PeopleService::studentEmail(r["login"].as<std::string>());
     return p;
@@ -195,7 +201,8 @@ void PeopleService::search(DbClientPtr db,
     };
 
     // --- шаг 3: студенты (свой факультет у студента; staff — все) ---------
-    auto runStudents = [db, state, finish, wantStudents, facultyArg,
+    // Гейт Э6а р1: полное ФИО чужих наружу не уходит — маска в studentRowJson.
+    auto runStudents = [db, state, finish, wantStudents, requester, facultyArg,
                         qArg]() mutable {
         if (state->failed || !wantStudents)
         {
@@ -203,9 +210,10 @@ void PeopleService::search(DbClientPtr db,
             return;
         }
         *db << kStudentSearch << facultyArg << qArg >>
-            [state, finish](const drogon::orm::Result& rows) mutable {
+            [state, finish, requester](const drogon::orm::Result& rows) mutable {
                 for (const auto& r : rows)
-                    state->people.append(studentRowJson(r));
+                    state->people.append(studentRowJson(
+                        r, r["id"].as<int64_t>() == requester.userId));
                 finish();
             } >>
             [state, finish](const DrogonDbException& e) mutable {
@@ -318,7 +326,11 @@ void PeopleService::profile(DbClientPtr db,
             Json::Value p(Json::objectValue);
             p["id"] = r["id"].as<int64_t>();
             p["role"] = "student";
-            p["fio"] = r["fio"].as<std::string>();
+            // Гейт Э6а р1: чужому — МАСКИРОВАННОЕ «И. Фамилия», полное имя
+            // чужих из БД наружу не уходит вовсе (02 §5.2 строка 603 —
+            // правило всего каталога, уточнение Р-15).
+            p["fio"] = self ? r["fio"].as<std::string>()
+                            : maskFullName(r["fio"].as<std::string>());
             p["group"] = r["group_name"].as<std::string>();
             p["email"] = studentEmail(r["login"].as<std::string>());
             if (self)

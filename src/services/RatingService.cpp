@@ -53,23 +53,14 @@ void RatingService::rating(DbClientPtr db,
                            int maxRows,
                            ResultCb cb)
 {
-    // Факультет рейтинга: у студента — ТОЛЬКО свой (из БД по сессии, 02
-    // §6.3); у staff — query faculty или все (пустая строка = без фильтра).
+    // Факультет рейтинга (гейт Э6а р1, уточнение Р-15): рейтинг ОБЩИЙ —
+    // все студенты (чужие маскированы, поэтому раскрытия данных нет);
+    // «Поиск студентов ограничен своим факультетом» (02 §5.2) касается
+    // /v1/people/search, не рейтинга. query faculty — опциональный фильтр
+    // для любого запрашивающего (пустая строка = без фильтра).
     std::string facultyArg;
     std::string facultyTitle;
-    if (requester.role == "student")
-    {
-        if (!requester.faculty)
-        {
-            // Студент без профиля не бывает (profiles NOT NULL, 0001) —
-            // fail-closed: не рейтинг «всех», а ошибка.
-            cb(Result{Status::Error, Json::Value(), ""});
-            return;
-        }
-        facultyArg = *requester.faculty;
-        facultyTitle = *requester.faculty;
-    }
-    else if (faculty)
+    if (faculty)
     {
         facultyArg = *faculty;
         facultyTitle = *faculty;

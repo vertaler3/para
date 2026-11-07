@@ -291,6 +291,10 @@ TEST_CASE("search: преподаватели и сотрудники — все
     CHECK(people[2]["group"].asString() == "1-ФМО");
     CHECK(people[2]["email"].asString() == "anya.demo@example.edu");
     CHECK(people[3]["id"].as<int64_t>() == 2);  // Олег, та же группа
+    // Гейт Э6а р1: полное ФИО чужих наружу не уходит — в search чужие
+    // студенты маскированы (Аня видит себя полной, Олега — «О. Родионов»).
+    CHECK(people[2]["fio"].asString() == "Соколова Анна Игоревна");
+    CHECK(people[3]["fio"].asString() == "О. Родионов");
     for (const auto& p : people)
         CHECK(p["fio"].asString() != "Ливанов Марк Сергеевич");
 }
@@ -333,6 +337,8 @@ TEST_CASE("search: staff видит всех студентов; role=student/te
     REQUIRE(rf.status == PStatus::Ok);
     REQUIRE(rf.body["people"].size() == 1);
     CHECK(rf.body["people"][0]["id"].as<int64_t>() == 3);  // Марк
+    // У staff нет «своей» строки — чужой студент маскирован (гейт Э6а р1).
+    CHECK(rf.body["people"][0]["fio"].asString() == "М. Ливанов");
 
     // Студент НЕ может расширить факультет через ?faculty= (свой — из БД).
     PeopleService::SearchQuery widen;
@@ -415,7 +421,8 @@ TEST_CASE("profile: студент — свой полный, чужой — т�
     const auto& pub = other.body;
     CHECK(pub["id"].as<int64_t>() == 3);
     CHECK(pub["role"].asString() == "student");
-    CHECK(pub["fio"].asString() == "Ливанов Марк Сергеевич");
+    // Гейт Э6а р1: чужому — МАСКИРОВАННОЕ имя, полного ФИО в ответе нет.
+    CHECK(pub["fio"].asString() == "М. Ливанов");
     CHECK(pub["group"].asString() == "4-МЭО");
     CHECK(pub["email"].asString() == "mark.demo@example.edu");
     CHECK_FALSE(pub.isMember("faculty"));
@@ -423,6 +430,13 @@ TEST_CASE("profile: студент — свой полный, чужой — т�
     CHECK_FALSE(pub.isMember("course"));
     CHECK_FALSE(pub.isMember("group_id"));
     CHECK_FALSE(pub.isMember("student_card_no"));
+    // Полное имя чужого наружу не уходит вовсе (02 §5.2 строка 603 —
+    // правило всего каталога, гейт-чек «безОценок»).
+    Json::StreamWriterBuilder bMask;
+    bMask["emitUTF8"] = true;
+    bMask["indentation"] = "";
+    const std::string pubRaw = Json::writeString(bMask, pub);
+    CHECK(pubRaw.find("Ливанов Марк Сергеевич") == std::string::npos);
     // Оценки/заявки/брони чужих — никогда: в схеме ответа таких полей нет.
     CHECK_FALSE(pub.isMember("grades"));
     CHECK_FALSE(pub.isMember("applications"));
