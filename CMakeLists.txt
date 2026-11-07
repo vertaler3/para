@@ -82,6 +82,7 @@ add_executable(para
                src/controllers/RoomsCtrl.cpp
                src/controllers/WsCtrl.cpp
                src/controllers/AnnouncementsCtrl.cpp
+               src/controllers/NotificationsFeedCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -102,6 +103,7 @@ add_executable(para
                src/services/ScheduleChangeService.cpp
                src/services/StaffDashboard.cpp
                src/services/AnnouncementsService.cpp
+               src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
@@ -146,6 +148,7 @@ add_executable(para-tests
                tests/unit/reminder_service_test.cpp
                tests/unit/ws_registry_test.cpp
                tests/unit/staff_step_test.cpp
+               tests/unit/notifications_feed_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -166,6 +169,7 @@ add_executable(para-tests
                src/services/ScheduleChangeService.cpp
                src/services/StaffDashboard.cpp
                src/services/AnnouncementsService.cpp
+               src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp)
