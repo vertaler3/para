@@ -7,13 +7,13 @@
 //    6 дисциплин, 10 работ), пустое состояние (Аня) — average null и
 //    counters 0/0; пересдача (attempt 2) суммируется с первой попыткой
 //    (постановка: «сумма score/max по дисциплине» — поведение зафиксировано);
-//  - rating — ОБЩИЙ (все студенты; гейт Э6а р1: маскирование — механизм
+//  - rating — ОБЩИЙ по ОЦЕНЁННЫМ студентам (гейт Э6а р2: у студента без
+//    оценок среднего нет — строки в рейтинге нет; маскирование — механизм
 //    приватности, «Поиск студентов ограничен своим факультетом» касается
 //    search, не рейтинга), своя строка полная, чужие — «И. Фамилия»
 //    (NameMask; полное имя чужих в ответе отсутствует — CHECK по всем
 //    фикстурным ФИО); ?faculty= — фильтр для любого запрашивающего;
-//    студенты без оценок — в конце с average null; staff — все
-//    маскированы; limit — после сортировки; оценённые по среднему DESC;
+//    staff — все маскированы; limit — после сортировки; среднему DESC;
 //  - fail-closed: нет таблицы grades → Error (LEFT JOIN не «спасает»).
 // Данные — срез sql/fixtures.sql: оценки Марка (10 строк, «Мировая
 // экономика» 30+30+18=78 при пороге 82, «История МЭО» 25/60), группы
@@ -321,30 +321,25 @@ TEST_CASE("gradebook: пересдача (attempt 2) суммируется — 
     CHECK(r.body["counters"]["works"].as<int64_t>() == 11);
 }
 
-TEST_CASE("rating: общий рейтинг — своя строка полная, чужие маскированы "
-          "(гейт Э6а р1)")
+TEST_CASE("rating: общий рейтинг — своя строка полная, чужие маскированы; "
+          "только студенты СО средним (гейт Э6а р2)")
 {
     Fixture f;
-    // Марк: рейтинг ОБЩИЙ (все студенты), своя строка — полное ФИО, чужие —
-    // маскированы. Оценённый Марк первый, null-строки по user_id.
+    // Марк: рейтинг ОБЩИЙ (оценённые студенты всех факультетов), своя
+    // строка — полное ФИО. Аня/Олег/Дина без оценок — среднего нет, строк
+    // нет (гейт р2: «рейтинг Ани — ни одного полного ФИО»).
     auto r = ratingOf(f, 3);
     REQUIRE(r.status == RatingService::Status::Ok);
     CHECK(r.body["faculty"].isNull());  // query faculty не задан
     const auto& lines = r.body["rating"];
-    REQUIRE(lines.size() == 4);
+    REQUIRE(lines.size() == 1);
     CHECK(lines[0]["rank"].as<int64_t>() == 1);
     CHECK(lines[0]["user_id"].as<int64_t>() == 3);
     CHECK(lines[0]["fio"].asString() == "Ливанов Марк Сергеевич");
     CHECK(lines[0]["average"].as<int64_t>() == 83);
     CHECK(lines[0]["self"].asBool() == true);
-    CHECK(lines[1]["user_id"].as<int64_t>() == 1);
-    CHECK(lines[1]["fio"].asString() == "А. Соколова");
-    CHECK(lines[1]["average"].isNull());
-    CHECK(lines[1]["self"].asBool() == false);
-    CHECK(lines[2]["fio"].asString() == "О. Родионов");
-    CHECK(lines[3]["fio"].asString() == "Д. Хакимова");
     CHECK(r.body["masked"].asBool() == true);
-    // Чужих полных ФИО нет (гейт: «чужих полных ФИО нет»).
+    // Чужих полных ФИО нет (тривиально: чужих строк нет — они не оценены).
     Json::StreamWriterBuilder bAll;
     bAll["emitUTF8"] = true;
     bAll["indentation"] = "";
@@ -353,27 +348,24 @@ TEST_CASE("rating: общий рейтинг — своя строка полн�
     CHECK(rawAll.find("Родионов Олег Павлович") == std::string::npos);
     CHECK(rawAll.find("Хакимова Дина Ринатовна") == std::string::npos);
 
-    // Гейт Э6а р1 «рейтингАниБезПолныхФИО»: рейтинг Ани — ни одного
-    // полного ФИО чужих, «М. Ливанов» ПРИСУТСТВУЕТ (Аня видит рейтинг
-    // всех факультетов, маскирование скрывает имена).
+    // Гейт Э6а р2 «рейтингАниБезПолныхФИО»: рейтинг Ани — НИ ОДНОГО
+    // полного ФИО (её собственной строки нет — среднего нет), «М. Ливанов»
+    // присутствует.
     auto ra = ratingOf(f, 1);
     REQUIRE(ra.status == RatingService::Status::Ok);
     const auto& fl = ra.body["rating"];
-    REQUIRE(fl.size() == 4);
+    REQUIRE(fl.size() == 1);
     CHECK(fl[0]["user_id"].as<int64_t>() == 3);
     CHECK(fl[0]["fio"].asString() == "М. Ливанов");
+    CHECK(fl[0]["average"].as<int64_t>() == 83);
     CHECK(fl[0]["self"].asBool() == false);
-    CHECK(fl[1]["user_id"].as<int64_t>() == 1);
-    CHECK(fl[1]["fio"].asString() == "Соколова Анна Игоревна");  // своя
-    CHECK(fl[1]["self"].asBool() == true);
-    CHECK(fl[2]["fio"].asString() == "О. Родионов");
-    CHECK(fl[3]["fio"].asString() == "Д. Хакимова");
     Json::StreamWriterBuilder b;
     b["emitUTF8"] = true;
     b["indentation"] = "";
     const std::string raw = Json::writeString(b, ra.body);
     CHECK(raw.find("М. Ливанов") != std::string::npos);   // гейт-чек
     CHECK(raw.find("Ливанов Марк Сергеевич") == std::string::npos);
+    CHECK(raw.find("Соколова Анна Игоревна") == std::string::npos);
     CHECK(raw.find("Родионов Олег Павлович") == std::string::npos);
     CHECK(raw.find("Хакимова Дина Ринатовна") == std::string::npos);
 }
@@ -382,30 +374,25 @@ TEST_CASE("rating: staff — все маскированы; ?faculty= — фил
           "запрашивающего; сортировка оценённых по среднему")
 {
     Fixture f;
-    // dean без faculty: все 4 студента; оценённый Марк первый, остальные
-    // (null) по user_id; ВСЕ имена маскированы — у staff нет «своей» строки.
+    // dean: в рейтинге только студенты с оценками — Марк один, маска
+    // (у staff нет «своей» строки).
     auto r = ratingOf(f, 5);
     REQUIRE(r.status == RatingService::Status::Ok);
     CHECK(r.body["faculty"].isNull());
     const auto& lines = r.body["rating"];
-    REQUIRE(lines.size() == 4);
+    REQUIRE(lines.size() == 1);
     CHECK(lines[0]["user_id"].as<int64_t>() == 3);
     CHECK(lines[0]["fio"].asString() == "М. Ливанов");
     CHECK(lines[0]["average"].as<int64_t>() == 83);
     CHECK(lines[0]["self"].asBool() == false);
-    CHECK(lines[1]["fio"].asString() == "А. Соколова");
-    CHECK(lines[2]["fio"].asString() == "О. Родионов");
-    CHECK(lines[3]["fio"].asString() == "Д. Хакимова");
-    for (const auto& l : lines)
-        CHECK(l["self"].asBool() == false);
 
-    // staff + faculty-фильтр — только ФМО.
+    // staff + faculty-фильтр — ФМО без оценённых: честный пустой рейтинг.
     auto rf = ratingOf(f, 5,
                        std::string("Факультет международных отношений (ФМО)"));
     REQUIRE(rf.status == RatingService::Status::Ok);
     CHECK(rf.body["faculty"].asString() ==
           "Факультет международных отношений (ФМО)");
-    CHECK(rf.body["rating"].size() == 2);
+    CHECK(rf.body["rating"].size() == 0);
 
     // Студент с ?faculty= — рейтинг чужого факультета (общий рейтинг,
     // гейт Э6а р1: маскирование — механизм приватности, не факультет).
@@ -423,7 +410,8 @@ TEST_CASE("rating: сортировка оценённых по среднему
 {
     Fixture f;
     // Аня 60/100, Олег 50/100: оценённые по среднему DESC — Аня выше Олега;
-    // Марк (83) выше обеих. dean видит: Марк 83, Аня 60, Олег 50, Дина null.
+    // Марк (83) выше обеих. dean видит: Марк 83, Аня 60, Олег 50 (Дина
+    // без оценок — среднего нет, в рейтинге её строки нет — гейт р2).
     execOnDb(f.dbPath,
                    "INSERT INTO grades(id, user_id, discipline_id,"
                    " control_type, component, score, max_score, attempt,"
@@ -435,7 +423,7 @@ TEST_CASE("rating: сортировка оценённых по среднему
     auto r = ratingOf(f, 5);
     REQUIRE(r.status == RatingService::Status::Ok);
     const auto& lines = r.body["rating"];
-    REQUIRE(lines.size() == 4);
+    REQUIRE(lines.size() == 3);
     CHECK(lines[0]["user_id"].as<int64_t>() == 3);   // 83
     CHECK(lines[0]["rank"].as<int64_t>() == 1);
     CHECK(lines[1]["user_id"].as<int64_t>() == 1);   // 60
@@ -443,9 +431,6 @@ TEST_CASE("rating: сортировка оценённых по среднему
     CHECK(lines[1]["rank"].as<int64_t>() == 2);
     CHECK(lines[2]["user_id"].as<int64_t>() == 2);   // 50
     CHECK(lines[2]["rank"].as<int64_t>() == 3);
-    CHECK(lines[3]["user_id"].as<int64_t>() == 4);   // null — конец списка
-    CHECK(lines[3]["average"].isNull());
-    CHECK(lines[3]["rank"].as<int64_t>() == 4);
 
     // limit=2 — первые две строки отсортированного списка.
     auto rl = ratingOf(f, 5, {}, 2);

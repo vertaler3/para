@@ -19,24 +19,26 @@ namespace
 // остаются в списке (score_sum/max_sum NULL → average null, конец списка).
 // Факультет-фильтр — через «пустая строка = фильтра нет» (фиксированное
 // число параметров, урок Э5: порядок $N = порядку биндинга).
-// Сортировка: сначала оценённые по среднему DESC (NULL-математика SQLite
-// ставит NULL последними при DESC), затем детерминированно по user_id.
+// РЕЙТИНГ = студенты СО средним баллом (гейт Э6а раунд 2): у студента без
+// оценок среднего нет — строки в рейтинге нет вовсе (02 §5.2 «рейтинг …
+// по среднему баллу»; именно так чеки Марка и Ани согласуются: в рейтинге
+// Марка — его строка с полным ФИО, в рейтинге Ани — ни одного полного ФИО,
+// только «М. Ливанов»). INNER JOIN grades (не LEFT) — без-оценочные
+// выпадают; GROUP BY — одна агрегированная строка на студента.
+// Сортировка: по среднему DESC, затем детерминированно по user_id.
 const std::string kRatingSql =
     "SELECT u.id AS user_id, p.fio, p.faculty, "
     "SUM(g.score) AS score_sum, SUM(g.max_score) AS max_sum "
     "FROM users u JOIN profiles p ON p.user_id = u.id "
-    "LEFT JOIN grades g ON g.user_id = u.id "
+    "JOIN grades g ON g.user_id = u.id "
     "WHERE u.role = 'student' AND ($1 = '' OR p.faculty = $1) "
     "GROUP BY u.id, p.fio, p.faculty "
-    "ORDER BY (SUM(g.max_score) IS NULL) ASC, "
-    "(100.0 * SUM(g.score) / SUM(g.max_score)) DESC, u.id ASC";
+    "ORDER BY (100.0 * SUM(g.score) / SUM(g.max_score)) DESC, u.id ASC";
 
 // Средний — взвешенный процент Σscore/Σmax×100, целое (арифметика
-// GradesService::summary Э4 / GradebookService); NULL → null.
+// GradesService::summary Э4 / GradebookService); max<=0 — не рейтинговать.
 Json::Value averageOf(const drogon::orm::Row& r)
 {
-    if (r["max_sum"].isNull())
-        return Json::Value();  // оценок нет
     const int64_t maxSum = r["max_sum"].as<int64_t>();
     if (maxSum <= 0)
         return Json::Value();
