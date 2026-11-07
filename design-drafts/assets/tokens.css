@@ -8,7 +8,7 @@
  --danger-text:#B42332; --danger-bg:#FFF1F2;
  --success-text:#215E52; --success-bg:#E7F0EA;
  --warning-text:#B42332; --warning-bg:#FFF1F2;
- --border:#DCE6DF; --control-border:#7B8E85;
+ --border:#DCE6DF; --control-border:#768A80;
  --overlay:rgba(18,37,30,.45); --clear:transparent;
  --e1:0 2px 3px rgba(27,54,43,.025); --e2:0 3px 10px rgba(27,54,43,.04); --e3:0 12px 32px rgba(27,54,43,.10);
  --r-sm:.5rem; --r-md:.75rem; --r-lg:1.125rem; --r-xl:1.25rem; --r-full:999px;
@@ -33,3 +33,4 @@
  --success-text:#B5DEC9; --success-bg:#22392F; --border:#354A3F; --control-border:#839F8E;
  --overlay:rgba(0,10,5,.7); --e1:none; --e2:none; --e3:0 12px 32px rgba(0,10,5,.25);
 }
+
