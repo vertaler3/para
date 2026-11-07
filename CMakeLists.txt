@@ -84,6 +84,8 @@ add_executable(para
                src/controllers/AnnouncementsCtrl.cpp
                src/controllers/NotificationsFeedCtrl.cpp
                src/controllers/PeopleCtrl.cpp
+               src/controllers/GradebookCtrl.cpp
+               src/controllers/RatingCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -92,6 +94,8 @@ add_executable(para
                src/services/ScheduleService.cpp
                src/services/ScheduleCache.cpp
                src/services/GradesService.cpp
+               src/services/GradebookService.cpp
+               src/services/RatingService.cpp
                src/services/AppWorkflow.cpp
                src/services/ApplicationsService.cpp
                src/services/PdfBuilder.cpp
@@ -153,6 +157,7 @@ add_executable(para-tests
                tests/unit/staff_step_test.cpp
                tests/unit/notifications_feed_test.cpp
                tests/unit/people_service_test.cpp
+               tests/unit/gradebook_rating_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -162,6 +167,8 @@ add_executable(para-tests
                src/services/ScheduleService.cpp
                src/services/ScheduleCache.cpp
                src/services/GradesService.cpp
+               src/services/GradebookService.cpp
+               src/services/RatingService.cpp
                src/services/AppWorkflow.cpp
                src/services/ApplicationsService.cpp
                src/services/PdfBuilder.cpp
