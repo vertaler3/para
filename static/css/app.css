@@ -17,3 +17,9 @@
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{body{background:var(--surface)}.site-header,.primary-nav,.footer,.button,.page-heading,.toast,.skip{display:none!important}.shell{padding:0;max-width:none}.document-paper{border:0;padding:0;border-radius:0}.document-watermark{font-size:1rem}.print-only{display:block}}
 .row>.icon-button{min-width:44px;flex-shrink:0}.week-strip{gap:2px}.day-pill{min-width:44px}
+/* Дашборд «Сегодня» (экран Э7): точка срочности дедлайна 8px (03 §4.2:
+   норма --border, ≤3 дней --warning-text, завтра --danger-text — только
+   существующие токены, новых цветовых пар нет); виджет-карточки-ссылки
+   (a.next-class/a.lesson — блочный якорь вместо inline-flex глобального a);
+   пустые состояния виджетов; прошедшие пары дня — --text-3 (03 §4.2). */
+.deadline-dot{display:inline-block;width:8px;height:8px;border-radius:var(--r-full);background:var(--border);margin-right:.5rem}.deadline-dot.dot-warn{background:var(--warning-text)}.deadline-dot.dot-danger{background:var(--danger-text)}.widget-empty{margin-top:.5rem;display:grid;gap:.75rem;justify-items:start}.widget-error{font-size:.875rem;color:var(--danger-text);margin-top:.4rem}a.next-class{display:block;color:var(--text);text-decoration:none}.next-room-line{margin-top:.75rem}a.lesson{color:var(--text);text-decoration:none}.lesson.is-past .lesson-subject,.lesson.is-past .lesson-time strong{color:var(--text-3)}

@@ -1,0 +1,132 @@
+<%c++
+/* Дашборд «Сегодня» (Э7 FE, экран 3 из 3; 03 §4.2, design-drafts/
+   dashboard.html и dashboard-states.html, каркас partials Э7). Шаблон НЕ
+   держит пользовательских данных: в разметке — скелетоны (начальное
+   состояние до ответа), пустые тексты 03 §5.2, компактные ошибки виджетов
+   03 §4.2/§5.3 и блок ошибки экрана — серверные константы; контент виджетов
+   заполняет static/js/app.js из GET /v1/dashboard через textContent (без
+   innerHTML — 02 §6.4). Пять состояний виджета (правки по ревью экрана):
+     скелетон — в разметке, скрыт при получении данных (shimmer каркаса);
+     пусто    — подписи виджетов («Пар нет — день твой» и др., 03 §5.2);
+     ошибка   — [data-*-error]: компактная строка «Не получилось загрузить
+                {раздел}» с «Повторить» (03 §4.2 «свой компактный
+                ErrorState — сбой одного не роняет экран», 03 §5.3);
+                показывается по массиву degraded из агрегата — сбой
+                источника отличим от «нет данных»;
+     офлайн   — баннер topbar («Нет сети…»), показывает app.js;
+     экран    — [data-dashboard-error] при сетевом сбое/невалидном теле.
+   Виджеты и ссылки на объект (03 §4.2): «Следующая пара» и «Сегодня» →
+   /schedule (строка с переносом/отменой → /schedule?date=<день> — канон
+   deep_link фикстур Э6; отдельная карточка изменения §4.9.1 — экран Э7,
+   который ещё не собран, ссылка ведёт к дню с переносом); «Дедлайны» →
+   /grades; «Заявки» → /applications/{id}; «Что нового» → /notifications.
+   Порядок виджетов зависит от времени (03 §4.2, переставляет app.js):
+     06–12 — «Следующая пара», «Сегодня», дедлайны, заявки, «Что нового»;
+     12–18 — остаток «Сегодня» вверх; «Следующая пара» видима, пока есть;
+     18–23 — сверху «Что сдать завтра» (пары+дедлайны завтра; пары —
+             GET /v1/schedule/week?offset=0|1, дедлайны — из агрегата);
+     ночь  — «За ночь: N событий» вместо «Что нового» (N — unread_count
+             агрегата: накопившиеся непрочитанные; счётчики «· N» в
+             заголовках «Сегодня»/«Что нового» и минутный отсчёт «Следующей
+             пары» ведёт app.js).
+   На ≥1024px .dashboard-grid — две колонки (колонка + aside.dashboard-side
+   из app.css). «Следующая пара» после последней пары скрывается (03 §5.2). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN; как в views/login.csp). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="dashboard">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow" data-today-date>Сегодня</p>
+      <h1 class="serif"><span data-greeting>Добрый день</span><span data-greeting-tail hidden>, <span data-account-short></span></span>.</h1>
+      <p>Всё важное — на один экран.</p>
+    </div>
+  </div>
+  <div class="dashboard-grid">
+    <div data-main-column>
+      <!-- ==== Что сдать завтра (03 §4.2: 18:00–23:00 — сверху; пары —
+           из /v1/schedule/week, дедлайны — из агрегата; строит app.js) ==== -->
+      <section class="section" data-widget="tomorrow" hidden>
+        <div class="section-title"><h2>Что сдать завтра</h2><a href="/schedule">Всё <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div data-tomorrow-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div></div>
+        <div class="schedule-list" data-tomorrow-body hidden></div>
+      </section>
+      <!-- ==== Следующая пара → /schedule (03 §4.2); скрывается, когда пар
+           больше нет (03 §5.2); отсчёт обновляется раз в минуту (app.js) ==== -->
+      <section class="section" data-widget="next-class">
+        <p class="overline">Следующая пара</p>
+        <div data-next-loading aria-hidden="true"><div class="skeleton block"></div></div>
+        <a class="next-class" href="/schedule" data-next-body hidden>
+          <div class="next-top">
+            <p class="next-meta"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span data-next-meta>скоро</span></p>
+            <span class="badge outline" data-next-kind hidden></span>
+          </div>
+          <p class="next-time" data-next-time></p>
+          <h2 data-next-discipline></h2>
+          <p class="small muted next-room-line">аудитория <span data-next-room></span></p>
+        </a>
+        <p class="widget-error" data-next-error hidden>Не получилось загрузить расписание. <button type="button" class="offline-retry" data-widget-retry>Повторить</button></p>
+      </section>
+      <!-- ==== Сегодня → /schedule: все пары дня; счётчик «· N пар» —
+           app.js; строка с переносом → /schedule?date=<день> ==== -->
+      <section class="section" data-widget="today">
+        <div class="section-title"><h2 data-today-title>Сегодня</h2><a href="/schedule">Всё <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div data-today-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div><div class="skeleton"></div></div>
+        <div class="schedule-list" data-today-body hidden></div>
+        <p class="muted small" data-today-empty hidden>Пар нет — день твой</p>
+        <p class="widget-error" data-today-error hidden>Не получилось загрузить расписание. <button type="button" class="offline-retry" data-widget-retry>Повторить</button></p>
+      </section>
+    </div>
+    <aside class="dashboard-side" aria-label="Дедлайны, заявки, что нового">
+      <!-- ==== Дедлайны → /grades: ближайшие события сессии с точкой
+           срочности (03 §4.2: норма --border, ≤3 дней --warning-text,
+           завтра --danger-text) ==== -->
+      <section class="section" data-widget="deadlines">
+        <div class="section-title"><h2>Дедлайны</h2><a href="/grades">Все <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div data-deadlines-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div></div>
+        <ul class="deadline-list" data-deadlines-body hidden></ul>
+        <p class="muted small" data-deadlines-empty hidden>Дедлайнов на горизонте нет</p>
+        <p class="widget-error" data-deadlines-error hidden>Не получилось загрузить дедлайны. <button type="button" class="offline-retry" data-widget-retry>Повторить</button></p>
+      </section>
+      <!-- ==== Заявки → /applications/{id}: последние активные ==== -->
+      <section class="section" data-widget="applications">
+        <div class="section-title"><h2>Заявки</h2><a href="/applications">Все <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div data-applications-loading aria-hidden="true"><div class="skeleton"></div><div class="mini-progress"><span class="done"></span><span class="done"></span><span></span></div></div>
+        <div data-applications-body hidden></div>
+        <div class="widget-empty" data-applications-empty hidden>
+          <p class="muted small">Заявок пока нет</p>
+          <a class="button ghost" href="/applications">Подать заявку</a>
+        </div>
+        <p class="widget-error" data-applications-error hidden>Не получилось загрузить заявки. <button type="button" class="offline-retry" data-widget-retry>Повторить</button></p>
+      </section>
+      <!-- ==== Что нового → /notifications: последние уведомления;
+           ночью заголовок меняется на «За ночь: N событий» (03 §4.2,
+           переставляет app.js) ==== -->
+      <section class="section" data-widget="news">
+        <div class="section-title"><h2 data-news-title>Что нового</h2><a href="/notifications">Все <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div data-news-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div></div>
+        <div data-news-body hidden></div>
+        <p class="muted small" data-news-empty hidden>Пока ничего нового</p>
+        <p class="widget-error" data-news-error hidden>Не получилось загрузить ленту. <button type="button" class="offline-retry" data-widget-retry>Повторить</button></p>
+      </section>
+    </aside>
+  </div>
+  <!-- ==== Ошибка загрузки экрана (03 §5.3: «Не получилось загрузить
+       {раздел}» / «Проверьте интернет — и попробуем ещё раз» / кнопка
+       «Повторить»); достижима при сетевом сбое/невалидном теле — ошибки
+       отдельных источников показываются компактно внутри виджетов;
+       офлайн-баннер при этом показывает каркас (topbar + app.js) ==== -->
+  <section class="section flow" data-dashboard-error hidden role="alert">
+    <h3>Не получилось загрузить «Сегодня»</h3>
+    <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+    <button class="button" type="button" data-dashboard-retry>Повторить</button>
+  </section>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>
