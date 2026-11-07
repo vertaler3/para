@@ -378,6 +378,12 @@ TEST_CASE("ScheduleService: week — неделя группы и смещени
     // Порядок по starts_at внутри недели.
     CHECK(w0.body["events"][0]["id"].as<int64_t>() == 1);
     CHECK(w0.body["events"][9]["id"].as<int64_t>() == 10);
+    // Э6а (гайд §9а): week-ответы дополняются teacher_id — фикстурные
+    // значения колонки (событие 1 → Симонов teachers.id 4, событие 10 →
+    // Рахимова teachers.id 3); FE считает people-адрес по Р-15.
+    CHECK(w0.body["events"][0].isMember("teacher_id"));
+    CHECK(w0.body["events"][0]["teacher_id"].as<int64_t>() == 4);
+    CHECK(w0.body["events"][9]["teacher_id"].as<int64_t>() == 3);
 
     // offset=1: следующая неделя — пусто.
     const auto w1 = weekOf(f.db, 1, 1, nullptr, "2026-11-05");
