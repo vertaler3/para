@@ -1,0 +1,31 @@
+<%c++
+/* Пара · голова документа (каркас FE, Э7). Частичные шаблоны подключаются
+   директивой view синтаксиса drogon v1.9.14: первой строкой шаблона страницы —
+   view head, далее topbar, main страницы, tabbar, footer — все рендерятся с
+   одними view-данными страницы. После head-шаблона страница сама открывает
+   body (с data-page) и закрывает body/html; контент страницы оборачивается
+   в <main id="main"> — цель skip-link из topbar.csp (03 §6.4).
+   Примечание: csp-инклюдов в v1.9.14 нет (директива inc вставляет строку C++
+   в сгенерированный файл, а не подключает шаблон); вывод переменных — [[ имя ]]
+   или блоком C++, экранирования нет ни там, ни там.
+   pageTitle — view-переменная, которую страница (её рендер-вызов) вставляет в
+   HttpViewData ДО рендера; пусто/нет — «Пара». Понимаются std::string и
+   const char*. Вывод экранируется htmlTranslate; сюда подставлять только
+   серверные константы — названия экранов (02 §6.4: экранирование данных). */
+const std::any &pageTitleVal = @@["pageTitle"];
+std::string pageTitle;
+if(pageTitleVal.type() == typeid(std::string))
+    pageTitle = *std::any_cast<std::string>(&pageTitleVal);
+else if(pageTitleVal.type() == typeid(const char *))
+    pageTitle = *std::any_cast<const char *>(&pageTitleVal);
+if(pageTitle.empty()) pageTitle = "Пара";
+%>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%c++ $$ << HttpViewData::htmlTranslate(pageTitle); %></title>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/app.css">
+</head>

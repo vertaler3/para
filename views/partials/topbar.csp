@@ -1,0 +1,28 @@
+<%c++
+/* Пара · шапка экрана + skip-link + офлайн-баннер (каркас FE, Э7).
+   Skip-link — первый фокусируемый элемент страницы (03 §6.4, черновики:
+   класс .skip из app.css); цель #main ОБЯЗАНА быть на странице — каждый
+   экран открывает <main id="main">.
+   Шапка: логотип-концепт «пара» с символом из токенов (без логотипа вуза) +
+   колокольчик уведомлений. Бейдж непрочитанных скрыт по умолчанию; счётчик
+   заполняет static/js/app.js из GET /v1/notifications?unread=1 (длина первой
+   страницы — 20 записей, максимум «20+»; 401/ошибка — бейдж остаётся
+   скрытым). Высота шапки — реализация брифа html-дорожки: .header-inner
+   min-height 72px (80px на ≥1024px), sticky; спека 03 §3.3 «56px» —
+   до синхронизации 03 (пивот палитры/оболочки — Р-16 в docs/decisions.md).
+   Под шапкой — офлайн-баннер (03 §5.4: строка, не модально); тап по баннеру
+   и кнопка «Повторить» — проверка сети в static/js/app.js. */
+%>
+<a class="skip" href="#main">К содержимому</a>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/" aria-label="Пара, на главную"><span class="brand-symbol" aria-hidden="true"></span>пара</a>
+    <div class="header-actions">
+      <a class="icon-button" href="/notifications" aria-label="Уведомления">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+        <span class="notification-count" data-unread-badge hidden></span>
+      </a>
+    </div>
+  </div>
+</header>
+<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text>Нет сети. Проверьте подключение — и попробуйте ещё раз.</span> <button type="button" class="offline-retry" data-offline-retry>Повторить</button></div>
