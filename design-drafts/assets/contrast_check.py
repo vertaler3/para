@@ -10,7 +10,7 @@ pairs=[(t,b) for t in ('text','text-2','text-3','primary') for b in ('bg','surfa
 pairs += [('on-primary',b) for b in ('primary','primary-hover','primary-pressed')]
 pairs += [(s+'-text',s+'-bg') for s in ('success','warning','danger','primary-soft')]
 pairs += [(s+'-text','surface') for s in ('success','warning','danger')]
-pairs += [('primary-soft-text','surface'),('text','primary-soft-bg'),('text-2','primary-soft-bg'),('bg','text')]
+pairs += [('primary-soft-text','surface'),('text','primary-soft-bg'),('text-2','primary-soft-bg'),('bg','text'),('primary','primary-soft-bg')]
 failed=0
 print('WCAG: c=sRGB/255; c_lin=c/12.92 if c<=0.04045 else ((c+0.055)/1.055)^2.4; L=0.2126R+0.7152G+0.0722B; CR=(Lmax+0.05)/(Lmin+0.05). All text threshold 4.5:1 (including large).')
 for theme,source in [('light',light),('dark',dark)]:
