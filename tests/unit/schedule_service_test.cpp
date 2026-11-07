@@ -325,11 +325,14 @@ TEST_CASE("ScheduleService: today — свой день, свой порядок
     // Отменённая пара — прямо в today (todayHasCancelled).
     CHECK(events[0]["status"].asString() == "cancelled");
     CHECK(events[0]["prev_room"].asString() == "2109");
-    // Форма события 02 §5.2: дисциплина JOIN'ом, teacher_id не закладываем
-    // (гайд BE §5 Э3 — добавит Э6а).
+    // Форма события 02 §5.2: дисциплина JOIN'ом. Э6а (гайд §9а):
+    // schedule-ответы дополняются teacher_id — «История России» идёт у
+    // Симонова (teachers.id 4), фикстурное значение колонки; FE считает
+    // people-адрес по Р-15 (teacher_id + kPersonIdOffset).
     CHECK(events[1]["discipline"].asString() == "История России");
     CHECK(events[1]["code"].asString() == "HR-101");
-    CHECK_FALSE(events[1].isMember("teacher_id"));
+    CHECK(events[1].isMember("teacher_id"));
+    CHECK(events[1]["teacher_id"].as<int64_t>() == 4);
     CHECK(events[1]["prev_room"].isNull());
 
     // Другой день — свои две пары понедельника.
@@ -432,15 +435,16 @@ TEST_CASE("ScheduleService: changes — статусы, окно days, prev_* «
         CHECK(e["prev_room"].asString() == "2109");
         CHECK(e["prev_starts_at"] == e["starts_at"]);
     }
-    // Замещение преподавателя: prev_teacher_id = 6 («было»), текущий
-    // teacher_id в ответе отсутствует (Э6а добавит).
+    // Замещение преподавателя: prev_teacher_id = 6 («было»); Э6а: текущий
+    // teacher_id тоже в ответе (замещающий — «стало»).
     for (const auto& e : changes)
     {
         if (e["id"].as<int64_t>() != 11)
             continue;
         CHECK(e["status"].asString() == "substituted");
         CHECK(e["prev_teacher_id"].as<int64_t>() == 6);
-        CHECK_FALSE(e.isMember("teacher_id"));
+        CHECK(e.isMember("teacher_id"));
+        CHECK(e["teacher_id"].as<int64_t>() == 1);  // fixture: замещающий id 1
     }
 
     // Окно days: 1 день → только отменённая пара 05.11; 2 дня → 04–05.11.

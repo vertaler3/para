@@ -64,6 +64,16 @@ class ScheduleService
         const std::string& toIsoExclusive,
         std::function<void(bool ok, Json::Value events)> cb);
 
+    // Занятия преподавателя (5.11: GET /v1/people/{id}/schedule; Э6а) — все
+    // schedule_events по teacher_id, ORDER BY starts_at. teacherId —
+    // teachers.id (0002); профиль человека адресуется конвенцией Р-15
+    // (PeopleService: teacher_profiles.id выровнен 1:1 с teachers.id
+    // фикстурами — Р-13), смещение считает PeopleService.
+    static void eventsByTeacher(
+        drogon::orm::DbClientPtr db,
+        int64_t teacherId,
+        std::function<void(bool ok, Json::Value events)> cb);
+
     // Изменения (С3 «было → стало»): статусы moved/cancelled/substituted
     // (фиксированный белый список 02 §4.1 — SQL-литералы, не пользовательский
     // ввод), чья дата начала входит в последние days календарных суток,

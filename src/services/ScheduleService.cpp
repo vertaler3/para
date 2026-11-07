@@ -14,14 +14,15 @@ using namespace drogon::orm;
 namespace para {
 namespace {
 
-// SELECT-часть одна для всех трёх выборок: поля события в JSON 02 §5.2 +
-// название/код дисциплины (карточка пары). teacher_id НЕ отдаётся — гайд BE
-// §5 (Э3): «с Э6а в ответы расписания добавится teacher_id — на этом этапе
-// не закладывай»; prev_teacher_id — часть «было → стало» замещения (С3),
-// он в схеме с Э1 (миграция 0002).
+// SELECT-часть одна для всех выборок: поля события в JSON 02 §5.2 +
+// название/код дисциплины (карточка пары). Э6а (гайд BE §9а): schedule-
+// ответы дополняются teacher_id — FE вешает ссылку на профиль человека
+// (/v1/people/{id}) из «Деталей пары» (5.11); NULL → null (DDL допускает).
+// prev_teacher_id — часть «было → стало» замещения (С3), он в схеме с Э1.
 const std::string kSelect =
     "SELECT e.id, e.room, e.kind, e.starts_at, e.ends_at, e.status, "
     "e.prev_room, e.prev_starts_at, e.prev_teacher_id, e.changed_at, "
+    "e.teacher_id, "
     "d.code AS discipline_code, d.title AS discipline_title "
     "FROM schedule_events e JOIN disciplines d ON d.id = e.discipline_id ";
 
@@ -59,6 +60,9 @@ Json::Value eventJson(const Row& r)
     e["prev_starts_at"] = optString(r, "prev_starts_at");
     e["prev_teacher_id"] = optInt64(r, "prev_teacher_id");
     e["changed_at"] = optString(r, "changed_at");
+    // Э6а: профиль преподавателя для «Деталей пары» — /v1/people/{id} с
+    // people-пространством (teacher_id + kPersonIdOffset, Р-15) считает FE.
+    e["teacher_id"] = optInt64(r, "teacher_id");
     return e;
 }
 
@@ -187,6 +191,31 @@ void ScheduleService::eventsOnDay(
                   dayStartIso(date),
                   dayStartIso(addDays(date, 1)),
                   std::move(cb));
+}
+
+void ScheduleService::eventsByTeacher(
+    DbClientPtr db,
+    int64_t teacherId,
+    std::function<void(bool ok, Json::Value events)> cb)
+{
+    // 5.11 «его занятия» (Э6а): фиксированная выборка по teacher_id
+    // (не пользовательский SQL), порядок по времени. Индекса teacher_id в
+    // схеме нет (02 §4.2 не предполагал выборку по преподавателю) — каталог
+    // демо мал; при росте — частичный индекс (задача оптимизации, 02 §7.1).
+    const std::string sql =
+        kSelect + "WHERE e.teacher_id = $1 ORDER BY e.starts_at";
+    // Ловушка Э6 шага 4 (задокументирована в журнале): неквалифицированный
+    // `Result` в лямбдах member-функции резолвится во ВЛОЖЕННЫЙ
+    // ScheduleService::Result — только полная квалификация.
+    *db << sql << teacherId >>
+        [cb](const drogon::orm::Result& rows) {
+            cb(true, eventsArray(rows));
+        } >>
+        [cb](const DrogonDbException& e) {
+            LOG_ERROR << "ScheduleService::eventsByTeacher: "
+                      << e.base().what();
+            cb(false, Json::Value());
+        };
 }
 
 void ScheduleService::recentChanges(

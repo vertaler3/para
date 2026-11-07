@@ -83,6 +83,7 @@ add_executable(para
                src/controllers/WsCtrl.cpp
                src/controllers/AnnouncementsCtrl.cpp
                src/controllers/NotificationsFeedCtrl.cpp
+               src/controllers/PeopleCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -105,9 +106,11 @@ add_executable(para
                src/services/AnnouncementsService.cpp
                src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
+               src/services/PeopleService.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
-               src/utils/LoginLimiter.cpp)
+               src/utils/LoginLimiter.cpp
+               src/utils/NameMask.cpp)
 
 target_include_directories(para PRIVATE
                            ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -149,6 +152,7 @@ add_executable(para-tests
                tests/unit/ws_registry_test.cpp
                tests/unit/staff_step_test.cpp
                tests/unit/notifications_feed_test.cpp
+               tests/unit/people_service_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -171,8 +175,10 @@ add_executable(para-tests
                src/services/AnnouncementsService.cpp
                src/services/NotificationsFeedService.cpp
                src/services/WsRegistry.cpp
+               src/services/PeopleService.cpp
                src/filters/StaffFilter.cpp
-               src/utils/LoginLimiter.cpp)
+               src/utils/LoginLimiter.cpp
+               src/utils/NameMask.cpp)
 
 target_include_directories(para-tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
