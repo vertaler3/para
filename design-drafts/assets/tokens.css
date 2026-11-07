@@ -1,27 +1,35 @@
-/* Дизайн-решение §2. Единственный источник цветов прототипа. */
+/* Пара / «спокойно видеть главное». Все цвета объявлены только здесь. */
 :root {
- color-scheme: light;
- --bg:#F6F7FB; --surface:#FFFFFF; --surface-2:#EDF0F7;
- --text:#15182B; --text-2:#4C5265; --text-3:#636B80; --border:#E2E6EF;
- --primary:#3D4EE0; --primary-hover:#303FBE; --primary-pressed:#2A37A6; --on-primary:#FFFFFF;
- --primary-soft-bg:#E9ECFF; --primary-soft-text:#2C37B8;
- --success-text:#1B6B45; --success-bg:#E2F5EA; --warning-text:#8A5800; --warning-bg:#FFF2D2;
- --danger-text:#C22B39; --danger-bg:#FCE9EA; --accent:#FF6B3D;
- --overlay:rgba(21,24,43,.4); --clear:transparent;
- --e1:0 1px 2px rgba(21,24,43,.06); --e2:0 2px 8px rgba(21,24,43,.08); --e3:0 8px 24px rgba(21,24,43,.14);
- --s1:.25rem; --s2:.5rem; --s3:.75rem; --s4:1rem; --s5:1.25rem; --s6:1.5rem; --s7:2rem; --s8:2.5rem; --s9:3.5rem;
- --r-sm:.5rem; --r-md:.75rem; --r-lg:1rem; --r-xl:1.5rem; --r-full:999px;
- --font-body:Inter,system-ui,sans-serif; --font-heading:Manrope,system-ui,sans-serif;
+ color-scheme:light;
+ --bg:#F7F8F5; --surface:#FFFFFF; --surface-2:#E7F0EA;
+ --text:#273F3A; --text-2:#5C7069; --text-3:#5C7069;
+ --primary:#257365; --primary-hover:#1D6155; --primary-pressed:#174E45;
+ --on-primary:#FFFFFF; --primary-soft-bg:#E7F0EA; --primary-soft-text:#215E52;
+ --danger-text:#B42332; --danger-bg:#FFF1F2;
+ --success-text:#215E52; --success-bg:#E7F0EA;
+ --warning-text:#B42332; --warning-bg:#FFF1F2;
+ --border:#DCE6DF; --control-border:#7B8E85;
+ --overlay:rgba(18,37,30,.45); --clear:transparent;
+ --e1:0 2px 3px rgba(27,54,43,.025); --e2:0 3px 10px rgba(27,54,43,.04); --e3:0 12px 32px rgba(27,54,43,.10);
+ --r-sm:.5rem; --r-md:.75rem; --r-lg:1.125rem; --r-xl:1.25rem; --r-full:999px;
+ --font-body:Inter,Arial,sans-serif; --font-heading:Inter,Arial,sans-serif; --font-greeting:Georgia,'Times New Roman',serif;
+ --space-1:.25rem; --space-2:.5rem; --space-3:.75rem; --space-4:1rem; --space-6:1.5rem; --space-8:2rem;
 }
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]) {
- color-scheme:dark; --bg:#0E1120; --surface:#171B2E; --surface-2:#1F2540; --text:#F1F3FB; --text-2:#AAB1C6; --text-3:#8B92AA; --border:#2B3152;
- --primary:#8E99FF; --primary-hover:#9AA4FF; --primary-pressed:#7F8AF2; --on-primary:#0E1120; --primary-soft-bg:#242C58; --primary-soft-text:#C0C7FF;
- --success-text:#57D695; --success-bg:#132B1F; --warning-text:#FFC24B; --warning-bg:#2E2410; --danger-text:#FF8A92; --danger-bg:#331519; --accent:#FF7E55;
- --overlay:rgba(0,0,0,.6); --e1:none; --e2:none; --e3:0 8px 24px rgba(0,0,0,.5);
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
+ color-scheme:dark; --bg:#101C18; --surface:#192822; --surface-2:#22392F;
+ --text:#ECF2ED; --text-2:#B0C2B7; --text-3:#B0C2B7;
+ --primary:#91CBB7; --primary-hover:#ADDECB; --primary-pressed:#81BCA7; --on-primary:#13281F;
+ --primary-soft-bg:#22392F; --primary-soft-text:#B5DEC9;
+ --danger-text:#FFA5AC; --danger-bg:#3B2026; --warning-text:#FFA5AC; --warning-bg:#3B2026;
+ --success-text:#B5DEC9; --success-bg:#22392F; --border:#354A3F; --control-border:#839F8E;
+ --overlay:rgba(0,10,5,.7); --e1:none; --e2:none; --e3:0 12px 32px rgba(0,10,5,.25);
 }}
-:root[data-theme=dark] {
- color-scheme:dark; --bg:#0E1120; --surface:#171B2E; --surface-2:#1F2540; --text:#F1F3FB; --text-2:#AAB1C6; --text-3:#8B92AA; --border:#2B3152;
- --primary:#8E99FF; --primary-hover:#9AA4FF; --primary-pressed:#7F8AF2; --on-primary:#0E1120; --primary-soft-bg:#242C58; --primary-soft-text:#C0C7FF;
- --success-text:#57D695; --success-bg:#132B1F; --warning-text:#FFC24B; --warning-bg:#2E2410; --danger-text:#FF8A92; --danger-bg:#331519; --accent:#FF7E55;
- --overlay:rgba(0,0,0,.6); --e1:none; --e2:none; --e3:0 8px 24px rgba(0,0,0,.5);
+:root[data-theme=dark]{
+ color-scheme:dark; --bg:#101C18; --surface:#192822; --surface-2:#22392F;
+ --text:#ECF2ED; --text-2:#B0C2B7; --text-3:#B0C2B7;
+ --primary:#91CBB7; --primary-hover:#ADDECB; --primary-pressed:#81BCA7; --on-primary:#13281F;
+ --primary-soft-bg:#22392F; --primary-soft-text:#B5DEC9;
+ --danger-text:#FFA5AC; --danger-bg:#3B2026; --warning-text:#FFA5AC; --warning-bg:#3B2026;
+ --success-text:#B5DEC9; --success-bg:#22392F; --border:#354A3F; --control-border:#839F8E;
+ --overlay:rgba(0,10,5,.7); --e1:none; --e2:none; --e3:0 12px 32px rgba(0,10,5,.25);
 }
