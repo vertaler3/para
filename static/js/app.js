@@ -2101,6 +2101,155 @@
     loadItems();
   }
 
+  /* ---------- экран «Столовые» (views/canteens.csp; 03 §4.9.6/5.13) ------ */
+  /* Меню столовых: два fetch из ТЕХ ЖЕ JSON-роутов, что за API (02 §5.2):
+     список GET /v1/canteens (чипы «название · корпус · часы») и меню
+     выбранной GET /v1/canteens/{id}/menu (гонку ответов гасит seq).
+     Комплексные (is_combo) — блоки .combo черновика cafeteria.html:
+     цена справа, состав и КБЖУ раскрываются details/summary (03 §4.9.6
+     «у комбо — раскрытие состава и строка КБЖУ caption»). Остальные
+     позиции сгруппированы по category (словарь DDL) строками .list-row:
+     название, строка КБЖУ caption, цена справа (.price; tnum — общая
+     настройка body). КБЖУ nullable: null — строка НЕ рисуется (вода без
+     КБЖУ, фикстуры Э6б; «не рисовать пустое» — постановка экрана).
+     Пустое меню — «Меню пока не опубликовано» (в 03 §5.2 отдельной строки
+     для столовых нет). Состояния 03 §5: скелетон только при ответе
+     > 300 мс, ошибка с «Повторить», офлайн — баннер каркаса. Вставка —
+     только createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'canteens') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const CATEGORY = [
+      ['soup', 'Первое'],
+      ['main', 'Горячее'],
+      ['drink', 'Напитки'],
+      ['bakery', 'Выпечка'],
+    ];
+    const chipsBox = document.querySelector('[data-canteen-chips]');
+    const state = { canteens: [], id: null, seq: 0 };
+    let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
+
+    /* «620 ккал · Б 28 · Ж 22 · У 65» (формат 03 §4.9.6); null КБЖУ — null */
+    const kbjuOf = (item) => {
+      if (item.kcal == null) return null;
+      const n = (v) => (v == null ? '' : String(Number(v)));
+      return item.kcal + ' ккал · Б ' + n(item.protein) + ' · Ж ' + n(item.fat) + ' · У ' + n(item.carbs);
+    };
+
+    const comboBlock = (item) => {
+      const box = el('div', 'combo section');
+      box.append(el('p', 'overline', 'Комбо'));
+      const head = el('div', 'row section');
+      head.append(el('h2', null, item.name || ''));
+      head.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      box.append(head);
+      const kbju = kbjuOf(item);
+      if (kbju) {
+        const det = document.createElement('details');
+        const sum = document.createElement('summary');
+        sum.textContent = 'Состав и КБЖУ';
+        const body = el('div');
+        body.append(el('p', 'small', kbju));
+        det.append(sum, body);
+        box.append(det);
+      }
+      return box;
+    };
+
+    const itemRow = (item) => {
+      const row = el('div', 'list-row');
+      const mid = el('div');
+      mid.append(el('strong', null, item.name || ''));
+      const kbju = kbjuOf(item);
+      if (kbju) mid.append(el('p', 'caption', kbju));
+      row.append(mid);
+      row.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      return row;
+    };
+
+    const loadMenu = async () => {
+      if (!state.id) return;
+      const seq = ++state.seq;
+      clearTimeout(skTimer);
+      show('[data-menu-loading]', false);
+      show('[data-menu-empty]', false);
+      show('[data-menu-error]', false);
+      show('[data-menu-body]', false);
+      skTimer = setTimeout(() => show('[data-menu-loading]', true), 300);
+      const data = await fetchJSON('/v1/canteens/' + state.id + '/menu');
+      if (seq !== state.seq) return;
+      clearTimeout(skTimer);
+      show('[data-menu-loading]', false);
+      if (!data || !Array.isArray(data.menu)) {
+        show('[data-menu-error]', true);
+        return;
+      }
+      const hours = document.querySelector('[data-canteen-hours]');
+      if (hours) {
+        hours.textContent = 'Часы работы: ' + (data.hours || '—');
+        hours.hidden = false;
+      }
+      if (!data.menu.length) {
+        show('[data-menu-empty]', true);
+        return;
+      }
+      const body = document.querySelector('[data-menu-body]');
+      if (!body) return;
+      body.replaceChildren();
+      data.menu.filter((m) => m.is_combo).forEach((m) => body.append(comboBlock(m)));
+      CATEGORY.forEach(([key, label]) => {
+        const items = data.menu.filter((m) => !m.is_combo && m.category === key);
+        if (!items.length) return;
+        const section = el('section', 'section');
+        const title = el('div', 'section-title');
+        title.append(el('h2', null, label));
+        section.append(title);
+        items.forEach((m) => section.append(itemRow(m)));
+        body.append(section);
+      });
+      body.hidden = false;
+    };
+
+    const loadCanteens = async () => {
+      const data = await fetchJSON('/v1/canteens');
+      if (!data || !Array.isArray(data.canteens) || !chipsBox) return;
+      state.canteens = data.canteens;
+      chipsBox.replaceChildren();
+      state.canteens.forEach((c) => {
+        const chip = el('button', 'chip');
+        chip.type = 'button';
+        chip.dataset.canteenId = String(c.id);
+        chip.textContent = [c.name, c.building, c.hours].filter(Boolean).join(' · ');
+        chip.addEventListener('click', () => {
+          if (state.id === c.id) return;
+          state.id = c.id;
+          syncChips();
+          loadMenu();
+        });
+        chipsBox.append(chip);
+      });
+      if (!state.canteens.length) return;
+      state.id = state.canteens[0].id;
+      syncChips();
+      loadMenu();
+    };
+    const syncChips = () => {
+      chipsBox.querySelectorAll('.chip').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String(Number(chip.dataset.canteenId) === state.id));
+      });
+    };
+
+    const menuRetry = document.querySelector('[data-menu-retry]');
+    if (menuRetry) menuRetry.addEventListener('click', () => loadMenu());
+
+    loadCanteens();
+  }
+
   /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */
   /* Плоская лента GET /v1/notifications (02 §5.2): query type= (словарь
      CHECK 0004 sql/migrations/0004:10 — schedule/deadline/application/

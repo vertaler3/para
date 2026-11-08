@@ -1,0 +1,90 @@
+<%c++
+/* Столовые — меню с ценами и КБЖУ (Э7, экран «Столовые» 3 из 4;
+   03 §4.9.6/5.13, design-drafts/cafeteria.html). Страница НЕ содержит
+   данных: список столовых и меню выбранной грузит клиент — fetch GET
+   /v1/canteens и GET /v1/canteens/{id}/menu (ТЕ ЖЕ JSON-роуты
+   CanteensCtrl, что стоят за API, 02 §5.2; паттерн views/rooms.csp и
+   library.csp). Контент строит static/js/app.js (только
+   createElement/textContent — 02 §6.4).
+   Чипы столовых — «название · корпус · часы» (02 §5.2); активный —
+   aria-pressed (.chip[aria-pressed=true] app.css). Меню выбранной:
+   комплексные (is_combo) — блоки .combo черновика (overline «Комбо»,
+   цена справа, состав в details/summary — раскрывается, 03 §4.9.6
+   «у комбо — раскрытие состава и строка КБЖУ caption»); остальные
+   позиции сгруппированы по category (словарь DDL combo|main|soup|
+   drink|bakery → «Горячее/Первое/Напитки/Выпечка») строками .list-row:
+   название, строка КБЖУ caption, цена справа (.price, tnum — общая
+   настройка body). КБЖУ nullable: null — строка НЕ рисуется (вода без
+   КБЖУ, фикстуры Э6б; постановка «не рисовать пустое»).
+   Пустое меню — «Меню пока не опубликовано» (в 03 §5.2 отдельной строки
+   для столовых нет — текст в духе пустых состояний раздела).
+   Состояния (03 §5): скелетон — только если ответ дольше 300 мс
+   (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить» (повторный
+   fetch, 03 §5.3); офлайн — баннер каркаса (topbar + applyOffline,
+   03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
+   «Столовые» — НЕ таб (03 §3.1, вход из профиля): CanteensCtrl::
+   canteensPage ставит пустой activeTab. Синтаксис drogon v1.9.14:
+   {{}} НЕ существует (Р-16) — строк-данных в шаблон не вставляется,
+   страница статична. htmx не нужен (без сегментов) — только app.js
+   (defer, локальный путь — AGENTS: без npm/CDN). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="canteens">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Профиль</a>
+      <h1>Что сегодня на обед</h1>
+      <p>Меню и состав — до того, как вы встали в очередь</p>
+    </div>
+  </div>
+  <div class="content-narrow">
+
+    <!-- Чипы столовых (название · корпус · часы): строит app.js из
+         GET /v1/canteens; aria-pressed проставляет app.js -->
+    <div class="chips" role="group" aria-label="Столовые" data-canteen-chips></div>
+
+    <!-- Часы выбранной столовой (02 §5.2 hours; дублируют чип) -->
+    <p class="caption section" data-canteen-hours hidden></p>
+
+    <!-- Скелетон (03 §5.1): блок комбо + 3 строки; показывается app.js
+         ТОЛЬКО если ответ дольше 300 мс. -->
+    <div class="section stack" data-menu-loading hidden aria-busy="true" aria-label="Загружаем меню">
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+    </div>
+
+    <!-- Пусто (03 §5.2/§5.3) -->
+    <div class="surface" data-menu-empty hidden>
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v7a2 2 0 0 0 2 2h2V3M4 3H2m2 0h6m1 0v9a4 4 0 0 0 8 0V3m-4 0v18m4-18h-2"/></svg></div>
+        <h2>Меню пока не опубликовано</h2>
+        <p>Загляните позже — меню обновляется ежедневно.</p>
+      </div>
+    </div>
+
+    <!-- Ошибка (03 §5.3): «Повторить» реально перезапрашивает -->
+    <section class="section flow" data-menu-error hidden role="alert">
+      <h3>Не получилось загрузить меню</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-menu-retry>Повторить</button>
+    </section>
+
+    <!-- Меню выбранной столовой: комбо-блоки и группы категорий строит
+         app.js (.combo/.list-row/.price — черновик cafeteria.html) -->
+    <div data-menu-body hidden></div>
+
+    <p class="caption section">Цены, блюда и КБЖУ вымышленные.</p>
+
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

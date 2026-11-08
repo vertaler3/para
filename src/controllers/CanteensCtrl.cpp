@@ -1,5 +1,7 @@
 #include "controllers/CanteensCtrl.h"
 
+#include <drogon/drogon.h>
+
 #include "services/CanteensService.h"
 #include "utils/ApiError.h"
 
@@ -47,4 +49,24 @@ void CanteensCtrl::getMenu(
                     return;
             }
         });
+}
+
+// --- Страничная плоскость (Э7: GET /canteens; см. шапку заголовка) --------
+
+void CanteensCtrl::canteensPage(
+    const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter (страница без сессии → 303 /login —
+    // правка фильтра Э7/Р-19, как RoomsCtrl::roomsPage). Тонкая страница
+    // без данных (AGENTS §5.5): столовые/меню грузит клиент из тех же
+    // JSON-роутов этого контроллера (GET /v1/canteens, GET
+    // /v1/canteens/{id}/menu — 02 §5.2). Состояния 03 §5 — в шаблоне и
+    // static/js/app.js.
+    (void)req;
+    HttpViewData data;
+    data.insert("pageTitle", std::string("Столовые · Пара"));
+    // Экран НЕ таб (03 §3.1 — вход из профиля, 03 §4.9.6/5.13): пустой
+    // activeTab — ни один пункт таб-бара не получает aria-current.
+    data.insert("activeTab", std::string(""));
+    cb(HttpResponse::newHttpViewResponse("canteens", std::move(data)));
 }
