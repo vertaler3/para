@@ -323,6 +323,19 @@
     });
   }
 
+  /* ---------- экраны «Успеваемость» (views/grades.csp, views/
+     grades-discipline.csp; 03 §4.4/§4.9.3) ---------- */
+  /* Контент — SSR (тела GradesService::summary/list/exams рендерит
+     сервер); догрузки на клиенте нет — скелетон не нужен (03 §5.1),
+     ошибку данных показывает сам шаблон (failed=1, состояние 03 §5.3).
+     Здесь только «Повторить»: реально перезапрашивает — перезагрузка
+     страницы; офлайн обслуживает баннер каркаса (topbar + applyOffline,
+     03 §5.4). */
+  if (document.body.dataset.page === 'grades' || document.body.dataset.page === 'discipline') {
+    const gradesRetry = document.querySelector('[data-grades-retry]');
+    if (gradesRetry) gradesRetry.addEventListener('click', () => window.location.reload());
+  }
+
   /* ---------- экран «Сегодня» (views/dashboard.csp; 03 §4.2, §5) ---------- */
   /* Данные — один fetch GET /v1/dashboard (контракт DashboardService.h):
      виджеты «Следующая пара»/«Сегодня» (ScheduleService), «Дедлайны»

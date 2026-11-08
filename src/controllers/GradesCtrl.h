@@ -23,6 +23,20 @@ using namespace drogon;
 //
 // /v1/grades/{id} и /v1/grades/summary не конфликтуют: статический сегмент
 // router'а Drogon приоритетнее {id} (сверено E2E этого шага).
+//
+// Страничная плоскость (Э7, экран «Успеваемость»; 02 §5.2: SSR-страница
+// /grades; путь вне /v1/ — по постановке 02 §3.2, как /schedule — Р-19):
+//   GET /grades                          — views/grades.csp (03 §4.4);
+//   GET /grades/discipline/{discipline_id} — views/grades-discipline.csp
+//       (03 §4.9.3). ВЛАДЕНИЕ на этом path-id — решение шага:
+//       discipline_id — НЕ строка таблицы grades, а группировка СВОИХ
+//       оценок; OwnershipGuard::check(Table::Grades) сторожит id СТРОКИ
+//       оценки (GET /v1/grades/{id}) и к группировке неприменим. Выборка
+//       идёт через GradesService::list по user_id СЕССИИ (02 §6.3) —
+//       среди своих оценок дисциплины с чужим/несуществующим id нет, обе
+//       ситуации → 404 not_found без различия (03 §5.3: существование
+//       чужих объектов не раскрываем). SQL в контроллере нет (AGENTS
+//       §5.5): тела страниц — те же методы сервиса, что за JSON API.
 class GradesCtrl : public HttpController<GradesCtrl>
 {
   public:
@@ -32,6 +46,9 @@ class GradesCtrl : public HttpController<GradesCtrl>
                   "LoginFilter");
     ADD_METHOD_TO(GradesCtrl::getGrade, "/v1/grades/{id}", Get, "LoginFilter");
     ADD_METHOD_TO(GradesCtrl::getExams, "/v1/exams", Get, "LoginFilter");
+    ADD_METHOD_TO(GradesCtrl::gradesPage, "/grades", Get, "LoginFilter");
+    ADD_METHOD_TO(GradesCtrl::disciplinePage,
+                  "/grades/discipline/{discipline_id}", Get, "LoginFilter");
     METHOD_LIST_END
 
     void getGrades(const HttpRequestPtr& req,
@@ -43,4 +60,9 @@ class GradesCtrl : public HttpController<GradesCtrl>
                   int64_t gradeId);
     void getExams(const HttpRequestPtr& req,
                   std::function<void(const HttpResponsePtr&)>&& cb);
+    void gradesPage(const HttpRequestPtr& req,
+                    std::function<void(const HttpResponsePtr&)>&& cb);
+    void disciplinePage(const HttpRequestPtr& req,
+                        std::function<void(const HttpResponsePtr&)>&& cb,
+                        int64_t disciplineId);
 };

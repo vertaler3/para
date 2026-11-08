@@ -50,3 +50,27 @@ button.lesson{width:100%;border:0;background:var(--clear);padding:1.1rem 0;font:
 .sheet-row{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid var(--border)}
 .sheet-label{color:var(--text-2);font-size:.875rem;flex-shrink:0}
 @media(max-width:599px){dialog.lesson-sheet{margin:auto auto 0;width:100%;max-width:none;border-radius:var(--r-xl) var(--r-xl) 0 0;border-bottom:0}}
+
+/* Успеваемость (Э7, экран 2 из 2; 03 §4.4/§4.9.3): карточки дисциплин,
+   баллы по компонентам, «Сессия». Цвета — только токены tokens.css:
+   пороговые цвета прогресса 03 §4.4 (≥60 --success-text, 40–59
+   --warning-text, <40 --danger-text) на --surface — пары из baseline
+   tools/contrast_check.py (0 FAIL, PASS обеих тем); новая пара не
+   вводилась. Цифры — tnum (03 §2.3): глобально font-feature-settings:
+   'tnum' на body (строка 11), класс .tnum дублирует для явности. */
+.tnum{font-variant-numeric:tabular-nums}
+.grade-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:0 1rem}
+.discipline-row:last-child,.grade-component:last-child,.exam-row:last-child{border-bottom:0}
+.grade-meter{margin-top:.75rem}
+.grade-meter .progress{flex:1;margin:0}
+.progress.ok:before{background:var(--success-text)}
+.progress.warn:before{background:var(--warning-text)}
+.grade-missing{color:var(--warning-text);margin-top:.5rem}
+.grade-component{padding:1.1rem 0;border-bottom:1px solid var(--border)}
+.grade-component .progress{margin-top:.6rem}
+.grade-retake{color:var(--danger-text);margin-top:.4rem}
+.badge-col{display:flex;flex-direction:column;align-items:flex-end;gap:.4rem;flex-shrink:0}
+.exam-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;min-height:44px;padding:1rem 0;border-bottom:1px solid var(--border);color:var(--text);text-decoration:none}
+.exam-row p{margin-top:.25rem}
+.exam-row .exam-when{white-space:nowrap;font-weight:500}
+.exam-kind-retake{color:var(--danger-text)}
