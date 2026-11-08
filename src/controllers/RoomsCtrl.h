@@ -49,6 +49,15 @@ using namespace drogon;
 // сценарии не возникает: блокировка СНЯТАЕТ пересекшиеся брони, а не
 // отклоняется (01 §5.10) — конфликтов-отказов нет; 400 — тело, 404 —
 // комната (фиксируется честно).
+//
+// Страничная плоскость (Э7, экран «Бронь аудитории» 03 §4.9.5; Р-19 —
+// путь вне /v1/ по постановке экрана):
+//   GET /rooms             — SSR-страница views/rooms.csp: каталог чипами,
+//       сетка слотов дня, «Мои брони» с отменой. Без сессии LoginFilter
+//       отвечает 303 → /login (страница). Данных страница не содержит —
+//       каталог/сетку/брони грузит клиент из ТЕХ ЖЕ JSON-роутов выше
+//       (паттерн application_form.csp); path-id нет — OwnershipGuard не
+//       применим (правило — для эндпоинтов с {id} в пути).
 class RoomsCtrl : public HttpController<RoomsCtrl>
 {
   public:
@@ -64,6 +73,7 @@ class RoomsCtrl : public HttpController<RoomsCtrl>
                   "LoginFilter");
     ADD_METHOD_TO(RoomsCtrl::blockRoom, "/v1/staff/rooms/{id}/block", Post,
                   "LoginFilter", "StaffFilter");
+    ADD_METHOD_TO(RoomsCtrl::roomsPage, "/rooms", Get, "LoginFilter");
     METHOD_LIST_END
 
     void getRooms(const HttpRequestPtr& req,
@@ -82,4 +92,6 @@ class RoomsCtrl : public HttpController<RoomsCtrl>
     void blockRoom(const HttpRequestPtr& req,
                    std::function<void(const HttpResponsePtr&)>&& cb,
                    int64_t roomId);
+    void roomsPage(const HttpRequestPtr& req,
+                   std::function<void(const HttpResponsePtr&)>&& cb);
 };

@@ -93,3 +93,45 @@ button.document-type{width:100%;background:var(--surface);font:inherit;text-alig
 .timeline li.stop:before{background:var(--danger-text);border-color:var(--danger-text)}
 .timeline li.future{color:var(--text-3)}
 .skeleton.card{height:4.5rem}
+
+/* ==== Экран «Бронь аудиторий» (Э7, 03 §4.9.5): каталог чипами, сетка
+   слотов дня, «Мои брони», ghost-ссылка в шапке расписания. Сетка слотов
+   — .room-grid/.room-slot из портированной базы (design-drafts).
+   Новых цветовых пар НЕТ (Р-16): booked — нейтральный disabled слот
+   (база .room-slot:disabled), mine — пара --primary-soft-text на
+   --primary-soft-bg с бордером --primary (база .room-slot.mine), inline
+   «заняли/заблокировали» — .notice.warn (--warning-text/--warning-bg),
+   danger-диалог — .button.danger-button (--danger-*); все пары —
+   baseline tools/contrast_check.py (0 FAIL, PASS обеих тем).
+   Скелетоны секций: .skeleton.pill (чипы), .skeleton.slot (сетка). ==== */
+.rooms-cap-field{display:flex;flex-direction:column;gap:.25rem;min-width:11rem}
+.rooms-cap-field label{margin:0}
+.rooms-date-field{display:flex;flex-direction:column;gap:.25rem}
+.rooms-date-field label{margin:0}
+.rooms-date-field input{width:auto}
+.rooms-room-line{margin:-.5rem 0 .75rem}
+.skeleton.pill{width:11rem;height:2.25rem;border-radius:var(--r-full)}
+.skeleton.pill.short{width:8rem}
+.skeleton.slot{height:4.75rem}
+/* «ваша бронь» — акцент и в disabled (правило черновика .room-slot.mine
+   перекрыто идущей позже .room-slot:disabled — уточняем специфичность,
+   декларации те же, что .room-slot.mine базы) */
+.room-slot.mine:disabled{background:var(--primary-soft-bg);border:2px solid var(--primary);color:var(--primary-soft-text);cursor:default}
+.booking-row{display:flex;align-items:center;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border)}
+.booking-row:last-child{border-bottom:0}
+.booking-main{flex:1;min-width:0}
+.booking-main strong{font-weight:500;display:block}
+.booking-main span{display:block}
+.booking-when{white-space:nowrap;font-size:.875rem;font-weight:500}
+.booking-row .button{flex-shrink:0}
+.rooms-ghost{gap:.35rem}
+@media(max-width:599px){.booking-when{white-space:normal}}
+/* Действие тоста (правки по ревью экрана; 03 §2.8: «действие справа»
+   в тосте). Цвет — --bg на инверсном тосте (bg тоста = --text): пара
+   ('bg','text') из baseline tools/contrast_check.py — 10.6:1 светлая /
+   15.4:1 тёмная тема, PASS. «Цветом --primary» из 03 §2.8 на инверсном
+   тосте WCAG НЕ проходит (замер WCAG-формулой: 2.0:1 светлая, 1.62:1
+   тёмная) — осознанное отклонение цвета действия при сохранении самого
+   действия (текст + ссылка «Мои брони» 03 §4.9.5). */
+.toast{display:flex;align-items:baseline;justify-content:space-between;gap:1rem}
+.toast-action{color:var(--bg);font-weight:600;text-decoration:underline;text-underline-offset:2px;flex-shrink:0}

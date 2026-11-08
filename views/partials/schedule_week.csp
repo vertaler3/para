@@ -228,6 +228,13 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
         hx-push-url="/schedule?segment=week&amp;offset=0"
         hx-indicator="#schedule-indicator" hx-disabled-elt="this">Неделя</button>
     </div>
+    <!-- Ghost-ссылка входа в «Бронь аудитории» (03 §4.3:421, 5.10/§4.9.5):
+         в экране «Расписание» сознательно откладывалась (журнал 2026-11-08:
+         роута /rooms не было — не плодить мёртвую ссылку); с коммита
+         экрана «Бронь аудитории» GET /rooms живёт — откладка снята.
+         Внутри партиала — ссылка переживает htmx-обмен сегмента
+         (outerHTML #schedule-segment) в обоих сегментах. -->
+    <a class="button ghost rooms-ghost" href="/rooms">Забронировать аудиторию<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
     <div class="week-nav">
 <%c++
 // Стрелки ±1 (03 §4.3, тап ≥44px): на границе окна [-4..4] — disabled.
