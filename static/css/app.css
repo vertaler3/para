@@ -199,3 +199,21 @@ button.ob-step:disabled{cursor:default}
 .ob-step:not(:disabled):hover{background:var(--surface-2)}
 .ob-footer{display:flex;align-items:center;justify-content:space-between;gap:1rem}
 .ob-footer p{margin:0}
+
+/* ==== Экран «Люди» (views/people.csp, views/person.csp; 03 §4.9.6,
+   Э7, группа «Люди») ================================================
+   Каталог-поиск (input + чипы ролей, строки → /people/{id}) и профиль
+   человека. Шаблон ветвится ПО ДАННЫМ ОТВЕТА PeopleService::profile:
+   преподаватель/сотрудник — mailto «Написать» и кабинет ссылкой
+   /map/rooms?q=<номер>; чужой студент — ТОЛЬКО публичные поля (имя уже
+   маскировано сервером, Р-15 — рисуем как пришло), блоков оценок/заявок
+   нет даже заглушками (02 §5.2). Блок «Занятия» — компоненты каркаса
+   .schedule-list/.lesson (статусы — классы экрана «Расписание»).
+   Новых цветовых пар НЕТ (Р-16): .people-list повторяет каркасный
+   паттерн списков (--surface/--border --r-lg — как .app-list/.grade-list),
+   строки — каркасное .list-row; подсказка/пусто/ошибка — каркасные
+   .empty/.surface/.section (текст на --bg/--surface — baseline
+   tools/contrast_check.py, 0 FAIL); скелетоны — shimmer-база
+   .skeleton.card. ==== */
+.people-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:0 1rem}
+.people-list .list-row p{margin-top:.15rem}

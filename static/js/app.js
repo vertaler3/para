@@ -2525,4 +2525,233 @@
       }
     }
   }
+
+  /* ---------- экран «Люди» (views/people.csp; 03 §4.9.6, Э7) ------------ */
+  /* Каталог-поиск: fetch GET /v1/people/search (query q/role — ТЕ ЖЕ
+     JSON-роуты, что стоят за API; паттерн notifications-секции). Debounce
+     ввода ~300 мс (постановка экрана); гонку устаревших ответов гасит
+     монотонный номер запроса (seq) — последний ввод всегда побеждает.
+     Скелетон показывается ТОЛЬКО если ответ дольше 300 мс (03 §5.1 —
+     таймер на показ, снимается по ответу). Пустой запрос — подсказка
+     «Начните вводить…» + «Преподаватели»: первая страница search БЕЗ q
+     (role=teacher) — пустой q сервис не фильтрует (паттерн LIKE '%%',
+     поведение PeopleService::search). Строки: имя КАК ПРИШЛО (чужие
+     студенты уже маскированы сервером, Р-15 — рисуем как пришло), роль,
+     группа/кафедра; тап по строке → /people/{id}. Чипы ролей — словарь
+     02 §5.2 teacher|student|staff (пусто — «все»). Состояния 03 §5:
+     пусто «Никого не нашли», ошибка с «Повторить» (повторный fetch),
+     офлайн — баннер каркаса (fetchJSON сам переводит в офлайн-режим).
+     Вставка — только createElement/textContent (02 §6.4);
+     createContextualFragment — только статическая svg-константа стрелки,
+     данные сервера в innerHTML НИКОГДА. */
+  if (document.body.dataset.page === 'people') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const ARROW = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>';
+    const ROLE_LABEL = { teacher: 'Преподаватель', student: 'Студент', staff: 'Сотрудник' };
+    const input = document.querySelector('[data-people-q]');
+    const state = { q: '', role: '', seq: 0 };
+    let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
+    let debounce = 0;
+
+    const subOf = (p) => {
+      const parts = [ROLE_LABEL[p.role] || ''];
+      if (p.role === 'student') {
+        if (p.group) parts.push('группа ' + p.group);
+      } else {
+        if (p.title) parts.push(p.title);
+        if (p.department) parts.push(p.department);
+      }
+      return parts.filter(Boolean).join(' · ');
+    };
+    const rowFor = (p) => {
+      const a = el('a', 'list-row');
+      a.href = '/people/' + p.id;
+      const mid = el('div');
+      mid.append(el('strong', null, p.fio || ''));
+      mid.append(el('p', null, subOf(p)));
+      a.append(mid);
+      a.append(document.createRange().createContextualFragment(ARROW));
+      return a;
+    };
+    const renderInto = (box, people) => {
+      if (!box) return;
+      box.replaceChildren();
+      people.forEach((p) => box.append(rowFor(p)));
+    };
+
+    const load = async () => {
+      const seq = ++state.seq;
+      clearTimeout(skTimer);
+      show('[data-people-loading]', false);
+      show('[data-people-hint]', false);
+      show('[data-people-empty]', false);
+      show('[data-people-error]', false);
+      show('[data-people-results]', false);
+      const q = state.q.trim();
+      if (!q) {
+        /* пустой запрос: подсказка + преподаватели (search без q, role=teacher) */
+        show('[data-people-hint]', true);
+        const data = await fetchJSON('/v1/people/search?role=teacher');
+        if (seq !== state.seq) return;
+        if (!data || !Array.isArray(data.people)) {
+          show('[data-people-hint]', false);
+          show('[data-people-error]', true);
+          return;
+        }
+        renderInto(document.querySelector('[data-people-hint-list]'), data.people);
+        return;
+      }
+      skTimer = setTimeout(() => show('[data-people-loading]', true), 300);
+      const params = new URLSearchParams({ q });
+      if (state.role) params.set('role', state.role);
+      const data = await fetchJSON('/v1/people/search?' + params.toString());
+      if (seq !== state.seq) return;
+      clearTimeout(skTimer);
+      show('[data-people-loading]', false);
+      if (!data || !Array.isArray(data.people)) {
+        show('[data-people-error]', true);
+        return;
+      }
+      if (!data.people.length) {
+        show('[data-people-empty]', true);
+        return;
+      }
+      renderInto(document.querySelector('[data-people-list]'), data.people);
+      show('[data-people-results]', true);
+    };
+
+    if (input) {
+      input.addEventListener('input', () => {
+        state.q = input.value;
+        clearTimeout(debounce);
+        debounce = setTimeout(load, 300);
+      });
+    }
+    document.querySelectorAll('[data-people-role]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        if (chip.getAttribute('aria-pressed') === 'true') return;
+        state.role = chip.dataset.peopleRole || '';
+        document.querySelectorAll('[data-people-role]').forEach((c) => {
+          c.setAttribute('aria-pressed', String(c === chip));
+        });
+        clearTimeout(debounce);
+        load();
+      });
+    });
+    const peopleRetry = document.querySelector('[data-people-retry]');
+    if (peopleRetry) peopleRetry.addEventListener('click', () => load());
+
+    load();
+  }
+
+  /* ---------- профиль человека (views/person.csp; 03 §4.9.6, Э7) -------- */
+  /* Шапка профиля — SSR (тело PeopleService::profile, ветвление по полям
+     ответа в шаблоне: преподаватель/сотрудник — mailto и кабинет ссылкой
+     /map/rooms?q=<номер>; чужой студент — только публичные поля, БЕЗ
+     блоков оценок/заявок — их нет и в данных, 02 §5.2/Р-15). Здесь — блок
+     «Занятия» / «Расписание группы»: fetch GET /v1/people/{id}/schedule
+     (id — уже провалидированный контроллером data-person-id на body;
+     кроме data-режима блока нет — fetch не запускается). Пары — компоненты
+     каркаса .schedule-list/.lesson; статусы — как на «Расписании»:
+     перенос — левый акцент + бейдж «Перенос» + было → стало в кабинете,
+     отмена — зачёркнуто (классы .lesson.moved/.cancelled — app.css).
+     Дни группируются по дате UTC проекта (сервер отдаёт ORDER BY
+     starts_at — порядок стабилен, новая дата = новая группа). Состояния
+     03 §5 блока: скелетон, пусто (текст по ветке — отрисовал сервер),
+     ошибка с «Повторить» (повторный fetch), офлайн — баннер каркаса.
+     «Повторить» SSR-экрана ошибки (dberror) — перезагрузка страницы
+     (03 §5.3, прецедент application.csp). Вставка — только
+     createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'person') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const KIND = { lecture: 'Лекция', seminar: 'Семинар', practice: 'Практика' };
+    const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '';
+    const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
+    /* день по календарной дате UTC проекта (без сдвига часового пояса) */
+    const fmtDay = (ymd) => {
+      const p = ymd.split('-').map(Number);
+      if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+    };
+
+    const pageRetry = document.querySelector('[data-person-retry]');
+    if (pageRetry) pageRetry.addEventListener('click', () => window.location.reload());
+
+    const scheduleRoot = document.querySelector('[data-person-schedule]');
+    const personId = document.body.dataset.personId || '';
+    const lessonRow = (e) => {
+      const row = el('div', 'lesson');
+      if (e.status === 'moved') row.classList.add('moved');
+      if (e.status === 'cancelled') row.classList.add('cancelled');
+      const time = el('div', 'lesson-time');
+      time.append(el('strong', null, timeOf(e.starts_at)));
+      if (timeOf(e.ends_at)) time.append(el('span', null, timeOf(e.ends_at)));
+      const mid = el('div');
+      mid.append(el('div', 'lesson-subject', e.discipline || ''));
+      const detail = el('p', 'lesson-detail', KIND[e.kind] || '');
+      if (e.status === 'moved') detail.append(' ', el('span', 'badge warn', 'Перенос'));
+      if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+      mid.append(detail);
+      const room = el('div', 'lesson-room');
+      if (e.status === 'cancelled') {
+        room.append(el('s', null, e.room || '—'));
+        room.append(el('small', null, 'отменена'));
+      } else if (e.status === 'moved' && e.prev_room) {
+        room.append(el('s', null, e.prev_room));
+        room.append(document.createTextNode(' → ' + (e.room || '—')));
+      } else {
+        room.append(el('span', null, e.room || '—'));
+      }
+      row.append(time, mid, room);
+      return row;
+    };
+    const loadSchedule = async () => {
+      if (!scheduleRoot || !/^\d+$/.test(personId)) return;
+      show('[data-ps-loading]', true);
+      show('[data-ps-error]', false);
+      show('[data-ps-empty]', false);
+      const list = document.querySelector('[data-ps-list]');
+      if (list) { list.hidden = true; list.replaceChildren(); }
+      const data = await fetchJSON('/v1/people/' + personId + '/schedule');
+      show('[data-ps-loading]', false);
+      if (!data || !Array.isArray(data.events)) {
+        show('[data-ps-error]', true);
+        return;
+      }
+      if (!data.events.length) {
+        show('[data-ps-empty]', true);
+        return;
+      }
+      if (!list) return;
+      let current = '';
+      let dayBox = null;
+      data.events.forEach((e) => {
+        const day = dateOf(e.starts_at);
+        if (day && day !== current) {
+          current = day;
+          list.append(el('p', 'caption', fmtDay(day)));
+          dayBox = el('div', 'schedule-list');
+          list.append(dayBox);
+        }
+        if (dayBox) dayBox.append(lessonRow(e));
+      });
+      list.hidden = false;
+    };
+    const psRetry = document.querySelector('[data-ps-retry]');
+    if (psRetry) psRetry.addEventListener('click', () => loadSchedule());
+
+    loadSchedule();
+  }
 })();

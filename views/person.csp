@@ -1,0 +1,303 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+%>
+<%c++
+/* Профиль человека (Э7, экран «Люди» 2/2; 03 §4.9.6, design-drafts/
+   person.html). SSR-шапка: тело — PeopleService::profile (ТОТ ЖЕ метод,
+   что стоит за JSON GET /v1/people/{id}; SQL в шаблоне нет — AGENTS
+   §5.5), приходит сериализованной строкой bodyJson; разбор здесь,
+   пользовательские строки выводит HttpViewData::htmlTranslate
+   (02 §6.4, Р-16). Path-id БЕЗ OwnershipGuard — people общий каталог:
+   403 не возникает (Р-15), НЕЧИСЛОВОЙ/несуществующий id контроллер
+   отвечает 404 ЭТОЙ страницей (mode=notfound), ошибка БД — 500
+   (mode=dberror, fail-closed) — HTML-карточки, НЕ голый JSON.
+   Рендер ветвится ПО ДАННЫМ ОТВЕТА (постановка экрана):
+     преподаватель/сотрудник (role teacher|staff) — полное имя,
+       должность · кафедра, почта с кнопкой mailto «Написать»,
+       кабинет ссылкой /map/rooms?q=<номер> (алиас карты — отдельный
+       коммит этой же группы; ссылка ставится уже сейчас по постановке);
+     студент (role student) — имя КАК ПРИШЛО (чужой — уже маскированное
+       «И. Фамилия» на сервере, Р-15: рисовать как пришло, полные не
+       восстанавливать), группа, почта; БЕЗ блоков оценок/заявок — даже
+       заглушек (правило видимости 02 §5.2: их нет и в данных ответа по
+       построению — ветвлению нечего рисовать). Свой студент (в ответе
+       есть faculty/program/course) — дополнительно факультет/курс
+       строкой меты (данные-ветвление, отдельной ветки не нужно).
+   Блок «Занятия» / «Расписание группы» (заголовок по ветке) грузит
+   клиент — GET /v1/people/{id}/schedule из app.js (постановка);
+   в разметке — его состояния (03 §5): скелетон, пусто (текст по
+   ветке: «Занятий нет» / «В расписании группы пар нет»), ошибка с
+   «Повторить», офлайн — баннер каркаса (03 §5.4).
+   data-person-id на body — уже провалидированный цифровой id от
+   контроллера (запрос клиента к schedule). Скелетона SSR-шапки нет —
+   страница целиком SSR (03 §5.1, прецедент application.csp). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="person"<%c++ $$ << " data-person-id=\"" << HttpViewData::htmlTranslate(@@.get<std::string>("personId")) << "\""; %>>
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/people"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Люди</a>
+<%c++
+const std::string mode = @@.get<std::string>("mode");
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+// Инициалы аватара: первые буквы двух слов ФИО (верхний регистр уже в
+// данных сервера — и полных, и маскированных «И. Фамилия»).
+// Кириллица — многобайтный UTF-8: берём lead-байт + его continuation
+// (10xxxxxx), считаем БУКВЫ, не байты (рендер-проба поймала обе ошибки
+// байт-арифметики: пустой аватар и «д» вместо номера кабинета).
+const auto initialsOf = [](const std::string& fio) -> std::string {
+    std::string out;
+    int taken = 0;
+    bool need = true;
+    std::size_t i = 0;
+    while (i < fio.size())
+    {
+        const unsigned char c = static_cast<unsigned char>(fio[i]);
+        if (fio[i] == ' ' || fio[i] == '\t')
+        {
+            need = true;
+            ++i;
+            continue;
+        }
+        if ((c & 0xC0) == 0x80 || !need)
+        {
+            ++i;  // continuation-байт вне начала буквы / не начало слова
+            continue;
+        }
+        out += fio[i++];  // lead-байт буквы + его continuation-цепочка
+        while (i < fio.size() &&
+               (static_cast<unsigned char>(fio[i]) & 0xC0) == 0x80)
+            out += fio[i++];
+        need = false;
+        if (++taken >= 2) break;
+    }
+    return out;
+};
+// «Корпус А, ауд. 2105» → «2105» (для /map/rooms?q=): токен после
+// «ауд.» до конца/разделителя; без «ауд.» — вся строка кабинета.
+// find возвращает БАЙТОВЫЙ сдвиг — сдвигаемся на длину needle в байтах
+// (needle «ауд.» — 7 байт UTF-8), иначе токен режется с середины слова.
+const auto roomNoOf = [](const std::string& office) -> std::string {
+    const std::string kAud = "ауд.";
+    const std::size_t aud = office.find(kAud);
+    std::size_t i = aud == std::string::npos ? 0 : aud + kAud.size();
+    while (i < office.size() && office[i] == ' ') ++i;
+    const std::size_t start = i;
+    while (i < office.size() && office[i] != ',' && office[i] != ')' &&
+           office[i] != '.')
+        ++i;
+    std::string room = office.substr(start, i - start);
+    while (!room.empty() && room.back() == ' ') room.pop_back();
+    return room;
+};
+std::string heading = "Профиль";
+Json::Value person(Json::objectValue);
+bool dataOk = false;
+if (mode == "data")
+{
+    // Разбор тела сервиса; сбой разбора — состояние ошибки (03 §5.3),
+    // не падение (прецедент application.csp).
+    const std::string bodyJson = @@.get<std::string>("bodyJson");
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    dataOk = !bodyJson.empty() &&
+             reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
+                           &person, &errs) &&
+             person.isMember("role") && person.isMember("fio");
+    if (dataOk)
+        heading = person["fio"].asString();
+}
+$$ << "<h1>" << esc(heading) << "</h1>";
+%>
+    </div>
+  </div>
+  <div class="content-narrow">
+<%c++
+if (mode == "notfound")
+{
+    // 404 (нечисловой/несуществующий id — решение в шапке): нейтральная
+    // карточка 03 §5.3, код статуса на ответе — 404 (HTML, не JSON).
+%>
+    <div class="surface">
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.6a4.5 4.5 0 0 1 5 4.4"/></svg></div>
+        <h2>Не нашли то, что искали</h2>
+        <p>Возможно, ссылка устарела. Преподавателей и студентов факультета найдёт поиск.</p>
+        <div class="actions">
+          <a class="button" href="/people">Поиск людей</a>
+          <a class="button" href="/">На главную</a>
+        </div>
+      </div>
+    </div>
+<%c++
+}
+else if (mode == "dberror" || (mode == "data" && !dataOk))
+{
+    // Ошибка БД (fail-closed) или разбора тела — 03 §5.3:1013.
+%>
+    <section class="section flow" role="alert">
+      <h3>Сервис не отвечает</h3>
+      <p class="muted">Мы уже знаем и чиним. Попробуйте через минуту.</p>
+      <button class="button" type="button" data-person-retry>Повторить</button>
+    </section>
+<%c++
+}
+else
+{
+    // --- Данные: ветвление ПО ПОЛЯМ ОТВЕТА (см. шапку шаблона) ----------
+    const std::string role = person["role"].asString();
+    const std::string fio = person["fio"].asString();
+    const bool staffLike = role == "teacher" || role == "staff";
+    const std::string email = person.isMember("email") &&
+                                      person["email"].isString()
+                                  ? person["email"].asString()
+                                  : "";
+    const std::string group = person.isMember("group") &&
+                                      person["group"].isString()
+                                  ? person["group"].asString()
+                                  : "";
+    // Свой студент: сервер добавляет faculty/program/course (PeopleService
+    // profile) — строка меты из того, что ЕСТЬ в данных.
+    const bool selfStudent = !staffLike && person.isMember("faculty") &&
+                             person["faculty"].isString();
+    const std::string faculty =
+        selfStudent ? person["faculty"].asString() : "";
+    const bool hasCourse = selfStudent && person.isMember("course") &&
+                           !person["course"].isNull();
+    const std::string program =
+        selfStudent && person.isMember("program") &&
+                person["program"].isString()
+            ? person["program"].asString()
+            : "";
+%>
+    <div class="profile-summary">
+      <span class="avatar large" aria-hidden="true"><%c++ $$ << esc(initialsOf(fio)); %></span>
+      <div>
+        <h2><%c++ $$ << esc(fio); %></h2>
+        <p class="muted small"><%c++
+        if (staffLike)
+        {
+            // должность · кафедра (могут быть пустыми в данных — optString)
+            std::string sub;
+            if (person.isMember("title") && person["title"].isString())
+                sub = person["title"].asString();
+            const std::string dept =
+                person.isMember("department") && person["department"].isString()
+                    ? person["department"].asString()
+                    : "";
+            if (!sub.empty() && !dept.empty())
+                sub += " · " + dept;
+            else if (dept.empty() && sub.empty())
+                sub = role == "staff" ? "Сотрудник" : "Преподаватель";
+            else if (sub.empty())
+                sub = dept;
+            $$ << esc(sub);
+        }
+        else
+        {
+            $$ << "Студент" << (group.empty() ? "" : " · группа " + esc(group));
+        }
+        %></p>
+<%c++
+    if (selfStudent)
+    {
+%>
+        <p class="caption"><%c++ $$ << esc(faculty) << (hasCourse ? " · " + std::to_string(person["course"].asInt64()) + " курс" : ""); if (!program.empty()) $$ << " · " << esc(program); %></p>
+<%c++
+    }
+%>
+      </div>
+    </div>
+    <div class="section">
+      <div class="surface">
+<%c++
+    if (!email.empty())
+    {
+%>
+        <div class="list-row">
+          <div>
+            <strong><%c++ $$ << esc(email); %></strong>
+            <p>Почта вымышленная · домен @example.edu</p>
+          </div>
+<%c++
+        // «Написать» (mailto) — ветка преподавателя/сотрудника (постановка);
+        // у чужого студента почта показана без кнопки.
+        if (staffLike)
+        {
+%>
+          <a class="button" href="mailto:<%c++ $$ << esc(email); %>">Написать</a>
+<%c++
+        }
+%>
+        </div>
+<%c++
+    }
+    if (staffLike && person.isMember("office") && person["office"].isString())
+    {
+        const std::string office = person["office"].asString();
+        // Кабинет → /map/rooms?q=<номер> (алиас карты — отдельный коммит
+        // этой же группы; ссылка живёт уже сейчас, постановка экрана).
+%>
+        <a class="list-row" href="/map/rooms?q=<%c++ $$ << esc(roomNoOf(office)); %>">
+          <div>
+            <strong>Кабинет · <%c++ $$ << esc(roomNoOf(office).empty() ? office : roomNoOf(office)); %></strong>
+            <p><%c++ $$ << esc(office); %></p>
+          </div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+<%c++
+    }
+    else if (!staffLike && group.empty())
+    {
+%>
+        <div class="list-row"><div><strong>Группа</strong><p>—</p></div></div>
+<%c++
+    }
+%>
+      </div>
+    </div>
+    <section class="section" data-person-schedule>
+      <div class="section-title"><h2><%c++ $$ << (staffLike ? "Занятия" : "Расписание группы"); %></h2></div>
+
+      <!-- Скелетон (03 §5.1): 2 строки-карточки расписания -->
+      <div class="stack" data-ps-loading aria-busy="true" aria-label="Загрузка занятий">
+        <div class="skeleton card"></div>
+        <div class="skeleton card"></div>
+      </div>
+
+      <!-- Ошибка (03 §5.3): «Повторить» — повторный fetch schedule -->
+      <section class="section flow" data-ps-error hidden role="alert">
+        <h3>Не получилось загрузить занятия</h3>
+        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+        <button class="button" type="button" data-ps-retry>Повторить</button>
+      </section>
+
+      <!-- Пусто: текст по ветке данных (сотрудник — занятий нет честным
+           пустым списком сервиса; студент — группа без пар) -->
+      <div class="empty" data-ps-empty hidden>
+        <p><%c++ $$ << (staffLike ? "Занятий нет" : "В расписании группы пар нет"); %></p>
+      </div>
+
+      <!-- Дни и пары строит app.js (компоненты каркаса: caption дня +
+           .schedule-list/.lesson; статусы — как в расписании) -->
+      <div data-ps-list hidden></div>
+    </section>
+<%c++
+}  // else (mode == data && dataOk)
+%>
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

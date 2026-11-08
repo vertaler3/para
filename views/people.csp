@@ -1,0 +1,101 @@
+<%c++
+/* Люди — каталог-поиск (Э7, экран «Люди» 1 из 4; 03 §4.9.6, элементы
+   поиска черновиков library.html/dashboard.html). Страница НЕ содержит
+   данных: результаты и подсказку грузит клиент — fetch GET /v1/people/
+   search (query q/role; debounce ~300 мс; ТЕ ЖЕ JSON-роуты PeopleCtrl,
+   что стоят за API — паттерн views/notifications.csp). Строки строит
+   static/js/app.js: имя КАК ПРИШЛО с сервера (чужие студенты — уже
+   маскированные «И. Фамилия», Р-15 — рисовать как пришло, полные не
+   восстанавливать), роль, группа/кафедра; тап по строке → /people/{id}.
+   Чипы ролей — «Все | Преподаватели | Студенты | Сотрудники» (словарь
+   02 §5.2: teacher|student|staff; пусто — «все»; активный чип —
+   aria-pressed, .chip[aria-pressed=true] — app.css; паттерн чипов
+   notifications.csp).
+   Пустой запрос — подсказка: «Начните вводить…» + «Преподаватели»
+   (первая страница search БЕЗ q, role=teacher — сервис отдаёт каталог
+   целиком: пустой q → паттерн LIKE '%%' не фильтрует, поведение сверено
+   с PeopleService::search). Пустой результат поиска — «Никого не нашли».
+   Состояния (03 §5): скелетон — показывается только если ответ дольше
+   300 мс (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить»
+   (повторный fetch, 03 §5.3); офлайн — баннер каркаса (topbar +
+   applyOffline, 03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
+   «Люди» — НЕ таб (03 §3.2, вход из sheet «Детали пары»): PeopleCtrl::
+   searchPage ставит пустой activeTab — ни один пункт таб-бара не
+   подсвечен. Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) —
+   строк-данных в шаблон не вставляется вовсе, страница статична.
+   htmx не нужен (без сегментов) — только app.js (defer, локальный путь —
+   AGENTS: без npm/CDN). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="people">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <h1>Люди</h1>
+      <p>Преподаватели, сотрудники и студенты факультета</p>
+    </div>
+  </div>
+  <div class="content-narrow">
+
+    <!-- Поиск (черновик library.html: .field + type=search) -->
+    <div class="field">
+      <label for="people-q">Имя или кафедра</label>
+      <input id="people-q" type="search" placeholder="Например, Круглов или мировая экономика" data-people-q autocomplete="off">
+    </div>
+
+    <!-- Чипы ролей (словарь 02 §5.2; aria-pressed проставляет app.js) -->
+    <div class="chips" role="group" aria-label="Фильтр по роли">
+      <button class="chip" type="button" data-people-role="" aria-pressed="true">Все</button>
+      <button class="chip" type="button" data-people-role="teacher" aria-pressed="false">Преподаватели</button>
+      <button class="chip" type="button" data-people-role="student" aria-pressed="false">Студенты</button>
+      <button class="chip" type="button" data-people-role="staff" aria-pressed="false">Сотрудники</button>
+    </div>
+
+    <!-- Скелетон (03 §5.1): 3 строки-карточки; показывается app.js ТОЛЬКО
+         если ответ дольше 300 мс. -->
+    <div class="section stack" data-people-loading hidden aria-busy="true" aria-label="Ищем">
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+    </div>
+
+    <!-- Подсказка пустого запроса: текст + преподаватели (первая страница
+         search без q; список строит app.js) -->
+    <div class="section" data-people-hint hidden>
+      <p class="muted">Начните вводить имя — или выберите преподавателя ниже.</p>
+      <div class="section-title"><h2>Преподаватели</h2></div>
+      <div class="people-list" data-people-hint-list></div>
+    </div>
+
+    <!-- Пусто (03 §5.2/§5.3): запрос без результатов -->
+    <div class="surface" data-people-empty hidden>
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8.5 11h5"/></svg></div>
+        <h2>Никого не нашли</h2>
+        <p>Попробуйте другой запрос или сбросьте фильтр роли — студенты видны в границах своего факультета.</p>
+      </div>
+    </div>
+
+    <!-- Ошибка (03 §5.3): «Повторить» реально перезапрашивает -->
+    <section class="section flow" data-people-error hidden role="alert">
+      <h3>Не получилось загрузить людей</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-people-retry>Повторить</button>
+    </section>
+
+    <!-- Результаты: строки строит app.js (имя как пришло — маскированное
+         или полное, роль, группа/кафедра; тап → /people/{id}) -->
+    <div class="section" data-people-results hidden>
+      <div class="people-list" data-people-list></div>
+    </div>
+
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>
