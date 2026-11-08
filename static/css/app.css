@@ -74,3 +74,22 @@ button.lesson{width:100%;border:0;background:var(--clear);padding:1.1rem 0;font:
 .exam-row p{margin-top:.25rem}
 .exam-row .exam-when{white-space:nowrap;font-weight:500}
 .exam-kind-retake{color:var(--danger-text)}
+
+/* ==== Экран «Заявки» (Э7, 03 §4.5): список, форма, карточка. Новых
+   цветовых пар НЕТ (Р-16): .notice.warn и точки таймлайна — существующие
+   пары --warning-text/--warning-bg и --danger-text на --surface/warning-bg
+   из baseline tools/contrast_check.py (0 FAIL, PASS обеих тем);
+   button.document-type — сброс нативных стилей кнопки до вида
+   .document-type (черновик application-catalog.html); .skeleton.card —
+   скелетон строки каталога (03 §5.1:980 «2 карточки со строками»). */
+.app-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:0 1rem}
+.app-card{display:block;padding:1.25rem 0;border-bottom:1px solid var(--border);color:var(--text);text-decoration:none}
+.app-card:last-child{border-bottom:0}
+.app-card h3{font-size:.9375rem;max-width:75%}
+.app-card .caption{margin-top:.25rem}
+button.document-type{width:100%;background:var(--surface);font:inherit;text-align:left;cursor:pointer}
+.notice.warn{background:var(--warning-bg);border-color:var(--warning-text);color:var(--warning-text)}
+.timeline li.warn:before{background:var(--warning-text);border-color:var(--warning-text)}
+.timeline li.stop:before{background:var(--danger-text);border-color:var(--danger-text)}
+.timeline li.future{color:var(--text-3)}
+.skeleton.card{height:4.5rem}

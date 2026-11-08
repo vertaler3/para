@@ -888,4 +888,519 @@
       if (arrow && !arrow.disabled) arrow.click();
     }, { passive: true });
   }
+
+  /* ---------- экран «Мои заявки» (views/applications.csp; 03 §4.5.1) ------ */
+  /* Страница целиком SSR (тело ApplicationsService::list рендерит сервер;
+     фильтр ?status= — чипы-ссылки). Здесь только «Повторить» состояния
+     ошибки: реально перезапрашивает — перезагрузка страницы (03 §5.3);
+     офлайн обслуживает баннер каркаса (topbar + applyOffline, 03 §5.4). */
+  if (document.body.dataset.page === 'applications') {
+    const applicationsRetry = document.querySelector('[data-applications-retry]');
+    if (applicationsRetry) applicationsRetry.addEventListener('click', () => window.location.reload());
+  }
+
+  /* ---------- экран «Новая заявка» (views/application-form.csp; 03
+     §4.5.2–4.5.3, С2/С7) --------------------------------------------------- */
+  /* Каталог типов грузится fetch-ом GET /v1/application-types (значения
+     НЕ захардкожены — постановка Э7), профиль — GET /v1/me (ФИО/группа,
+     read-only). Выбор типа → форма 1–2 вопроса (наборы полей — по
+     payload-примерам sql/fixtures.sql и меткам каталога 03 §4.5.2).
+     «Сохранить черновик» → POST /v1/applications {submit:false} → тост
+     «Черновик сохранён», далее автосохранение PUT /v1/applications/{id}
+     раз в ~10 с и по visibilitychange (hidden) — ТОЛЬКО пока статус
+     draft; ответ 409 (статус ушёл с черновика) — АВТОСОХРАНЕНИЕ МОЛЧА
+     ПРЕКРАЩАЕТСЯ, без всплывающих ошибок (постановка Э7; try/catch).
+     «Отправить заявку» → POST {submit:true} → редирект на карточку;
+     ошибка — inline «Заявка не отправилась…» (03 §5.3). Автосохранённый
+     черновик при подаче остаётся в списке черновиков — у студента нет
+     эндпоинта submit существующей строки (02 §5.2: submit — только при
+     POST-создании) — решение задокументировано в журнале сессии.
+     Вставка — только createElement/textContent (02 §6.4); innerHTML —
+     НИКОГДА для данных сервера, только статические svg-константы ниже. */
+  if (document.body.dataset.page === 'application-form') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    /* статические иконки строк каталога (по мотивам Lucide; НЕ данные) */
+    const ICON = {
+      file: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg>',
+      pen: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+      arrow: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>'
+    };
+    /* 1–2 вопроса на тип: наборы полей — payload-примеры sql/fixtures.sql
+       ({"copies":2,"delivery":"office"}, {"purpose":…,"copies":1,"delivery":"pdf"},
+       {"topic":…,"supervisor":…}); подсказки строк каталога — 03 §4.5.2 */
+    const TYPE_FIELDS = {
+      study_certificate: ['copies', 'delivery'],
+      period_certificate: ['copies', 'delivery'],
+      /* academic_certificate — ровно 2 вопроса, как в вайрфрейме 03
+         §4.5.3:597–625 («Количество экземпляров» + «Как получить»);
+         «purpose» в форме НЕТ (правило «1–2 вопроса максимум» —
+         03 §4.5.3:626), поле остаётся в примере payload фикстур
+         ({"purpose":…}) и отображается в «Деталях заявки» карточки */
+      academic_certificate: ['copies', 'delivery'],
+      thesis_topic: ['topic', 'supervisor'],
+      other: ['comment']
+    };
+    const TYPE_HINT = {
+      study_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
+      period_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
+      academic_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
+      thesis_topic: 'Согласование темы и научного руководителя',
+      other: 'Свободный текст заявления'
+    };
+
+    const state = { typeKey: null, typeTitle: '', draftId: null, draftStopped: false };
+    let saveTimer = 0;
+    const stopTimer = () => { if (saveTimer) { clearInterval(saveTimer); saveTimer = 0; } };
+
+    /* --- сборка payload из полей активного типа (JSON-строка) ---------- */
+    const field = (name) => document.querySelector('[data-field="' + name + '"]');
+    const collectPayload = () => {
+      const p = {};
+      (TYPE_FIELDS[state.typeKey] || []).forEach((name) => {
+        const f = field(name);
+        if (!f) return;
+        if (f.dataset.kind === 'radios') {
+          const checked = f.querySelector('input:checked');
+          p[name] = checked ? checked.value : '';
+          if (name === 'copies' && p.copies !== '') p.copies = Number(p.copies);
+        } else if (f.value) {
+          p[name] = f.value;
+        }
+      });
+      return p;
+    };
+
+    /* --- автосохранение черновика (С7): raw fetch — нужен статус 409;
+       сетевой сбой/офлайн молча пропускается (баннер показывает каркас);
+       409 «Править можно только черновик» — статус ушёл, автосохранение
+       прекращается навсегда до перезагрузки (постановка Э7) ------------ */
+    const autosaveNow = async () => {
+      if (!state.draftId || state.draftStopped) return null;
+      try {
+        const resp = await fetch('/v1/applications/' + state.draftId, {
+          method: 'PUT',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload_json: JSON.stringify(collectPayload()) })
+        });
+        if (resp.status === 409) {
+          state.draftStopped = true;
+          stopTimer();
+          const statusLine = document.querySelector('[data-draft-status]');
+          if (statusLine) statusLine.textContent = 'Черновик больше не черновик — правки не сохраняются';
+          return false;
+        }
+        if (resp.status === 404) {
+          /* заявка исчезла — автосохранению некуда писать; молча прекращаем */
+          state.draftStopped = true;
+          stopTimer();
+          return false;
+        }
+        return resp.ok;
+      } catch (e) { return null; } /* сети нет — молча (03 §5.4) */
+    };
+    const startAutosave = () => {
+      if (!saveTimer) saveTimer = setInterval(autosaveNow, 10000);
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) autosaveNow();
+    });
+
+    /* --- поля формы: 1–2 вопроса, значения по умолчанию — как в
+       черновике 03 §4.5.3 (copies 1, delivery pdf) --------------------- */
+    const buildField = (name) => {
+      if (name === 'copies') {
+        const wrap = el('fieldset');
+        wrap.dataset.field = 'copies';
+        wrap.dataset.kind = 'radios';
+        wrap.append(el('legend', null, 'Количество экземпляров'));
+        [['1', '1 экземпляр', true], ['2', '2 экземпляра', false]].forEach(([v, label, on]) => {
+          const opt = el('label', 'option');
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = 'copies';
+          input.value = v;
+          input.checked = on;
+          opt.append(input, document.createTextNode(label));
+          wrap.append(opt);
+        });
+        return wrap;
+      }
+      if (name === 'delivery') {
+        const wrap = el('fieldset');
+        wrap.dataset.field = 'delivery';
+        wrap.dataset.kind = 'radios';
+        wrap.append(el('legend', null, 'Как получить'));
+        [['pdf', 'PDF в кабинете', true], ['office', 'В деканате', false]].forEach(([v, label, on]) => {
+          const opt = el('label', 'option');
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = 'delivery';
+          input.value = v;
+          input.checked = on;
+          opt.append(input, document.createTextNode(label));
+          wrap.append(opt);
+        });
+        return wrap;
+      }
+      const wrap = el('div', 'field');
+      wrap.dataset.field = name;
+      const text = {
+        purpose: ['Куда нужна справка', 'Например, в университет-партнёр'],
+        topic: ['Тема ВКР', 'Тема выпускной квалификационной работы'],
+        supervisor: ['Научный руководитель', 'ФИО руководителя'],
+        comment: ['Комментарий · необязательно', 'Например, куда нужна справка']
+      }[name] || [name, ''];
+      wrap.append(el('label', null, text[0]));
+      const input = name === 'comment' ? document.createElement('textarea') : document.createElement('input');
+      if (name === 'comment') input.setAttribute('rows', '4');
+      input.maxLength = 1000;
+      input.placeholder = text[1];
+      wrap.append(input);
+      return wrap;
+    };
+
+    const setFormError = (text) => {
+      const box = document.querySelector('[data-form-error-inline]');
+      if (!box) return;
+      box.textContent = text;
+      box.hidden = !text;
+    };
+
+    /* --- выбор типа: каталог → форма; смена типа СБРАСЫВАЕТ привязку
+       автосохранения (PUT чужого типа в старый черновик недопустим;
+       сохранённый черновик остаётся в «Черновиках» списка) ------------- */
+    const selectType = (key, title) => {
+      if (state.typeKey !== key) stopTimer();
+      state.typeKey = key;
+      state.typeTitle = title;
+      state.draftId = null;
+      state.draftStopped = false;
+      const fields = document.querySelector('[data-type-fields]');
+      if (fields) {
+        fields.replaceChildren();
+        (TYPE_FIELDS[key] || []).forEach((name) => fields.append(buildField(name)));
+      }
+      const titleEl = document.querySelector('[data-type-title]');
+      if (titleEl) titleEl.textContent = title;
+      setFormError('');
+      const statusLine = document.querySelector('[data-draft-status]');
+      if (statusLine) statusLine.textContent = 'Обычно готова до 3 рабочих дней';
+      show('[data-catalog]', false);
+      show('[data-form]', true);
+    };
+    const backToCatalog = () => {
+      stopTimer();
+      state.draftId = null;
+      state.draftStopped = false;
+      show('[data-form]', false);
+      show('[data-catalog]', true);
+    };
+
+    /* --- каталог и профиль (fetch; скелетон → данные | ошибка) --------- */
+    const renderCatalog = (types) => {
+      const box = document.querySelector('[data-catalog]');
+      if (!box) return;
+      box.replaceChildren();
+      types.forEach((t) => {
+        const row = el('button', 'document-type');
+        row.type = 'button';
+        row.append(document.createRange().createContextualFragment((t.key === 'thesis_topic' || t.key === 'other') ? ICON.pen : ICON.file));
+        const mid = el('div');
+        mid.append(el('h2', null, t.title || ''));
+        mid.append(el('p', null, TYPE_HINT[t.key] || ''));
+        row.append(mid);
+        row.append(document.createRange().createContextualFragment(ICON.arrow));
+        row.addEventListener('click', () => selectType(t.key, t.title || ''));
+        box.append(row);
+      });
+    };
+    const loadForm = async () => {
+      show('[data-form-loading]', true);
+      show('[data-catalog]', false);
+      show('[data-form]', false);
+      show('[data-form-error]', false);
+      const [types, me] = await Promise.all([
+        fetchJSON('/v1/application-types'),
+        fetchJSON('/v1/me')
+      ]);
+      show('[data-form-loading]', false);
+      if (!types || !Array.isArray(types.types)) {
+        /* офлайн уже показал баннер (fetchJSON); ошибка API — экранная */
+        show('[data-form-error]', true);
+        return;
+      }
+      renderCatalog(types.types);
+      show('[data-catalog]', true);
+      if (me && me.profile) {
+        const p = me.profile;
+        const card = document.querySelector('[data-profile-card]');
+        if (card) {
+          const fio = document.querySelector('[data-profile-fio]');
+          if (fio) fio.textContent = p.fio || '';
+          const meta = document.querySelector('[data-profile-meta]');
+          if (meta) {
+            meta.textContent = [p.course ? p.course + ' курс' : '', p.faculty || '', p.group ? 'группа ' + p.group : '']
+              .filter(Boolean).join(' · ');
+          }
+          card.hidden = false;
+        }
+      }
+    };
+    const formRetry = document.querySelector('[data-form-retry]');
+    if (formRetry) formRetry.addEventListener('click', () => { loadForm(); });
+    const typeBack = document.querySelector('[data-type-back]');
+    if (typeBack) typeBack.addEventListener('click', backToCatalog);
+    loadForm();
+
+    /* --- кнопки формы --------------------------------------------------- */
+    const busy = (btn, on, busyLabel) => {
+      if (!btn) return;
+      if (on) {
+        btn.dataset.wasLabel = btn.textContent;
+        btn.textContent = busyLabel || 'Отправляем…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = btn.dataset.wasLabel || btn.textContent;
+        delete btn.dataset.wasLabel;
+        btn.disabled = false;
+      }
+    };
+    const saveDraftBtn = document.querySelector('[data-save-draft]');
+    if (saveDraftBtn) {
+      saveDraftBtn.addEventListener('click', async () => {
+        if (!state.typeKey || saveDraftBtn.disabled) return;
+        setFormError('');
+        const statusLine = document.querySelector('[data-draft-status]');
+        if (!navigator.onLine) { applyOffline(true); return; }
+        if (state.draftStopped) {
+          /* 409 ранее: черновик уже не draft — сохранение бессмысленно */
+          setFormError('Черновик уже не черновик — изменение не сохраняется');
+          return;
+        }
+        busy(saveDraftBtn, true, 'Сохраняем…');
+        try {
+          let ok = false;
+          if (state.draftId) {
+            ok = (await autosaveNow()) === true;
+          } else {
+            const resp = await fetch('/v1/applications', {
+              method: 'POST',
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: state.typeKey,
+                payload_json: JSON.stringify(collectPayload()),
+                submit: false
+              })
+            });
+            if (resp.ok) {
+              const body = await resp.json();
+              state.draftId = body && body.id;
+              startAutosave();
+              ok = true;
+            } else if (resp.status !== 409) {
+              ok = false;
+            }
+          }
+          if (ok) {
+            toast('Черновик сохранён');
+            const t = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            if (statusLine) statusLine.textContent = 'Черновик сохранён · ' + t + ' · дальше сохраняем автоматически';
+          } else if (!navigator.onLine) {
+            applyOffline(true); /* каркас покажет баннер и helper на кнопке */
+          } else {
+            setFormError('Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз');
+          }
+        } catch (e) {
+          if (!navigator.onLine) applyOffline(true);
+        } finally {
+          busy(saveDraftBtn, false);
+        }
+      });
+    }
+    const form = document.querySelector('[data-form]');
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submitBtn = form.querySelector('[data-submit-app]');
+        if (!state.typeKey || (submitBtn && submitBtn.disabled)) return;
+        setFormError('');
+        if (!navigator.onLine) { applyOffline(true); return; }
+        busy(submitBtn, true, 'Отправляем…');
+        try {
+          if (state.draftId && !state.draftStopped) await autosaveNow(); /* синк лучшего усилия */
+          const resp = await fetch('/v1/applications', {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: state.typeKey,
+              payload_json: JSON.stringify(collectPayload()),
+              submit: true
+            })
+          });
+          if (resp.ok) {
+            const body = await resp.json();
+            window.location.href = '/applications/' + (body && body.id);
+            return;
+          }
+          let message = 'Заявка не отправилась';
+          try {
+            const err = await resp.json();
+            if (err && err.error && err.error.message) message = err.error.message;
+          } catch (e) { /* тело не JSON */ }
+          if (state.draftId && !state.draftStopped) {
+            message += '. Черновик сохранён — попробуйте ещё раз, ничего не потеряется';
+          } else {
+            message += '. Проверьте интернет — и попробуем ещё раз';
+          }
+          setFormError(message);
+        } catch (e) {
+          if (!navigator.onLine) applyOffline(true);
+          else setFormError('Заявка не отправилась. Проверьте интернет — и попробуем ещё раз');
+        } finally {
+          busy(submitBtn, false);
+        }
+      });
+    }
+  }
+
+  /* ---------- карточка заявки (views/application.csp; 03 §4.5.5, С7) ----- */
+  /* Страница SSR; здесь — ветка «Требуется уточнение» (С7.6): POST
+     /{id}/messages → в ответе application_status=="in_progress" → бейдж
+     «В работе» и событие в таймлайн; «Скачать PDF»: переход на
+     /v1/applications/{id}/pdf через fetch — 200 blob → скачивание, 409
+     not_ready → inline «Справка ещё не готова» у кнопки (03 §5); «Повторить»
+     экрана ошибки — перезагрузка (03 §5.3). Вставка — только
+     createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'application') {
+    const APP_STATUS = {
+      draft: 'Черновик', submitted: 'Подана', accepted: 'Принята',
+      in_progress: 'В работе', need_info: 'Требуется уточнение',
+      ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
+    };
+    const appRetry = document.querySelector('[data-app-retry]');
+    if (appRetry) appRetry.addEventListener('click', () => window.location.reload());
+
+    /* --- PDF: 200 → blob-скачивание; 409 not_ready → inline-сообщение
+       «Справка ещё не готова» у кнопки (серверный message из 02 §5.2);
+       прочие ошибки — inline c message тела (формат 02 §5.1) ----------- */
+    const pdfLink = document.querySelector('[data-pdf-link]');
+    const pdfError = document.querySelector('[data-pdf-error]');
+    if (pdfLink) {
+      pdfLink.addEventListener('click', async (event) => {
+        event.preventDefault();
+        if (!navigator.onLine) { applyOffline(true); return; }
+        if (pdfError) pdfError.hidden = true;
+        try {
+          const resp = await fetch(pdfLink.href, { headers: { Accept: 'application/pdf' } });
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'para-spravka-' + (pdfLink.getAttribute('href').split('/').pop() || '') + '.pdf';
+            document.body.append(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            return;
+          }
+          let message = 'Не удалось скачать справку';
+          try {
+            const body = await resp.json();
+            if (body && body.error && body.error.message) message = body.error.message;
+          } catch (e) { /* тело не JSON */ }
+          if (pdfError) {
+            pdfError.textContent = message;
+            pdfError.hidden = false;
+          }
+        } catch (e) {
+          if (!navigator.onLine) applyOffline(true);
+          if (pdfError) {
+            pdfError.textContent = 'Не удалось скачать справку';
+            pdfError.hidden = false;
+          }
+        }
+      });
+    }
+
+    /* --- ветка С7.6: ответ на уточнение --------------------------------- */
+    const replyBlock = document.querySelector('[data-reply-block]');
+    const replyBtn = document.querySelector('[data-reply-send]');
+    const replyText = document.querySelector('[data-reply-text]');
+    const replyError = document.querySelector('[data-reply-error]');
+    const replyResult = document.querySelector('[data-reply-result]');
+    const badge = document.querySelector('[data-app-badge]');
+    const timeline = document.querySelector('[data-app-timeline]');
+    if (replyBtn && replyBlock) {
+      replyBtn.addEventListener('click', async () => {
+        if (replyBtn.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        const appId = replyBlock.dataset.appId;
+        const text = replyText ? replyText.value.trim() : '';
+        if (replyError) replyError.hidden = true;
+        if (!text) {
+          if (replyText) replyText.setAttribute('aria-invalid', 'true');
+          if (replyError) {
+            replyError.textContent = 'Напишите ответ — деканат ждёт уточнение';
+            replyError.hidden = false;
+          }
+          return;
+        }
+        if (replyText) replyText.removeAttribute('aria-invalid');
+        const previousLabel = replyBtn.textContent;
+        replyBtn.textContent = 'Отправляем…';
+        replyBtn.disabled = true;
+        try {
+          /* fetchJSON форматует ошибки из {error:{code,message}} (02 §5.1);
+             201 — Ok, тело = событие + application_status/status (С7.6) */
+          const data = await fetchJSON('/v1/applications/' + appId + '/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+          });
+          if (data) {
+            const newStatus = data.application_status || data.status;
+            if (newStatus === 'in_progress' && badge) {
+              badge.className = 'badge info';
+              badge.textContent = APP_STATUS.in_progress;
+            }
+            if (timeline) {
+              const li = document.createElement('li');
+              li.className = (data.to_status === 'in_progress') ? 'done' : '';
+              const strong = document.createElement('strong');
+              strong.textContent = APP_STATUS[data.to_status] || data.to_status || 'Сообщение';
+              const p = document.createElement('p');
+              const when = data.at ? new Date(data.at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+              p.textContent = when + (text ? ' · ' + text : '');
+              li.append(strong, p);
+              timeline.append(li);
+            }
+            replyBlock.hidden = true;
+            if (replyResult) {
+              replyResult.textContent = newStatus === 'in_progress'
+                ? 'Ответ отправлен — заявка снова в работе'
+                : 'Ответ отправлен';
+              replyResult.hidden = false;
+            }
+          } else if (!navigator.onLine) {
+            applyOffline(true); /* каркас: баннер + helper на кнопке */
+          } else if (replyError) {
+            replyError.textContent = 'Ответ не отправился. Проверьте интернет — и попробуем ещё раз';
+            replyError.hidden = false;
+          }
+        } catch (e) {
+          if (!navigator.onLine) applyOffline(true);
+        } finally {
+          replyBtn.textContent = previousLabel;
+          replyBtn.disabled = false;
+        }
+      });
+    }
+  }
 })();

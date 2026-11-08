@@ -31,6 +31,40 @@ using namespace drogon;
 // Error → 500 fail-closed. Формат ошибок — 02 §5.1 {error:{code,message}}.
 // GET /v1/applications/{id}/pdf (PdfBuilder) — отдельный шаг Э5: тот же
 // guard-до-статуса порядок.
+//
+// Страничная плоскость (Э7, экран «Заявки» 1 из 4; путь вне /v1/ — по
+// постановке 02 §3.2, как /schedule и /grades — Р-19):
+//   GET /applications         — views/applications.csp: список «Мои заявки»,
+//                               чипы-фильтры ?status= (значение из словаря
+//                               kApplicationStatuses; НЕИЗВЕСТНОЕ → 303 на
+//                               /applications — решение шага: страница не
+//                               отвечает голым JSON 400, невалидный фильтр
+//                               просто сбрасывается на «Все»);
+//   GET /applications/new     — views/application_form.csp: каталог типов +
+//                               форма 1–2 вопроса (данные грузит клиент:
+//                               GET /v1/application-types и /v1/me).
+//                               path-id НЕТ — OwnershipGuard не применим;
+//                               статический сегмент new приоритетнее {id}
+//                               (прецедент /v1/grades/summary — сверено E2E);
+//   GET /applications/{id}    — views/application.csp: карточка заявки с
+//                               таймлайном. РЕШЕНИЕ ПО GUARD (path-id, задоку-
+//                               ментировано по постановке экрана): вызывается
+//                               OwnershipGuard::check(Table::Applications)
+//                               ДО любой отдачи данных (правило код-ревью в
+//                               шапке OwnershipGuard.h; владение проверяется
+//                               ровно один раз — выборка after-Own идёт по PK
+//                               без user_id-условия, как в getOne). Вердикты
+//                               для СТРАНИЦЫ (03 §5.3): Forbidden → 403 и
+//                               NotFound → 404 — РАЗНЫЕ коды статуса (DoD 01
+//                               п.2: 403 на чужой id — проверяемо жюри), но
+//                               ОДНА нейтральная карточка «Не нашли то, что
+//                               искали» — текст пользователя не различает
+//                               чужое/несуществующее (03 §5.3:1021); это HTML-
+//                               страница с кодом ошибки, НЕ голый JSON
+//                               (постановка Э7); Error → 500 «Сервис не
+//                               отвечает» (fail-closed). Тела страницы — те
+//                               же методы ApplicationsService, что за JSON
+//                               API (SQL в контроллере нет, AGENTS §5.5).
 class ApplicationsCtrl : public HttpController<ApplicationsCtrl>
 {
   public:
@@ -47,6 +81,12 @@ class ApplicationsCtrl : public HttpController<ApplicationsCtrl>
                   "LoginFilter");
     ADD_METHOD_TO(ApplicationsCtrl::sendMessage,
                   "/v1/applications/{id}/messages", Post, "LoginFilter");
+    ADD_METHOD_TO(ApplicationsCtrl::listPage, "/applications", Get,
+                  "LoginFilter");
+    ADD_METHOD_TO(ApplicationsCtrl::newPage, "/applications/new", Get,
+                  "LoginFilter");
+    ADD_METHOD_TO(ApplicationsCtrl::cardPage, "/applications/{id}", Get,
+                  "LoginFilter");
     METHOD_LIST_END
 
     void getTypes(const HttpRequestPtr& req,
@@ -64,4 +104,11 @@ class ApplicationsCtrl : public HttpController<ApplicationsCtrl>
     void sendMessage(const HttpRequestPtr& req,
                      std::function<void(const HttpResponsePtr&)>&& cb,
                      int64_t applicationId);
+    void listPage(const HttpRequestPtr& req,
+                  std::function<void(const HttpResponsePtr&)>&& cb);
+    void newPage(const HttpRequestPtr& req,
+                 std::function<void(const HttpResponsePtr&)>&& cb);
+    void cardPage(const HttpRequestPtr& req,
+                  std::function<void(const HttpResponsePtr&)>&& cb,
+                  int64_t applicationId);
 };
