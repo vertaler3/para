@@ -1832,4 +1832,254 @@
     loadCatalog();
     loadBookings();
   }
+
+  /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */
+  /* Плоская лента GET /v1/notifications (02 §5.2): query type= (словарь
+     CHECK 0004 sql/migrations/0004:10 — schedule/deadline/application/
+     announcement; чипы «Все | Расписание | Дедлайны | Заявки | Объявления»
+     дословно вайрфрейма 03 §4.6:657 — «Система» из первого раунда снята
+     по замечанию ревью: «system» в словаре нет, сервис отвечает
+     400 bad_request), unread=1 (чип-тумблер «Непрочитанные»), cursor= —
+     составная пагинация: «Ещё» догружает следующую страницу по
+     next_cursor и исчезает при null (постановка экрана). Тап по строке
+     с read_at IS NULL → POST /{id}/read В ФОНЕ: переход по deep_link
+     его НЕ ждёт (постановка); fetch с keepalive — запрос переживает
+     уход со страницы. Не-2xx (403 чужое — guard ДО пометки 02 §5.2,
+     404, 5xx) — просто не помечаем: точка остаётся, бейдж не трогаем.
+     deep_link — только относительный путь (первый символ «/»;
+     javascript:-URI и внешние схемы отсекаются при рендере, 02 §6.4);
+     строки без deep_link — <button>, только пометка на месте.
+     «Прочитать всё» → POST read-all → точки сняты, тост (дословно
+     03 §4.6) и бейдж обнулён ПЕРЕИСПОЛЬЗОВАННОЙ каркасной
+     refreshUnreadBadge() (та же функция, что у каркаса/шапки, «если её
+     нет — добавь одну общую» — она есть, дубль не заводим); при
+     активном чипе «Непрочитанные» список перечитывается с сервера
+     (unread=1 теперь пуст → «По этой теме пока ничего не было»,
+     03 §5.2 — замечание ревью раунда 1: локальные прочитанные строки
+     не должны оставаться видимыми под фильтром «только непрочитанные»).
+     POST-запросы (204 без тела) — сырым fetch: fetchJSON разбирает
+     resp.json() и на пустом 204 падает в ветку catch → ложный офлайн
+     каркаса (паттерн POST/DELETE брони rooms-секции). Вставка —
+     createElement/textContent; данные сервера в innerHTML НИКОГДА —
+     createContextualFragment только для статических svg-констант иконок
+     типов ниже (02 §6.4, как ICON application-form-секции). */
+  if (document.body.dataset.page === 'notifications') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    /* иконки типов — статические константы по мотивам Lucide (03 §4.6:
+       перенос — arrow-right-left, дедлайн — clock, заявка — file-text,
+       объявление — megaphone; fallback — колокольчик для типа вне
+       словаря, которых словарь CHECK 0004 не выпускает); НЕ данные
+       сервера */
+    const FEED_ICON = {
+      schedule: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4M20 7H4m8 14-4-4 4-4M4 17h16"/></svg>',
+      deadline: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+      application: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg>',
+      announcement: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3zM11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
+      fallback: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>'
+    };
+    /* время — UTC проекта (created_at strftime «YYYY-MM-DD HH:MM:SS»):
+       сегодня/вчера — словами (03 §4.6), дальше — «D месяца, HH:MM» */
+    const stampOf = (iso) => {
+      if (typeof iso !== 'string' || iso.length < 16) return '';
+      const date = iso.slice(0, 10);
+      const time = iso.slice(11, 16);
+      const today = new Date().toISOString().slice(0, 10);
+      if (date === today) return time;
+      if (date === new Date(Date.now() - 86400000).toISOString().slice(0, 10)) return 'Вчера, ' + time;
+      const p = date.split('-').map(Number);
+      if (p.length !== 3 || p.some(Number.isNaN)) return date;
+      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return day + ', ' + time;
+    };
+
+    const state = { type: '', unread: false, cursor: null, items: [] };
+    const feedUrl = (cursor) => {
+      const p = new URLSearchParams();
+      if (state.type) p.set('type', state.type);
+      if (state.unread) p.set('unread', '1');
+      if (cursor) p.set('cursor', String(cursor));
+      const q = p.toString();
+      return '/v1/notifications' + (q ? '?' + q : '');
+    };
+
+    /* строка ленты: <a> с deep_link / <button> без него (в <a> вложенный
+       <a> невалиден — заголовок текстом + точка .unread-mark каркаса) */
+    const renderRow = (n) => {
+      const href = typeof n.deep_link === 'string' && n.deep_link.charAt(0) === '/' ? n.deep_link : '';
+      const row = href ? el('a', 'notification') : el('button', 'notification');
+      if (href) row.href = href;
+      else row.type = 'button';
+      row.dataset.notifId = String(n.id);
+      row.classList.add(n.read_at ? 'is-read' : 'is-unread');
+      row.append(document.createRange().createContextualFragment(FEED_ICON[n.type] || FEED_ICON.fallback));
+      const mid = el('div');
+      const title = el('div', 'ntitle', n.title || 'Уведомление');
+      if (!n.read_at) {
+        const dot = el('span', 'unread-mark');
+        dot.setAttribute('aria-hidden', 'true');
+        title.append(dot);
+      }
+      mid.append(title);
+      if (n.body) mid.append(el('p', 'nbody', n.body));
+      const when = stampOf(n.created_at);
+      if (when) mid.append(el('p', 'nwhen', when));
+      row.append(mid);
+      return row;
+    };
+    const renderList = () => {
+      const list = document.querySelector('[data-feed-list]');
+      if (!list) return;
+      list.replaceChildren();
+      state.items.forEach((n) => list.append(renderRow(n)));
+      list.hidden = !state.items.length;
+    };
+
+    /* загрузка страницы ленты: без cursor — первая (скелетон/сброс),
+       с cursor — догрузка «Ещё» (append, скелетон не мигает) */
+    const load = async (cursor) => {
+      show('[data-feed-error]', false);
+      show('[data-feed-warn]', false);
+      if (!cursor) {
+        show('[data-feed-list]', false);
+        show('[data-feed-empty]', false);
+        show('[data-feed-empty-filter]', false);
+        show('[data-feed-more]', false);
+        show('[data-feed-loading]', true);
+      }
+      const data = await fetchJSON(feedUrl(cursor));
+      show('[data-feed-loading]', false);
+      if (!data || !Array.isArray(data.notifications)) {
+        /* офлайн: баннер уже показал каркас (fetchJSON); ошибка API —
+           03 §5.3: первая страница — экранная ошибка с «Повторить»,
+           догрузка — inline у «Ещё» (повтор — та же кнопка) */
+        if (cursor) {
+          const warn = document.querySelector('[data-feed-warn]');
+          if (warn) warn.textContent = 'Не получилось загрузить ещё — попробуйте ещё раз';
+          show('[data-feed-warn]', true);
+        } else {
+          show('[data-feed-list]', false);
+          show('[data-feed-error]', true);
+        }
+        return;
+      }
+      state.cursor = data.next_cursor || null;
+      state.items = cursor ? state.items.concat(data.notifications) : data.notifications;
+      renderList();
+      /* «Ещё» видна, пока есть следующая страница; next_cursor=null —
+         кнопка исчезает (постановка экрана) */
+      show('[data-feed-more]', Boolean(state.cursor));
+      if (!state.items.length) {
+        /* пусто: без фильтров — полное пустое состояние (03 §5.2),
+           с фильтром type/unread — текст пустого фильтра (тоже 03 §5.2) */
+        show(state.type || state.unread ? '[data-feed-empty-filter]' : '[data-feed-empty]', true);
+      }
+    };
+
+    /* тап по строке: пометка В ФОНЕ, deep_link-переход не ждёт её */
+    const listEl = document.querySelector('[data-feed-list]');
+    if (listEl) {
+      listEl.addEventListener('click', (event) => {
+        const row = event.target.closest('[data-notif-id]');
+        if (!row || !row.classList.contains('is-unread')) return;
+        const id = Number(row.dataset.notifId);
+        const item = state.items.find((x) => x.id === id);
+        if (!item || item.read_at) return; // повторный тап до ответа/уже прочитано
+        if (!navigator.onLine) { applyOffline(true); return; }
+        fetch('/v1/notifications/' + id + '/read', {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          keepalive: true /* фон: запрос переживает уход по deep_link */
+        }).then((resp) => {
+          if (!resp.ok) return; /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
+          item.read_at = new Date().toISOString();
+          row.classList.remove('is-unread');
+          row.classList.add('is-read');
+          const dot = row.querySelector('.unread-mark');
+          if (dot) dot.remove();
+          /* синхронизация бейджа колокольчика — та же каркасная функция */
+          refreshUnreadBadge();
+        }).catch(() => { /* сеть ушла — точка остаётся, баннер покажет каркас */ });
+        /* <a>-строка: браузер сам уходит по deep_link (preventDefault нет);
+           строки без deep_link (<button>) остаются на месте — точка гаснет */
+      });
+    }
+
+    /* «Прочитать всё»: 204 идемпотентно → точки сняты, бейдж обнулён */
+    const readAllBtn = document.querySelector('[data-read-all]');
+    if (readAllBtn) {
+      readAllBtn.addEventListener('click', async () => {
+        if (readAllBtn.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        readAllBtn.disabled = true;
+        try {
+          const resp = await fetch('/v1/notifications/read-all', {
+            method: 'POST',
+            headers: { Accept: 'application/json' }
+          });
+          if (resp.status === 204) {
+            if (state.unread) {
+              /* замечание ревью раунда 1: под фильтром «только
+                 непрочитанные» после read-all локально показанные
+                 прочитанные строки НЕ оставляем — сервер на этот фильтр
+                 теперь отвечает пусто («По этой теме пока ничего не
+                 было», 03 §5.2); перечитываем первую страницу */
+              load(null);
+            } else {
+              const now = new Date().toISOString();
+              state.items.forEach((n) => { if (!n.read_at) n.read_at = now; });
+              renderList();
+            }
+            refreshUnreadBadge();
+            toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
+          } else {
+            let message = 'Не получилось пометить всё прочитанным';
+            try {
+              const body = await resp.json();
+              if (body && body.error && body.error.message) message = body.error.message;
+            } catch (e) { /* тело не JSON */ }
+            toast(message);
+          }
+        } catch (e) {
+          if (!navigator.onLine) applyOffline(true);
+          else toast('Не получилось пометить всё прочитанным. Проверьте интернет — и попробуйте ещё раз');
+        } finally {
+          readAllBtn.disabled = false;
+        }
+      });
+    }
+
+    /* чипы-фильтры: смена — первая страница нового фильтра (cursor сброс) */
+    document.querySelectorAll('[data-feed-filter]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        if (chip.getAttribute('aria-pressed') === 'true') return;
+        state.type = chip.dataset.feedFilter || '';
+        document.querySelectorAll('[data-feed-filter]').forEach((c) => {
+          c.setAttribute('aria-pressed', String(c === chip));
+        });
+        load(null);
+      });
+    });
+    const unreadChip = document.querySelector('[data-feed-unread]');
+    if (unreadChip) {
+      unreadChip.addEventListener('click', () => {
+        state.unread = unreadChip.getAttribute('aria-pressed') !== 'true';
+        unreadChip.setAttribute('aria-pressed', String(state.unread));
+        load(null);
+      });
+    }
+    const moreBtn = document.querySelector('[data-feed-more]');
+    if (moreBtn) moreBtn.addEventListener('click', () => {
+      if (state.cursor) load(state.cursor);
+    });
+    const feedRetry = document.querySelector('[data-feed-retry]');
+    if (feedRetry) feedRetry.addEventListener('click', () => load(null));
+
+    load(null);
+  }
 })();

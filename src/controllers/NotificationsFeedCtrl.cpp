@@ -157,3 +157,18 @@ void NotificationsFeedCtrl::markAllRead(
                                       k500InternalServerError));
         });
 }
+
+// --- Страничная плоскость (Э7, экран «Уведомления»; см. шапку заголовка) --
+
+void NotificationsFeedCtrl::page(
+    const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    (void)req;  // сессию проверил LoginFilter (303 без неё — страница);
+                // данных страница не содержит — view-данные только каркасные
+    HttpViewData data;
+    data.insert("pageTitle", std::string("Уведомления · Пара"));
+    // Экран НЕ таб (03 §3.2: пять табов, колокольчик — в шапке): пустой
+    // activeTab → ни один пункт таб-бара не получает aria-current.
+    data.insert("activeTab", std::string(""));
+    cb(HttpResponse::newHttpViewResponse("notifications", std::move(data)));
+}

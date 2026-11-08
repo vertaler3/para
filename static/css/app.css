@@ -135,3 +135,27 @@ button.document-type{width:100%;background:var(--surface);font:inherit;text-alig
    действия (текст + ссылка «Мои брони» 03 §4.9.5). */
 .toast{display:flex;align-items:baseline;justify-content:space-between;gap:1rem}
 .toast-action{color:var(--bg);font-weight:600;text-decoration:underline;text-underline-offset:2px;flex-shrink:0}
+/* ==== Экран «Уведомления» (views/notifications.csp, 03 §4.6/§5.1) ====
+   Строки ленты — tappable-вариант каркасного .notification (черновик
+   notifications.html): <a> с deep_link / <button> без него — сброс
+   кнопочных умолчаний блочным паттерном button.lesson. Состояния
+   прочитанности — спека 03 §4.6: непрочитанное — вес 600 заголовка +
+   точка .unread-mark (каркасная), прочитанное — заголовок/иконка
+   --text-2, время --text-3. Скелетон — 4 строки «иконка-круг 24 + 2
+   строки текста» (03 §5.1) поверх shimmer-баз .skeleton. Новых цветов
+   НЕТ — только существующие токены (AGENTS §5.6); пары текст/фон
+   (--text-2/--text-3/--text на bg/surface) покрыты baseline
+   tools/contrast_check.py — 0 FAIL. ==== */
+.notifications-toolbar{margin-top:.25rem}
+a.notification,button.notification{width:100%;border:0;background:var(--clear);padding:1.25rem 0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.notification .ntitle{font-size:1rem;line-height:1.5}
+.notification.is-unread .ntitle{font-weight:600}
+.notification.is-read .ntitle{font-weight:400;color:var(--text-2)}
+.notification.is-read>.icon{color:var(--text-3)}
+.notification .nbody{font-size:.875rem;color:var(--text-2);margin-top:.25rem}
+.notification .nwhen{font-size:.75rem;color:var(--text-3);margin-top:.5rem}
+.notif-skeleton{display:grid;grid-template-columns:24px minmax(0,1fr);gap:.75rem;padding:1.25rem 0;border-bottom:1px solid var(--border)}
+.notif-skeleton:last-child{border-bottom:0}
+.notif-skeleton .skeleton{margin:0}
+.notif-skeleton .sk-icon{width:24px;height:24px;border-radius:var(--r-full)}
+.notif-skeleton .sk-lines{display:grid;gap:.5rem;align-content:start}
