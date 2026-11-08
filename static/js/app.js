@@ -2526,6 +2526,30 @@
     }
   }
 
+  /* ---------- временная защита ссылок на карту (правки по ревью
+     раунд 1) --------------------------------------------------------------- */
+  /* Страничный алиас /map/rooms делает ОТДЕЛЬНЫЙ коммит группы «Люди»,
+     а ссылка кабинета в профиле (person.csp) стоит уже сейчас — по
+     постановке экрана. Пока страницы нет, тап по a[href^="/map/"] НЕ
+     уводит в 404: проба тем же href; 200 — обычный переход, не-2xx —
+     честный тост. GUARD ВРЕМЕННЫЙ: удаляется вместе с этим блоком, когда
+     страница карты приземлится (ссылка в разметке остаётся как есть). */
+  document.querySelectorAll('a[href^="/map/"]').forEach((mapLink) => {
+    mapLink.addEventListener('click', (event) => {
+      if (!navigator.onLine) { applyOffline(true); return; }
+      event.preventDefault();
+      const href = mapLink.getAttribute('href');
+      fetch(href, { headers: { Accept: 'text/html' } })
+        .then((resp) => {
+          if (resp.ok) window.location.href = href;
+          else toast('Карта корпусов появится в следующем обновлении');
+        })
+        .catch(() => {
+          if (!navigator.onLine) applyOffline(true);
+        });
+    });
+  });
+
   /* ---------- экран «Люди» (views/people.csp; 03 §4.9.6, Э7) ------------ */
   /* Каталог-поиск: fetch GET /v1/people/search (query q/role — ТЕ ЖЕ
      JSON-роуты, что стоят за API; паттерн notifications-секции). Debounce
@@ -2594,32 +2618,41 @@
       show('[data-people-error]', false);
       show('[data-people-results]', false);
       const q = state.q.trim();
-      if (!q) {
-        /* пустой запрос: подсказка + преподаватели (search без q, role=teacher) */
-        show('[data-people-hint]', true);
-        const data = await fetchJSON('/v1/people/search?role=teacher');
-        if (seq !== state.seq) return;
-        if (!data || !Array.isArray(data.people)) {
-          show('[data-people-hint]', false);
-          show('[data-people-error]', true);
-          return;
-        }
-        renderInto(document.querySelector('[data-people-hint-list]'), data.people);
-        return;
+      /* Пустой запрос — «каталог». БЕЗ чипа роли — подсказка + преподаватели
+         (первая страница search без q, role=teacher — пустой q сервис не
+         фильтрует). С АКТИВНЫМ чипом роли фильтр уважается и без текста
+         запроса: подсказка не показывается, список — выбранной роли
+         (правки по ревью раунд 1: role=teacher не перебивает чип «Студенты»). */
+      const browse = !q && !state.role;
+      if (browse) show('[data-people-hint]', true);
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (state.role) {
+        params.set('role', state.role);
+      } else if (browse) {
+        params.set('role', 'teacher');
       }
-      skTimer = setTimeout(() => show('[data-people-loading]', true), 300);
-      const params = new URLSearchParams({ q });
-      if (state.role) params.set('role', state.role);
-      const data = await fetchJSON('/v1/people/search?' + params.toString());
+      if (!browse) skTimer = setTimeout(() => show('[data-people-loading]', true), 300);
+      const qs = params.toString();
+      const data = await fetchJSON('/v1/people/search' + (qs ? '?' + qs : ''));
       if (seq !== state.seq) return;
       clearTimeout(skTimer);
       show('[data-people-loading]', false);
       if (!data || !Array.isArray(data.people)) {
+        if (browse) show('[data-people-hint]', false);
         show('[data-people-error]', true);
         return;
       }
       if (!data.people.length) {
+        /* для каталога выбранной роли (пустой запрос + чип) «Никого не
+           нашли» честно: выход — сбросить фильтр (текст пустого состояния
+           это и предлагает); подсказка при этом скрыта */
+        if (browse) show('[data-people-hint]', false);
         show('[data-people-empty]', true);
+        return;
+      }
+      if (browse) {
+        renderInto(document.querySelector('[data-people-hint-list]'), data.people);
         return;
       }
       renderInto(document.querySelector('[data-people-list]'), data.people);
@@ -2685,6 +2718,13 @@
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
       return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
+    /* «2 ноября» / для диапазона «Занятия 2–8 ноября» (черновик
+       design-drafts/person.html) */
+    const dayMonth = (ymd) => {
+      const p = ymd.split('-').map(Number);
+      if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+    };
 
     const pageRetry = document.querySelector('[data-person-retry]');
     if (pageRetry) pageRetry.addEventListener('click', () => window.location.reload());
@@ -2735,6 +2775,24 @@
         return;
       }
       if (!list) return;
+      /* Заголовок блока с РЕАЛЬНЫМ диапазоном отрисованных занятий
+         («Занятия 2–8 ноября», один день — «Занятия 4 ноября») — формулировка
+         черновика person.html/вайрфрейма 03 §4.9.6; у студента —
+         «Расписание группы» не меняется. Сервер отдаёт ORDER BY starts_at —
+         первый/последний элементы и есть границы диапазона. */
+      const title = document.querySelector('[data-ps-title]');
+      const role = data.person && data.person.role;
+      if (title && (role === 'teacher' || role === 'staff')) {
+        const first = dateOf(data.events[0].starts_at);
+        const last = dateOf(data.events[data.events.length - 1].starts_at);
+        if (first && last) {
+          title.textContent = 'Занятия ' + (first === last
+            ? dayMonth(first)
+            : first.slice(0, 7) === last.slice(0, 7)
+              ? first.slice(8, 10).replace(/^0/, '') + '–' + dayMonth(last)
+              : dayMonth(first) + ' – ' + dayMonth(last));
+        }
+      }
       let current = '';
       let dayBox = null;
       data.events.forEach((e) => {
