@@ -23,3 +23,30 @@
    (a.next-class/a.lesson — блочный якорь вместо inline-flex глобального a);
    пустые состояния виджетов; прошедшие пары дня — --text-3 (03 §4.2). */
 .deadline-dot{display:inline-block;width:8px;height:8px;border-radius:var(--r-full);background:var(--border);margin-right:.5rem}.deadline-dot.dot-warn{background:var(--warning-text)}.deadline-dot.dot-danger{background:var(--danger-text)}.widget-empty{margin-top:.5rem;display:grid;gap:.75rem;justify-items:start}.widget-error{font-size:.875rem;color:var(--danger-text);margin-top:.4rem}a.next-class{display:block;color:var(--text);text-decoration:none}.next-room-line{margin-top:.75rem}a.lesson{color:var(--text);text-decoration:none}.lesson.is-past .lesson-subject,.lesson.is-past .lesson-time strong{color:var(--text-3)}
+/* ==== Экран «Расписание» (Э7, 03 §4.3): статусы пар (перенос — левый
+   акцент --warning-text + бейдж warning; отмена — зачёркнуто), стрелки
+   недели, индикатор htmx (штатный паттерн .htmx-indicator), sheet «Детали
+   пары» (dialog → bottom-sheet на <600px). Цвета — только существующие
+   токены: пара --warning-text/--warning-bg уже покрыта
+   tools/contrast_check.py (0 FAIL). Карточка пары — <button>: сброс
+   кнопочных умолчаний, сетка .lesson общая; фокус — глобальный
+   :focus-visible каркаса (2px --primary). ==== */
+button.lesson{width:100%;border:0;background:var(--clear);padding:1.1rem 0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.lesson.moved{box-shadow:inset 3px 0 0 0 var(--warning-text)}
+.lesson.moved .lesson-detail{color:var(--warning-text)}
+.lesson.cancelled .lesson-subject,.lesson.cancelled .lesson-time strong{text-decoration:line-through;color:var(--text-3)}
+.lesson.cancelled .lesson-detail{color:var(--text-3)}
+.lesson.cancelled .lesson-room s{color:var(--text-3)}
+.badge.warn{background:var(--warning-bg);color:var(--warning-text)}
+.lesson-was{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem;font-size:.875rem;color:var(--warning-text);margin-top:.35rem}
+.lesson-was s{color:var(--text-2)}
+.week-nav{display:flex;align-items:center;gap:.5rem}
+.week-nav [data-week-range]{min-width:11ch;text-align:center}
+.day-group.is-today>.section-title h2{color:var(--primary)}
+.day-group.is-today .schedule-list{border:2px solid var(--primary);border-radius:var(--r-lg)}
+.day-empty{padding:1.1rem 0;margin:0}
+.htmx-indicator{opacity:0;transition:opacity 200ms ease-in}
+.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{opacity:1}
+.sheet-row{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid var(--border)}
+.sheet-label{color:var(--text-2);font-size:.875rem;flex-shrink:0}
+@media(max-width:599px){dialog.lesson-sheet{margin:auto auto 0;width:100%;max-width:none;border-radius:var(--r-xl) var(--r-xl) 0 0;border-bottom:0}}

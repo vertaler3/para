@@ -22,6 +22,16 @@ bool isPublic(const std::string& path)
     return path == "/";
 }
 
+// API-плоскость (02 §3.2: JSON-данные и htmx-фрагменты — под /v1/; push-канал
+// /ws — тоже API): без сессии отвечает 401 JSON — контракт гейта Э6
+// («wsБезCookie» → 401) и всех /v1/*-проверок. СТРАНИЦА (SSR-HTML, 02 §3.2
+// «SSR-страницы /, /login, /schedule, /grades …») — всё остальное, что не
+// публично: без сессии браузеру отвечает 303 → /login (02 §6.3).
+bool isApi(const std::string& path)
+{
+    return path.rfind("/v1/", 0) == 0 || path == "/ws";
+}
+
 }  // namespace
 
 void LoginFilter::doFilter(const HttpRequestPtr& req,
@@ -33,25 +43,39 @@ void LoginFilter::doFilter(const HttpRequestPtr& req,
         fccb();
         return;
     }
+    // Страница (SSR-HTML) или API — от этого зависит ответ без сессии:
+    //   API (JSON /v1/* и WS-канал /ws) → 401 без деталей (02 §6.3); формат
+    //     тела — единый (02 §5.1), message не раскрывает разницу «нет
+    //     cookie» / «сессия невалидна» (проверки гейтов Э1–Э6 на нём стоят);
+    //   страница (SSR-HTML) → 303 → /login (02 §6.3 «нет сессии → 303
+    //     /login (SSR)», как GET / в DashboardCtrl) — браузер сам пройдёт
+    //     редирект на форму входа.
+    const bool api = isApi(req->path());
     const std::string token = req->getCookie(para::SessionService::kCookieName);
     if (token.empty())
     {
-        // 401 без деталей (02 §6.3); формат тела — единый (02 §5.1), message
-        // не раскрывает разницу «нет cookie» / «сессия невалидна».
-        fcb(para::api::errorResponse("unauthorized",
-                                     "Требуется авторизация",
-                                     k401Unauthorized));
+        if (api)
+            fcb(para::api::errorResponse("unauthorized",
+                                         "Требуется авторизация",
+                                         k401Unauthorized));
+        else
+            fcb(HttpResponse::newRedirectionResponse("/login",
+                                                     k303SeeOther));
         return;
     }
     para::SessionService::findValid(
         app().getDbClient("para"), token,
-        [req, fcb = std::move(fcb),
+        [req, api, fcb = std::move(fcb),
          fccb = std::move(fccb)](std::optional<para::SessionInfo> session) {
             if (!session)
             {
-                fcb(para::api::errorResponse("unauthorized",
-                                             "Требуется авторизация",
-                                             k401Unauthorized));
+                if (api)
+                    fcb(para::api::errorResponse("unauthorized",
+                                                 "Требуется авторизация",
+                                                 k401Unauthorized));
+                else
+                    fcb(HttpResponse::newRedirectionResponse("/login",
+                                                             k303SeeOther));
                 return;
             }
             req->attributes()->insert("session", std::move(*session));

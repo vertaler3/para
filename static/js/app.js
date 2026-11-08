@@ -722,4 +722,157 @@
     document.querySelectorAll('[data-widget-retry]').forEach((b) => b.addEventListener('click', () => { loadDashboard(); }));
     loadDashboard();
   }
+
+  /* ---------- экран «Расписание» (views/schedule.csp; 03 §4.3, §5) ---------- */
+  /* Сегменты «Сегодня | Неделя» и стрелки недели ±1 — htmx (вендоренный
+     static/vendor/htmx.min.js, лицензия — docs/decisions.md Р-18):
+     hx-get на /schedule/segment?segment=today|week&offset=N, outerHTML-
+     обмен контейнера #schedule-segment (его data-state="data|empty"
+     приезжает с каждым фрагментом), скелетон — hx-indicator. Vanilla JS
+     остаётся для sheet «Детали пары» и состояний «Ошибка/Офлайн»
+     (03 §5.3/§5.4). Данные карточек — data-атрибуты, отрисованные
+     сервером; вставка — только textContent (02 §6.4). */
+  if (document.body.dataset.page === 'schedule') {
+    const sheet = document.getElementById('lesson-sheet');
+    const errBox = document.getElementById('schedule-error');
+    const PEOPLE_ID_OFFSET = 1000; // профиль человека = teacher_id + 1000 (Р-15)
+    const KIND = { lecture: 'Лекция', seminar: 'Семинар', practice: 'Практика' };
+    const STATUS = { normal: 'По расписанию', moved: 'Перенесена', cancelled: 'Отменена', substituted: 'Замена' };
+
+    /* --- sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet;
+       <dialog> в views/schedule.csp, закрытие — кнопка/Esc). Имя
+       преподавателя — GET /v1/people/{teacher_id+1000} (Э6а, Р-15);
+       страница /people/{id} — следующий экран Э7, ссылка уже ведёт
+       туда; без teacher_id (или если профиль не отвечает) — ссылка
+       «Открыть профиль» скрыта/нейтральна, «—» в строке. --- */
+    const setField = (sel, text) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.textContent = text; };
+    const showRow = (sel, on) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.hidden = !on; };
+    const openSheet = async (card) => {
+      if (!sheet) return;
+      const subject = card.querySelector('.lesson-subject');
+      setField('[data-sheet-title]', subject ? subject.textContent : 'Пара');
+      setField('[data-sheet-kind]', KIND[card.dataset.kind] || '');
+      setField('[data-sheet-when]', [card.dataset.date, card.dataset.start, card.dataset.end].filter(Boolean).join(' · '));
+      setField('[data-sheet-room]', 'аудитория ' + (card.dataset.room || '—'));
+      const changed = [];
+      if (card.dataset.prevRoom) changed.push('аудитория ' + card.dataset.prevRoom + ' → ' + (card.dataset.room || '—'));
+      if (card.dataset.prevStart && card.dataset.prevStart !== card.dataset.start) changed.push('время ' + card.dataset.prevStart + ' → ' + card.dataset.start);
+      showRow('[data-sheet-change-row]', changed.length > 0);
+      if (changed.length) setField('[data-sheet-change]', 'было → стало: ' + changed.join(' · '));
+      setField('[data-sheet-status]', STATUS[card.dataset.status] || card.dataset.status || '');
+      const link = sheet.querySelector('[data-sheet-teacher]');
+      const fallback = sheet.querySelector('[data-sheet-teacher-empty]');
+      const teacherId = parseInt(card.dataset.teacherId || '', 10);
+      if (link && Number.isFinite(teacherId)) {
+        const href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
+        link.href = href;
+        link.textContent = 'Загрузка…';
+        link.hidden = false;
+        if (fallback) fallback.hidden = true;
+        const person = await fetchJSON('/v1/people/' + (teacherId + PEOPLE_ID_OFFSET));
+        link.textContent = person && person.person && person.person.fio ? person.person.fio : 'Открыть профиль';
+      } else if (link && fallback) {
+        link.hidden = true;
+        fallback.hidden = false;
+      }
+      sheet.showModal();
+    };
+    /* делегирование: контейнер сегмента перерисовывается htmx —
+       слушатель на документе переживает обмен */
+    document.addEventListener('click', (event) => {
+      const card = event.target.closest('[data-event]');
+      if (card && sheet) {
+        event.preventDefault();
+        openSheet(card);
+      }
+    });
+    const sheetClose = sheet ? sheet.querySelector('[data-sheet-close]') : null;
+    if (sheetClose) sheetClose.addEventListener('click', () => sheet.close());
+
+    /* --- состояния сегмента (03 §5.3/§5.4) ---------------------------- */
+    /* Ошибка (ответ не 2xx или сеть) — блок «Не получилось загрузить
+       расписание» с «Повторить», перезапускающим запрос исходного
+       элемента (03 §5.3: «Повторить» всегда реально перезапрашивает);
+       офлайн — баннер каркаса; истёкшая сессия (фильтр отвечает 303 →
+       /login, XHR следует редиректу) — браузерный переход на вход. */
+    let retryElt = null;
+    document.body.addEventListener('htmx:afterRequest', (e) => {
+      if (!errBox) return;
+      if (e.detail && e.detail.successful) {
+        errBox.hidden = true;
+        return;
+      }
+      if (e.detail && e.detail.elt) retryElt = e.detail.elt;
+      errBox.hidden = false;
+    });
+    document.body.addEventListener('htmx:sendError', (e) => {
+      if (!navigator.onLine) applyOffline(true);
+      if (errBox) {
+        if (e.detail && e.detail.elt) retryElt = e.detail.elt;
+        errBox.hidden = false;
+      }
+    });
+    document.body.addEventListener('htmx:beforeSwap', (e) => {
+      const xhr = e.detail && e.detail.xhr;
+      if (xhr && /\/login(?:\?.*)?$/.test(xhr.responseURL || '')) {
+        e.detail.shouldSwap = false;
+        window.location.href = '/login';
+      }
+    });
+    const scheduleRetry = document.querySelector('[data-schedule-retry]');
+    if (scheduleRetry) {
+      scheduleRetry.addEventListener('click', () => {
+        if (retryElt) retryElt.click();
+        else window.location.reload();
+      });
+    }
+
+    /* --- сегмент «Неделя» (03 §4.3): автоскролл к сегодняшнему дню и
+       свайп влево/вправо = ‹/› неделя. Скролл — к .day-group.is-today,
+       только если он вне вьюпорта; при reduced-motion — без анимации.
+       Свайп — тап-жест по контейнеру сегмента: |dX| ≥ 56px и горизонтальнее
+       вертикали, иначе это скролл страницы; кнопки-стрелки сами disabled
+       на границе окна [-4..4].
+       ВАЖНО: контейнер #schedule-segment свапается htmx ЦЕЛИКОМ
+       (hx-swap="outerHTML" в партиалах), поэтому ссылку на него нельзя
+       кэшировать в замыкании — после первого же обмена она указывала бы
+       на отсоединённый узел (свайп умер бы, автоскролл искал бы в старом
+       дереве). getElementById перезапрашивается в каждом обработчике. --- */
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const scrollTodayIntoView = () => {
+      const segBox = document.getElementById('schedule-segment');
+      const todayGroup = segBox ? segBox.querySelector('.day-group.is-today') : null;
+      if (!todayGroup) return;
+      const r = todayGroup.getBoundingClientRect();
+      if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+      todayGroup.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+    };
+    scrollTodayIntoView();
+    document.body.addEventListener('htmx:afterSwap', () => {
+      setTimeout(scrollTodayIntoView, 0);
+    });
+    let touchX = 0, touchY = 0, swipeArmed = false;
+    document.addEventListener('touchstart', (e) => {
+      const segBox = document.getElementById('schedule-segment');
+      swipeArmed = Boolean(segBox) && segBox.contains(e.target) && !(sheet && sheet.open);
+      if (!swipeArmed) return;
+      const t = e.touches[0];
+      touchX = t.clientX;
+      touchY = t.clientY;
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      if (!swipeArmed) return;
+      swipeArmed = false;
+      const segBox = document.getElementById('schedule-segment');
+      if (!segBox) return;
+      const t = e.changedTouches[0];
+      const dX = t.clientX - touchX;
+      const dY = t.clientY - touchY;
+      if (Math.abs(dX) < 56 || Math.abs(dY) >= Math.abs(dX)) return;
+      const arrow = segBox.querySelector(dX < 0
+        ? '[aria-label="Следующая неделя"]'
+        : '[aria-label="Предыдущая неделя"]');
+      if (arrow && !arrow.disabled) arrow.click();
+    }, { passive: true });
+  }
 })();
