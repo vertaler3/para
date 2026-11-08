@@ -1961,6 +1961,146 @@
     loadBookings();
   }
 
+  /* ---------- экран «Библиотека» (views/library.csp; 03 §4.9.6/5.12) ----- */
+  /* Наличие литературы: два fetch из ТЕХ ЖЕ JSON-роутов, что за API
+     (02 §5.2): филиалы GET /v1/library/branches (чипы «Все филиалы» + по
+     одному, aria-pressed) и каталог GET /v1/library/items — query q=
+     (debounce ~300 мс, как на «Людях»), branch_id=, available=1 (чип-
+     тумблер «Только доступные»); гонку устаревших ответов гасит
+     монотонный seq. Строка книги — .book-row черновика library.html:
+     обложка-иконка, название, «автор · тип издания» (kind — словарь DDL
+     book|journal|textbook), бейдж «свободно N из M» (available>0 —
+     .badge.info, 0 — нейтральный: «свободно 0 из 4» честно виден) и
+     подпись «филиал · зал» (hall nullable — пустой зал не рисуется;
+     author nullable — строка автора без имени не рисуется).
+     Пустой результат — «Ничего не нашлось» (дословно 03 §5.2/черновик).
+     Состояния 03 §5: скелетон только при ответе > 300 мс, ошибка с
+     «Повторить», офлайн — баннер каркаса. Вставка — только
+     createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'library') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const BOOK_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 0h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9"/></svg>';
+    const KIND_LABEL = { book: 'книга', journal: 'журнал', textbook: 'учебное пособие' };
+    const input = document.querySelector('[data-library-q]');
+    const availChip = document.querySelector('[data-library-available]');
+    const branchesBox = document.querySelector('[data-library-branches]');
+    const state = { q: '', branchId: '', available: false, seq: 0 };
+    let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
+    let debounce = 0;
+
+    const rowFor = (it) => {
+      const row = el('article', 'book-row');
+      const cover = el('div', 'book-cover');
+      cover.innerHTML = BOOK_ICON; /* статическая svg-константа — 02 §6.4 */
+      row.append(cover);
+      const mid = el('div');
+      mid.append(el('h2', null, it.title || ''));
+      const by = [it.author || '', KIND_LABEL[it.kind] || it.kind || ''].filter(Boolean).join(' · ');
+      if (by) mid.append(el('p', null, by));
+      const have = Number(it.available) || 0;
+      const total = Number(it.total) || 0;
+      const badge = el('span', 'badge' + (have > 0 ? ' info' : ''), 'Свободно ' + have + ' из ' + total);
+      mid.append(badge);
+      mid.append(el('p', null, [it.branch || '', it.hall || ''].filter(Boolean).join(' · ')));
+      row.append(mid);
+      return row;
+    };
+
+    const loadItems = async () => {
+      const seq = ++state.seq;
+      clearTimeout(skTimer);
+      show('[data-library-loading]', false);
+      show('[data-library-empty]', false);
+      show('[data-library-error]', false);
+      show('[data-library-results]', false);
+      const params = new URLSearchParams();
+      const q = state.q.trim();
+      if (q) params.set('q', q);
+      if (state.branchId) params.set('branch_id', state.branchId);
+      if (state.available) params.set('available', '1');
+      skTimer = setTimeout(() => show('[data-library-loading]', true), 300);
+      const qs = params.toString();
+      const data = await fetchJSON('/v1/library/items' + (qs ? '?' + qs : ''));
+      if (seq !== state.seq) return;
+      clearTimeout(skTimer);
+      show('[data-library-loading]', false);
+      if (!data || !Array.isArray(data.items)) {
+        show('[data-library-error]', true);
+        return;
+      }
+      if (!data.items.length) {
+        show('[data-library-empty]', true);
+        return;
+      }
+      const list = document.querySelector('[data-library-list]');
+      if (!list) return;
+      list.replaceChildren();
+      data.items.forEach((it) => list.append(rowFor(it)));
+      show('[data-library-results]', true);
+    };
+
+    /* филиалы: «Все филиалы» + по одному (GET /v1/library/branches) */
+    const loadBranches = async () => {
+      const data = await fetchJSON('/v1/library/branches');
+      if (!data || !Array.isArray(data.branches) || !branchesBox) return;
+      data.branches.forEach((b) => {
+        const chip = el('button', 'chip');
+        chip.type = 'button';
+        chip.dataset.branchId = String(b.id);
+        chip.textContent = b.name || '';
+        chip.setAttribute('aria-pressed', String(String(b.id) === state.branchId));
+        chip.addEventListener('click', () => {
+          state.branchId = String(b.id);
+          syncBranchChips();
+          clearTimeout(debounce);
+          loadItems();
+        });
+        branchesBox.append(chip);
+      });
+    };
+    const syncBranchChips = () => {
+      if (!branchesBox) return;
+      branchesBox.querySelectorAll('.chip').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String((chip.dataset.branchId || '') === state.branchId));
+      });
+    };
+    if (branchesBox) {
+      branchesBox.querySelector('.chip').addEventListener('click', () => {
+        state.branchId = '';
+        syncBranchChips();
+        clearTimeout(debounce);
+        loadItems();
+      });
+    }
+
+    if (input) {
+      input.addEventListener('input', () => {
+        state.q = input.value;
+        clearTimeout(debounce);
+        debounce = setTimeout(loadItems, 300);
+      });
+    }
+    if (availChip) {
+      availChip.addEventListener('click', () => {
+        state.available = availChip.getAttribute('aria-pressed') !== 'true';
+        availChip.setAttribute('aria-pressed', String(state.available));
+        clearTimeout(debounce);
+        loadItems();
+      });
+    }
+    const libraryRetry = document.querySelector('[data-library-retry]');
+    if (libraryRetry) libraryRetry.addEventListener('click', () => loadItems());
+
+    loadBranches();
+    loadItems();
+  }
+
   /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */
   /* Плоская лента GET /v1/notifications (02 §5.2): query type= (словарь
      CHECK 0004 sql/migrations/0004:10 — schedule/deadline/application/
