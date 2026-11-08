@@ -2250,6 +2250,233 @@
     loadCanteens();
   }
 
+  /* ---------- экран «Карта» (views/map.csp; 03 §4.9.6/5.16) -------------- */
+  /* Корпуса → этажи → кабинеты и поиск по номеру. Данные — ТЕ ЖЕ JSON-
+     роуты, что за API (02 §5.2): GET /v1/map/buildings (чипы корпусов),
+     GET /v1/map/rooms?building_id=N (этажи выбранного корпуса — distinct
+     floor, кабинеты этажа — плитки .map-plan/.map-room) и GET
+     /v1/map/rooms?q= (карточки «номер · корпус · этаж · тип» — формат
+     черновика map.html). Страница читает ?q= из location.search при
+     загрузке (алиас GET /map/rooms → 303 /map?q=… ведёт сюда из
+     профилей людей): поле предзаполняется, поиск выполняется сразу;
+     новый поиск — history.replaceState (ссылка шарится). floor/kind
+     nullable — пустое не рисуется (02 §5.2). Гонку ответов гасит seq.
+     Пустой поиск — «Ничего не нашлось»; этаж без кабинетов — «На этом
+     этаже кабинеты ещё не добавлены» (дословно черновик map.html).
+     Состояния 03 §5: скелетоны секций только при ответе > 300 мс,
+     ошибки с «Повторить», офлайн — баннер каркаса. Вставка — только
+     createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'map') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const input = document.querySelector('[data-map-q]');
+    const state = { buildings: [], buildingId: null, floor: null, seq: 0, searchSeq: 0 };
+    let skSearch = 0, skRooms = 0; /* таймеры скелетонов (03 §5.1: ответ > 300 мс) */
+
+    /* «Корпус Б · этаж 2 · аудитория» — подпись карточки/тип (null — нет) */
+    const roomSub = (r) => {
+      const parts = [r.building || ''];
+      if (r.floor != null) parts.push('этаж ' + r.floor);
+      if (r.kind) parts.push(r.kind);
+      return parts.filter(Boolean).join(' · ');
+    };
+
+    /* --- поиск: GET /v1/map/rooms?q= → карточки ------------------------- */
+    const runSearch = async (rawQ) => {
+      const q = String(rawQ || '').trim();
+      if (!q) {
+        show('[data-search-section]', false);
+        return;
+      }
+      const seq = ++state.searchSeq;
+      show('[data-search-section]', true);
+      clearTimeout(skSearch);
+      show('[data-search-loading]', false);
+      show('[data-search-empty]', false);
+      show('[data-search-error]', false);
+      show('[data-search-results]', false);
+      skSearch = setTimeout(() => show('[data-search-loading]', true), 300);
+      const data = await fetchJSON('/v1/map/rooms?q=' + encodeURIComponent(q));
+      if (seq !== state.searchSeq) return;
+      clearTimeout(skSearch);
+      show('[data-search-loading]', false);
+      if (!data || !Array.isArray(data.rooms)) {
+        show('[data-search-error]', true);
+        return;
+      }
+      if (!data.rooms.length) {
+        show('[data-search-empty]', true);
+        return;
+      }
+      const box = document.querySelector('[data-search-results]');
+      if (!box) return;
+      box.replaceChildren();
+      data.rooms.forEach((r) => {
+        const card = el('div', 'surface section');
+        card.style.marginTop = '0';
+        card.append(el('h2', null, r.name || ''));
+        card.append(el('p', 'muted', roomSub(r)));
+        box.append(card);
+      });
+      show('[data-search-results]', true);
+    };
+
+    const submitSearch = (q) => {
+      const clean = String(q || '').trim();
+      /* адрес держим в резонансе с экраном — ссылка шарится (алиас ведёт
+         сюда же через /map?q=…), состояние истории не засоряем */
+      const url = clean ? '/map?q=' + encodeURIComponent(clean) : '/map';
+      window.history.replaceState(null, '', url);
+      runSearch(clean);
+    };
+    const form = document.querySelector('[data-map-form]');
+    if (form) {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitSearch(input ? input.value : '');
+      });
+    }
+    const searchRetry = document.querySelector('[data-search-retry]');
+    if (searchRetry) searchRetry.addEventListener('click', () => runSearch(input ? input.value : ''));
+
+    /* --- обзор: корпуса → этажи → кабинеты ------------------------------ */
+    const loadRooms = async () => {
+      if (!state.buildingId) return;
+      const seq = ++state.seq;
+      clearTimeout(skRooms);
+      show('[data-rooms-loading]', false);
+      show('[data-rooms-empty]', false);
+      show('[data-rooms-error]', false);
+      show('[data-rooms-grid]', false);
+      show('[data-floor-chips]', true);
+      skRooms = setTimeout(() => show('[data-rooms-loading]', true), 300);
+      const data = await fetchJSON('/v1/map/rooms?building_id=' + state.buildingId);
+      if (seq !== state.seq) return;
+      clearTimeout(skRooms);
+      show('[data-rooms-loading]', false);
+      if (!data || !Array.isArray(data.rooms)) {
+        show('[data-rooms-error]', true);
+        return;
+      }
+      /* чипы этажей — distinct floor выбранного корпуса (null — «без этажа») */
+      const floors = [];
+      data.rooms.forEach((r) => {
+        if (!floors.some((f) => f.key === r.floor)) floors.push({ key: r.floor });
+      });
+      floors.sort((a, b) => {
+        if (a.key == null) return 1;
+        if (b.key == null) return -1;
+        return a.key - b.key;
+      });
+      const chips = document.querySelector('[data-floor-chips]');
+      if (!chips) return;
+      chips.replaceChildren();
+      floors.forEach((f) => {
+        const chip = el('button', 'chip');
+        chip.type = 'button';
+        chip.dataset.floor = f.key == null ? '' : String(f.key);
+        chip.textContent = f.key == null ? 'Без этажа' : 'Этаж ' + f.key;
+        chip.addEventListener('click', () => {
+          state.floor = f.key;
+          syncFloorChips();
+          renderRooms(data.rooms);
+        });
+        chips.append(chip);
+      });
+      if (!floors.some((f) => f.key === state.floor)) {
+        state.floor = floors.length ? floors[0].key : null;
+      }
+      syncFloorChips();
+      renderRooms(data.rooms);
+    };
+    const syncFloorChips = () => {
+      document.querySelectorAll('[data-floor-chips] .chip').forEach((chip) => {
+        const val = chip.dataset.floor === '' ? null : Number(chip.dataset.floor);
+        chip.setAttribute('aria-pressed', String(val === state.floor));
+      });
+    };
+    const renderRooms = (rooms) => {
+      const grid = document.querySelector('[data-rooms-grid]');
+      if (!grid) return;
+      grid.replaceChildren();
+      const onFloor = rooms.filter((r) => r.floor === state.floor);
+      if (!onFloor.length) {
+        show('[data-rooms-grid]', false);
+        show('[data-rooms-empty]', true);
+        return;
+      }
+      onFloor.forEach((r) => {
+        const tile = el('div', 'map-room');
+        tile.append(el('strong', null, r.name || ''));
+        if (r.kind) tile.append(el('span', 'caption', r.kind));
+        grid.append(tile);
+      });
+      show('[data-rooms-empty]', false);
+      show('[data-rooms-grid]', true);
+    };
+
+    const syncBuildingChips = () => {
+      document.querySelectorAll('[data-building-chips] .chip').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String(Number(chip.dataset.buildingId) === state.buildingId));
+      });
+    };
+    const selectBuilding = (b) => {
+      state.buildingId = b.id;
+      state.floor = null;
+      syncBuildingChips();
+      const addr = document.querySelector('[data-building-address]');
+      if (addr) {
+        addr.textContent = b.address || '';
+        addr.hidden = !b.address;
+      }
+      const floorsSection = document.querySelector('[data-floors-section]');
+      if (floorsSection) floorsSection.hidden = false;
+      loadRooms();
+    };
+    const loadBuildings = async () => {
+      show('[data-buildings-error]', false);
+      const data = await fetchJSON('/v1/map/buildings');
+      if (!data || !Array.isArray(data.buildings)) {
+        show('[data-buildings-error]', true);
+        return;
+      }
+      state.buildings = data.buildings;
+      const chips = document.querySelector('[data-building-chips]');
+      if (!chips) return;
+      chips.replaceChildren();
+      state.buildings.forEach((b) => {
+        const chip = el('button', 'chip');
+        chip.type = 'button';
+        chip.dataset.buildingId = String(b.id);
+        chip.textContent = b.name || '';
+        chip.addEventListener('click', () => {
+          if (state.buildingId !== b.id) selectBuilding(b);
+        });
+        chips.append(chip);
+      });
+      if (state.buildings.length) selectBuilding(state.buildings[0]);
+    };
+    const buildingsRetry = document.querySelector('[data-buildings-retry]');
+    if (buildingsRetry) buildingsRetry.addEventListener('click', () => loadBuildings());
+    const roomsRetry = document.querySelector('[data-rooms-retry]');
+    if (roomsRetry) roomsRetry.addEventListener('click', () => loadRooms());
+
+    loadBuildings();
+
+    /* ?q= при загрузке (алиас /map/rooms?q=… и шареные ссылки): поле
+       предзаполнено, поиск выполнен сразу — постановка экрана карты */
+    const initial = new URLSearchParams(window.location.search).get('q');
+    if (initial && input) {
+      input.value = initial;
+      runSearch(initial);
+    }
+  }
+
   /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */
   /* Плоская лента GET /v1/notifications (02 §5.2): query type= (словарь
      CHECK 0004 sql/migrations/0004:10 — schedule/deadline/application/
@@ -2816,29 +3043,12 @@
     }
   }
 
-  /* ---------- временная защита ссылок на карту (правки по ревью
-     раунд 1) --------------------------------------------------------------- */
-  /* Страничный алиас /map/rooms делает ОТДЕЛЬНЫЙ коммит группы «Люди»,
-     а ссылка кабинета в профиле (person.csp) стоит уже сейчас — по
-     постановке экрана. Пока страницы нет, тап по a[href^="/map/"] НЕ
-     уводит в 404: проба тем же href; 200 — обычный переход, не-2xx —
-     честный тост. GUARD ВРЕМЕННЫЙ: удаляется вместе с этим блоком, когда
-     страница карты приземлится (ссылка в разметке остаётся как есть). */
-  document.querySelectorAll('a[href^="/map/"]').forEach((mapLink) => {
-    mapLink.addEventListener('click', (event) => {
-      if (!navigator.onLine) { applyOffline(true); return; }
-      event.preventDefault();
-      const href = mapLink.getAttribute('href');
-      fetch(href, { headers: { Accept: 'text/html' } })
-        .then((resp) => {
-          if (resp.ok) window.location.href = href;
-          else toast('Карта корпусов появится в следующем обновлении');
-        })
-        .catch(() => {
-          if (!navigator.onLine) applyOffline(true);
-        });
-    });
-  });
+  /* Страничный алиас /map/rooms → 303 /map?q=… приземлился (коммит
+     экрана «Карта») — временный guard ссылок a[href^="/map/"] (правки
+     по ревью раунд 1: честный тост вместо 404, пока страницы не было)
+     снят по его собственному предписанию «удаляется, когда страница
+     карты приземлится». Ссылки кабинета в person.csp переходят обычным
+     образом: браузер следует 303 на /map?q=…, страница читает q. */
 
   /* ---------- экран «Люди» (views/people.csp; 03 §4.9.6, Э7) ------------ */
   /* Каталог-поиск: fetch GET /v1/people/search (query q/role — ТЕ ЖЕ
