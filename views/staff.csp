@@ -1,0 +1,258 @@
+<%c++
+/* Стол сотрудника (Э7, экран 8 из гайда FE §3; 03 §4.8, design-drafts/
+   staff.html и staff-states.html). ПОСЛЕДНИЙ экран Э7 — закрывает прототип.
+   Каркас: partials head/topbar/tabbar/footer; pageTitle/activeTab/mode/login —
+   view-переменные StaffCtrl::staffPage (серверные константы + логин сессии;
+   02 §6.4). Пользовательские строки в разметку шаблона НЕ вставляются:
+   контент секций грузит static/js/app.js из JSON API (textContent — без
+   innerHTML, 02 §6.4) — экранировать в шаблоне нечего, кроме login (ниже).
+
+   Режим (view-переменная mode от контроллера):
+     forbidden — студент на /staff: HTTP 403 + HTML-карточка «Доступ только
+                 для сотрудников» (тот же вид карточки, что 403 у заявок,
+                 application.csp mode="guard"; текст — сообщение StaffFilter
+                 02 §5.2; роль проверяет контроллер — StaffFilter на
+                 СТРАНИЦУ не ставится: он отвечает API-JSON, постановка
+                 экрана Э7);
+     page      — сотрудник: каркас с секциями.
+
+   Секции страницы (данные — только с сервера, AGENTS §5.2):
+     сводка      — GET /v1/staff/dashboard: счётчики очереди (5 активных
+                   статусов) + «свежие изменения» (последние 5 переносов/
+                   отмен «было → стало»); скелетон → данные | ошибка с
+                   «Повторить» (03 §5.1/§5.3); тап по изменению → день
+                   расписания /schedule?date=<день> (канон deep_link Э6);
+     очередь     — GET /v1/staff/applications?status=&type=&overdue=1:
+                   чипы-фильтры (aria-pressed ведёт app.js), строки-карточки
+                   (.app-card: тип, бейдж статуса, «Срок горит» — danger,
+                   владелец fio/группа — как пришло с сервера, Р-15);
+                   сортировка сервера updated_at ASC — «дольше всех ждёт —
+                   сверху»; пусто — «Очередь разобрана» (staff-states.html,
+                   тексты финальные), с фильтром — нейтральная строка
+                   (03 §5.2:1000); ошибка — «Повторить»; офлайн — баннер
+                   каркаса (fetchJSON переводит сам);
+     перенос     — форма POST /v1/staff/schedule/changes (событие — из
+                   «свежих изменений» или id вручную, действие move/cancel,
+                   дата/время, аудитория, причина); 201 {recipients} →
+                   «Уведомлено N студентов» (поле recipients 02 §5.2);
+     объявления  — форма POST /v1/staff/announcements с ПОДПИСЬЮ «без
+                   push-уведомления, только в ленте» (01 §4.5 — объявления
+                   БЕЗ push и БЕЗ уведомлений) + лента GET /v1/announcements
+                   (?cursor= — «Показать ещё»).
+   Смена статуса — кнопки допустимых переходов матрицы на карточке очереди:
+   POST /v1/staff/applications/{id}/status (app.js) → htmx-перерисовка
+   карточки серверным фрагментом GET /staff/app-card (views/staff/
+   app_card.csp, HX-Request — паттерн /schedule/segment, Р-19); 409 —
+   inline-предупреждение в карточке (message тела 02 §5.1).
+
+   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16). htmx — вендоренный
+   static/vendor/htmx.min.js (Р-18), подключён ДО app.js (порядок defer);
+   нужен для htmx.ajax-перерисовки карточки. Таб-бар — общий каркасный
+   (свой набор табов сотрудника 03 §4.8 не собирается — ссылок на
+   несуществующие экраны не плодим; активного таба у страницы нет). */
+const std::string mode = @@.get<std::string>("mode");
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: страница подключает htmx
+     (вендоренно, Р-18; до app.js — порядок defer = порядок исполнения)
+     и app.js. -->
+<script defer src="/static/vendor/htmx.min.js"></script>
+<script defer src="/static/js/app.js"></script>
+<body data-page="staff">
+<%view topbar %>
+<main id="main" class="shell">
+<%c++
+if (mode == "forbidden")
+{
+    // Студент на /staff (03 §5, «как у заявок 403»): HTML-карточка,
+    // НЕ голый JSON; код статуса 403 ставит контроллер.
+%>
+  <div class="content-narrow">
+    <div class="surface">
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h2>Доступ только для сотрудников</h2>
+        <p>Этот раздел — рабочий кабинет учебного офиса. Ваш кабинет, расписание и заявки — на главной.</p>
+        <a class="button" href="/">На главную</a>
+      </div>
+    </div>
+  </div>
+<%c++
+}
+else
+{
+%>
+  <div class="page-heading">
+    <div>
+      <h1>Стол сотрудника</h1>
+      <p>Заявки, переносы пар и объявления — рабочий кабинет учебного офиса</p>
+    </div>
+  </div>
+  <!-- Демо-роль: логин сессии (страница знает его из view-данных;
+       единственная пользовательская строка шаблона — экранируется). -->
+  <p class="overline" data-staff-login><%c++
+const std::string login = @@.get<std::string>("login");
+$$ << esc(login.empty() ? "сотрудник учебного офиса" : login + " · демонстрационная роль сотрудника");
+  %></p>
+  <!-- Быстрые переходы по секциям (03 §4.8 — один экран, все блоки на нём) -->
+  <nav class="chips" aria-label="Разделы рабочего стола">
+    <a class="chip" href="#summary">Сводка</a>
+    <a class="chip" href="#queue">Очередь заявок</a>
+    <a class="chip" href="#changes">Перенести пару</a>
+    <a class="chip" href="#announcements">Объявления</a>
+  </nav>
+
+  <!-- ==== Сводка: счётчики очереди + свежие изменения (GET
+       /v1/staff/dashboard; скелетон → данные | ошибка с «Повторить») ==== -->
+  <section id="summary" class="section" aria-labelledby="staff-summary-title">
+    <div class="section-title"><h2 id="staff-summary-title">Сводка</h2><span class="caption tnum">очередь заявок · сейчас</span></div>
+    <div data-metrics-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div><div class="skeleton short"></div></div>
+    <div class="staff-metrics" data-metrics-body hidden>
+      <div><p class="metric tnum" data-queue-count="submitted">0</p><p class="caption">Новые заявки</p></div>
+      <div><p class="metric tnum" data-queue-count="accepted">0</p><p class="caption">Приняты</p></div>
+      <div><p class="metric tnum" data-queue-count="in_progress">0</p><p class="caption">В работе</p></div>
+      <div><p class="metric tnum" data-queue-count="need_info">0</p><p class="caption">Ждут ответа</p></div>
+      <div><p class="metric tnum" data-queue-count="ready">0</p><p class="caption">Готовы к выдаче</p></div>
+    </div>
+    <div class="section-title staff-sub-title"><h3>Свежие изменения расписания</h3></div>
+    <div data-changes-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div></div>
+    <ul class="staff-changes" data-changes-body hidden></ul>
+    <p class="muted small" data-changes-empty hidden>Изменений не было — расписание по расписанию.</p>
+  </section>
+
+  <!-- ==== Ошибка сводки (03 §5.3): «Повторить» реально перезапрашивает —
+       повторный fetch GET /v1/staff/dashboard (app.js) ==== -->
+  <section class="section flow" data-staff-error hidden role="alert">
+    <h3>Не получилось загрузить сводку</h3>
+    <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+    <button class="button" type="button" data-staff-retry>Повторить</button>
+  </section>
+
+  <!-- ==== Очередь заявок (GET /v1/staff/applications): чипы-фильтры,
+       строки-карточки с владельцем и «Срок горит»; сортировка сервера —
+       updated_at ASC («дольше всех ждёт — сверху») ==== -->
+  <section id="queue" class="section" aria-labelledby="staff-queue-title">
+    <div class="section-title"><h2 id="staff-queue-title">Очередь заявок</h2><span class="caption">дольше всех ждёт — сверху</span></div>
+    <div class="chips" role="group" aria-label="Фильтр очереди по статусу" data-chips-group="status">
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="" aria-pressed="true">Все статусы</button>
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="submitted" aria-pressed="false">Подана</button>
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="accepted" aria-pressed="false">Принята</button>
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="in_progress" aria-pressed="false">В работе</button>
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="need_info" aria-pressed="false">Требуется уточнение</button>
+      <button class="chip" type="button" data-queue-chip data-filter="status" data-value="ready" aria-pressed="false">Готова</button>
+    </div>
+    <div class="chips" role="group" aria-label="Фильтр очереди по типу и сроку" data-chips-group="type">
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="" aria-pressed="true">Все типы</button>
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="study_certificate" aria-pressed="false">Справка об обучении</button>
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="period_certificate" aria-pressed="false">О периоде обучения</button>
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="academic_certificate" aria-pressed="false">Академическая справка</button>
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="thesis_topic" aria-pressed="false">Тема ВКР</button>
+      <button class="chip" type="button" data-queue-chip data-filter="type" data-value="other" aria-pressed="false">Другое</button>
+      <button class="chip" type="button" data-queue-chip data-filter="overdue" data-value="1" aria-pressed="false">Только горящие</button>
+    </div>
+    <div data-queue-loading aria-hidden="true"><div class="skeleton card"></div><div class="skeleton card"></div></div>
+    <div class="app-list" data-queue-body hidden></div>
+    <div class="surface" data-queue-empty hidden>
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/></svg></div>
+        <h2>Очередь разобрана</h2>
+        <p data-queue-empty-text>Новые заявки появятся здесь автоматически.</p>
+      </div>
+    </div>
+    <section class="section flow" data-queue-error hidden role="alert">
+      <h3>Не получилось загрузить очередь</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-queue-retry>Повторить</button>
+    </section>
+  </section>
+
+  <!-- ==== Перенос пары (POST /v1/staff/schedule/changes): событие — из
+       «свежих изменений» сводки или id вручную; 201 {recipients} →
+       «Уведомлено N студентов»; недопустимое тело/событие — inline ==== -->
+  <section id="changes" class="section" aria-labelledby="staff-changes-form-title">
+    <div class="section-title"><h2 id="staff-changes-form-title">Перенести занятие</h2></div>
+    <div class="content-form">
+      <form data-change-form novalidate>
+        <div class="field">
+          <label for="change-event">Событие расписания</label>
+          <select id="change-event" data-change-event>
+            <option value="">Загружаем свежие изменения…</option>
+          </select>
+          <label class="caption" for="change-event-id">или id события вручную</label>
+          <input type="number" id="change-event-id" data-change-event-id min="1" step="1" inputmode="numeric" placeholder="например, 7">
+        </div>
+        <div class="field">
+          <label for="change-action">Действие</label>
+          <select id="change-action" data-change-action>
+            <option value="move">Перенести — новые дата, время и аудитория</option>
+            <option value="cancel">Отменить пару</option>
+          </select>
+        </div>
+        <fieldset data-change-move-fields>
+          <legend>«Стало» для переноса</legend>
+          <div class="field">
+            <label for="change-starts">Новые дата и время</label>
+            <input type="datetime-local" id="change-starts" data-change-starts>
+          </div>
+          <div class="field">
+            <label for="change-room">Новая аудитория</label>
+            <input type="text" id="change-room" data-change-room maxlength="20" placeholder="например, 4210">
+          </div>
+        </fieldset>
+        <div class="field">
+          <label for="change-reason">Причина — уйдёт в уведомлении студентам</label>
+          <textarea id="change-reason" data-change-reason rows="3" maxlength="500" placeholder="Например: технические работы в аудитории"></textarea>
+        </div>
+        <p class="field-error" data-change-error hidden aria-live="polite"></p>
+        <button class="button primary" type="submit" data-network-action data-offline-label="Нужна сеть, чтобы внести перенос">Сохранить перенос</button>
+        <p class="notice success" data-change-result hidden role="status"></p>
+        <p class="caption">Студенты группы события получат уведомление о переносе; расписание обновится сразу.</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ==== Объявления (POST /v1/staff/announcements + GET
+       /v1/announcements): ПОДПИСЬ «без push-уведомления, только в ленте» —
+       01 §4.5 (объявления без push и без уведомлений) ==== -->
+  <section id="announcements" class="section" aria-labelledby="staff-announce-title">
+    <div class="section-title"><h2 id="staff-announce-title">Объявления</h2></div>
+    <div class="content-form">
+      <form data-announce-form novalidate>
+        <div class="field">
+          <label for="announce-title">Заголовок</label>
+          <input type="text" id="announce-title" data-announce-title maxlength="200" placeholder="Например: Смена режима работы деканата">
+        </div>
+        <div class="field">
+          <label for="announce-body">Текст</label>
+          <textarea id="announce-body" data-announce-body rows="4" maxlength="2000" placeholder="Текст объявления для ленты"></textarea>
+        </div>
+        <fieldset>
+          <legend>Кому видно</legend>
+          <label class="option"><input type="radio" name="announce-audience" value="all" checked>Всем студентам</label>
+          <label class="option"><input type="radio" name="announce-audience" value="group">Группе — номер группы</label>
+          <label class="caption" for="announce-group">номер группы (например, 1)</label>
+          <input type="number" id="announce-group" data-announce-group min="1" step="1" inputmode="numeric" placeholder="1" disabled>
+        </fieldset>
+        <!-- Подпись 01 §4.5 — объявления уходят в ленту БЕЗ push и БЕЗ
+             уведомлений (в отличие от переноса) -->
+        <p class="caption">Без push-уведомления — объявление появится только в ленте ниже.</p>
+        <p class="field-error" data-announce-error hidden aria-live="polite"></p>
+        <button class="button primary" type="submit" data-network-action data-offline-label="Нужна сеть, чтобы опубликовать">Опубликовать объявление</button>
+      </form>
+    </div>
+    <div class="section-title staff-sub-title"><h3>Лента объявлений</h3></div>
+    <div data-feed-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div></div>
+    <ul class="staff-feed" data-feed-body hidden></ul>
+    <p class="muted small" data-feed-empty hidden>Объявлений пока не было.</p>
+    <p class="widget-error" data-feed-error hidden>Не получилось загрузить ленту. <button type="button" class="offline-retry" data-feed-retry>Повторить</button></p>
+    <button class="button" type="button" data-feed-more hidden>Показать ещё</button>
+  </section>
+<%c++ }  // else (mode == "page") %>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

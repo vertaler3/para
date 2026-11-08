@@ -61,6 +61,28 @@
       <p class="caption">Продолжить можно в профиле.</p>
     </div>
   </section>
+  <!-- ==== Вход сотрудника (фикс ревью экрана «Стол сотрудника»:
+       сотрудник после входа попадает на «Сегодня», и без точки входа
+       /staff доступен только прямым вводом URL). Блок рендерится
+       ТОЛЬКО когда DashboardCtrl::page положил view-переменную
+       staffEntry="1" по роли из сессии сервера (02 §6.3); у студента
+       переменной нет — блока нет, 403-карточка стола студенту не
+       показывается. Дублируется ссылкой в шапке (topbar.csp). ==== -->
+<%c++
+if (@@.get<std::string>("staffEntry") == "1") {
+%>
+  <section class="section" aria-labelledby="staff-entry-title">
+    <div class="surface">
+      <div class="row wrap">
+        <div>
+          <h2 id="staff-entry-title">Стол сотрудника</h2>
+          <p class="muted small">Очередь заявок, переносы пар и объявления — рабочий кабинет учебного офиса.</p>
+        </div>
+        <a class="button primary" href="/staff">Открыть</a>
+      </div>
+    </div>
+  </section>
+<%c++ } %>
   <div class="dashboard-grid">
     <div data-main-column>
       <!-- ==== Что сдать завтра (03 §4.2: 18:00–23:00 — сверху; пары —

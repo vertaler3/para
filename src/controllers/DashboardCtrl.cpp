@@ -41,13 +41,22 @@ void DashboardCtrl::page(const HttpRequestPtr& req,
                 cb(loginRedirect());
                 return;
             }
-            // В view-данные — только серверные константы (заголовок вкладки,
-            // активный таб); контент виджетов грузит static/js/app.js из
-            // /v1/dashboard, пользовательских данных в шаблоне нет —
-            // экранировать нечего (02 §6.4, как views/login.csp).
+            // В view-данные — серверные константы и флаг staffEntry;
+            // контент виджетов грузит static/js/app.js из /v1/dashboard,
+            // пользовательских данных в шаблоне нет — экранировать
+            // нечего (02 §6.4, как views/login.csp).
             HttpViewData data;
             data.insert("pageTitle", std::string("Сегодня · Пара"));
             data.insert("activeTab", std::string("today"));
+            // Точка входа сотрудника (фикс ревью экрана «Стол
+            // сотрудника» — сотрудник после входа попадает сюда, и без
+            // флага /staff недостижим из навигации). Роль — из сессии
+            // сервера, не от клиента (02 §6.3); флаг читают
+            // views/dashboard.csp (карточка-вход) и partials/topbar.csp
+            // (ссылка в шапке). Студенту флага нет — ни карточки, ни
+            // ссылки: 403-карточка стола студенту не показывается.
+            if (session->role == "staff")
+                data.insert("staffEntry", std::string("1"));
             cb(HttpResponse::newHttpViewResponse("dashboard",
                                                  std::move(data)));
         });

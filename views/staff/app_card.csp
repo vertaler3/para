@@ -1,0 +1,155 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+#include "models/Applications.h"
+
+// Матрица переходов и словари статусов/типов — constexpr-константы
+// src/models/Applications.h (namespace para::models); сгенерированный view
+// живёт в глобальном namespace — Qualifying здесь.
+using namespace para;
+%>
+<%c++
+/* Карточка заявки в очереди сотрудника (Э7, экран «Стол сотрудника»,
+   03 §4.8). ФРАГМЕНТ для htmx: возвращается контроллером как ответ на
+   GET /staff/app-card?id=<id> при HX-Request: true — паттерн
+   /schedule/segment (Р-19 в docs/decisions.md). app.js заменяет им
+   карточку очереди после успешной смены статуса (POST
+   /v1/staff/applications/{id}/status) — «htmx-перерисовка карточки»,
+   постановка экрана. Прямой заход без HX-Request контроллер отвечает
+   303 на /staff.
+
+   Данные — view-строка rowJson: СЕРИАЛИЗОВАННАЯ строка очереди
+   ApplicationsService::queue (ТОТ ЖЕ метод, что стоит за JSON
+   GET /v1/staff/applications; SQL в шаблоне нет — AGENTS §5.5), поля
+   id/type/type_title/status/created_at/updated_at/owner{fio,group}/
+   overdue (02 §5.2). Пользовательские строки (тип, ФИО, группа) выводит
+   HttpViewData::htmlTranslate (02 §6.4, Р-16: автоэкранирования в csp
+   v1.9.14 нет). ФИО приходит с сервера КАК ЕСТЬ — маскирование делает
+   сервер (Р-15), шаблон полные имена не восстанавливает.
+
+   Кнопки допустимых переходов — матрица моделей (models/
+   Applications.h: canApplicationTransition, kApplicationStatuses —
+   constexpr проход; 03 §4.5.4): кнопка .button[data-app-status-btn]
+   с data-to-status; POST делает app.js на
+   /v1/staff/applications/{id}/status. Терминальные статусы переходов
+   ИЗ себя не имеют — строка «Дальнейших шагов нет».
+
+   data-атрибуты — контракт с app.js: data-app-id / data-status /
+   data-to-status; слот data-app-warn — inline-предупреждение (409
+   «Недопустимый переход» пишет app.js без перерисовки). Бейдж «Срок
+   горит» — по флагу overdue сервера (03 §4.8 «⚠ срок горит», .badge.
+   danger). Разметка совпадает с клиентской сборкой app.js (02 §6.4:
+   классы — единственный контракт, вставка текста только textContent). */
+const std::string bodyJson = @@.get<std::string>("rowJson");
+
+Json::Value a(Json::objectValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    if (!reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
+                       &a, &errs))
+        a = Json::Value(Json::objectValue);  // не падаем: пустая карточка
+}
+
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+const int64_t id = a.get("id", 0).asInt64();
+const std::string status = a.get("status", "").asString();
+const std::string typeTitle =
+    std::string(models::applicationTypeTitle(a.get("type", "").asString()));
+const std::string statusTitle =
+    std::string(models::applicationStatusTitle(status));
+
+// Класс бейджа статуса — тот же словарь, что в списках студента
+// (views/applications.csp): активные — info, вопрос — warn, готовые —
+// success, терминальные — danger, черновик — outline (03 §4.5.1).
+const auto badgeClass = [](const std::string& s) -> const char* {
+    if (s == "submitted" || s == "accepted" || s == "in_progress")
+        return "info";
+    if (s == "need_info") return "warn";
+    if (s == "ready" || s == "issued") return "success";
+    if (s == "rejected" || s == "cancelled") return "danger";
+    if (s == "draft") return "outline";
+    return "";
+};
+
+// «2026-11-02T14:05:00Z» → «2 ноября, 14:05» (формат карточки заявки)
+static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
+                                "мая",      "июня",    "июля",     "августа",
+                                "сентября", "октября", "ноября",   "декабря"};
+const auto stampOf = [](const std::string& iso) -> std::string {
+    if (iso.size() < 16) return "";
+    std::string out;
+    try
+    {
+        const int d = std::stoi(iso.substr(8, 2));
+        const int m = std::stoi(iso.substr(5, 2));
+        if (m < 1 || m > 12) return "";
+        out = std::to_string(d) + " " + kMonths[m - 1] + ", "
+              + iso.substr(11, 5);
+    }
+    catch (...)
+    {
+        return "";
+    }
+    return out;
+};
+
+// Владелец (С8.3): fio/группа приходят готовыми строками или null.
+const Json::Value& owner = a["owner"];
+const std::string fio = owner.get("fio", "").isNull()
+                            ? std::string("—")
+                            : owner.get("fio", "").asString();
+const std::string group = owner.get("group", "").isNull()
+                              ? std::string("—")
+                              : owner.get("group", "").asString();
+const bool overdue = a.get("overdue", false).asBool();
+
+// Допустимые переходы ИЗ текущего статуса — порядок словаря CHECK DDL.
+std::string buttons;
+for (const auto& s : models::kApplicationStatuses)
+{
+    if (!models::canApplicationTransition(status, std::string(s)))
+        continue;
+    buttons += "<button type=\"button\" class=\"button\""
+               " data-app-status-btn data-to-status=\"" + std::string(s)
+             + "\">" + esc(std::string(
+                   models::applicationStatusTitle(std::string(s))))
+             + "</button>";
+}
+%>
+<article class="app-card" id="app-card-<%c++ $$ << id; %>" data-app-card data-app-id="<%c++ $$ << id; %>" data-status="<%c++ $$ << esc(status); %>">
+  <div class="row wrap">
+    <h3><%c++ $$ << esc(typeTitle); %></h3>
+    <span class="badge <%c++ $$ << badgeClass(status); %>"><%c++ $$ << esc(statusTitle); %></span><%c++
+if (overdue)
+{
+    // «Срок горит» (03 §4.8): заявка ждёт действия дольше 3 дней
+    // (флаг overdue сервера); цвет — не единственный носитель смысла:
+    // текст бейджа читается целиком (03 §6.4).
+    $$ << "<span class=\"badge danger\">Срок горит</span>";
+}
+    %>
+  </div>
+  <p class="caption"><%c++ $$ << esc(fio); %><%c++ if (!group.empty() && group != "—") $$ << " · группа " << esc(group); %></p>
+  <p class="caption muted">обновлено <span class="tnum"><%c++ $$ << esc(stampOf(a.get("updated_at", "").asString())); %></span></p>
+  <!-- Слот inline-предупреждения: 409 «Недопустимый переход статуса
+       заявки» пишет app.js сюда без перерисовки карточки (постановка
+       экрана: «409 → inline-предупреждение в карточке») -->
+  <p class="field-error" data-app-warn hidden aria-live="polite"></p>
+<%c++
+if (buttons.empty())
+{
+    // Терминальный статус (issued/rejected/cancelled): переходов ИЗ него
+    // матрица не содержит (05 §3 Э5) — действий сотрудника нет.
+    $$ << "<p class=\"caption muted staff-actions-done\">Дальнейших шагов нет — заявка завершена.</p>";
+}
+else
+{
+    $$ << "<div class=\"actions staff-actions\">" << buttons << "</div>";
+}
+%>
+</article>

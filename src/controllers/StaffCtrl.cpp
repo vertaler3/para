@@ -404,3 +404,156 @@ void StaffCtrl::publishAnnouncement(
             }
         });
 }
+
+// ==================== Э7: страничная плоскость (см. шапку заголовка) ========
+
+namespace
+{
+
+// HTML-фрагмент с сообщением — форма ошибок htmx-плоскости (02 §5.1:
+// «Ошибки валидации/бизнес-правил приходят HTML-фрагментом (для htmx)»;
+// Р-19). htmx по умолчанию не меняет DOM на 4xx/5xx — текст читает app.js
+// и показывает inline (паттерн badSegmentRequest ScheduleCtrl).
+HttpResponsePtr htmlNotice(HttpStatusCode code, const std::string& message)
+{
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setStatusCode(code);
+    resp->setContentTypeCode(CT_TEXT_HTML);
+    resp->setBody("<div class=\"notice danger\" role=\"alert\">" +
+                  HttpViewData::htmlTranslate(message) + "</div>");
+    return resp;
+}
+
+// Сериализация строки очереди для view-данных фрагмента (сырая кириллица —
+// emitUTF8, как в api::jsonResponse; разбор — в партиале, вывод экранирует
+// партиал — 02 §6.4).
+std::string rowToJson(const Json::Value& row)
+{
+    Json::StreamWriterBuilder w;
+    w["emitUTF8"] = true;
+    return Json::writeString(w, row);
+}
+
+}  // namespace
+
+void StaffCtrl::staffPage(const HttpRequestPtr& req,
+                          std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3);
+    // роль — из атрибута сессии (SessionService::findValid в LoginFilter —
+    // JOIN users; параметр от клиента не принимается). Роут БЕЗ StaffFilter:
+    // не staff → 403 + HTML-карточка «Доступ только для сотрудников»
+    // (views/staff.csp mode="forbidden") — постановка экрана Э7; StaffFilter
+    // продолжает защищать API-роуты выше (JSON 403 без изменений).
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    HttpViewData data;
+    data.insert("pageTitle", std::string("Стол сотрудника · Пара"));
+    // Студенческие табы каркаса к столу сотрудника не применяются — ни один
+    // не подсвечивается (свой набор табов 03 §4.8 не собирается).
+    data.insert("activeTab", std::string("staff"));
+    // Логин — строка демо-подписи страницы; шаблон выводит через
+    // htmlTranslate (02 §6.4).
+    data.insert("login", session.login);
+    const bool isStaff = session.role == "staff";
+    data.insert("mode", std::string(isStaff ? "page" : "forbidden"));
+    // Шапка «Учебный офис» + ссылка раздела (partials/topbar.csp) — по
+    // роли из сессии; карточка-вход живёт на «Сегодня» (DashboardCtrl).
+    if (isStaff)
+        data.insert("staffEntry", std::string("1"));
+    auto resp = HttpResponse::newHttpViewResponse("staff", std::move(data));
+    if (!isStaff)
+    {
+        resp->setStatusCode(k403Forbidden);
+    }
+    cb(std::move(resp));
+}
+
+void StaffCtrl::appCardFragment(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Фрагмент — только по htmx (02 §3.2: HX-Request); прямой заход — на
+    // страницу (браузер сам вернётся; паттерн /schedule/segment, Р-19).
+    if (req->getHeader("HX-Request") != "true")
+    {
+        cb(HttpResponse::newRedirectionResponse("/staff", k303SeeOther));
+        return;
+    }
+    // Роль — та же проверка контроллера, что на GET /staff (StaffFilter на
+    // страницу/фрагмент не ставится — он отвечает API-JSON): не staff →
+    // 403 HTML-фрагментом.
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    if (session.role != "staff")
+    {
+        cb(htmlNotice(k403Forbidden, "Доступ только для сотрудников"));
+        return;
+    }
+    // id — целое положительное (парс строки: stoll в try/catch + проверка,
+    // что вся строка числовая — «5x»/пусто/отрицательное → 400).
+    const std::string idParam = req->getParameter("id");
+    int64_t applicationId = 0;
+    bool idOk = false;
+    try
+    {
+        if (!idParam.empty())
+        {
+            std::size_t pos = 0;
+            applicationId = std::stoll(idParam, &pos);
+            idOk = applicationId > 0 && pos == idParam.size();
+        }
+    }
+    catch (const std::exception&)
+    {
+        idOk = false;  // not an integer / out of range
+    }
+    if (!idOk)
+    {
+        cb(htmlNotice(k400BadRequest, "id — целое число заявки"));
+        return;
+    }
+
+    // Данные карточки — ТОТ ЖЕ сервисный метод, что стоит за JSON
+    // GET /v1/staff/applications (SQL в контроллере нет — AGENTS §5.5;
+    // выборку по id делаем в памяти над его ответом — новой SQL не нужно,
+    // src/services/ — BE-дорожка). cb — копия в КАЖДОЙ ветке (урок Э2
+    // шага 1: move в одной ветке оставил бы следующей пустой std::function).
+    ApplicationsService::QueueFilters noFilters;
+    ApplicationsService::queue(
+        app().getDbClient("para"), noFilters,
+        [cb, applicationId](ApplicationsService::Result r) mutable {
+            if (!r.ok)
+            {
+                // Ошибка БД — fail-closed (03 §5.3: «Сервис не отвечает»).
+                cb(htmlNotice(k500InternalServerError,
+                              "Сервис не отвечает. Мы уже знаем и чиним. "
+                              "Попробуйте через минуту"));
+                return;
+            }
+            const Json::Value& rows = r.body["applications"];
+            const Json::Value* found = nullptr;
+            if (rows.isArray())
+            {
+                for (const auto& row : rows)
+                {
+                    if (row.isMember("id") &&
+                        row["id"].asInt64() == applicationId)
+                    {
+                        found = &row;
+                        break;
+                    }
+                }
+            }
+            if (found == nullptr)
+            {
+                // Заявка исчезла (между POST-статусом и перерисовкой) —
+                // карточку не собираем (03 §5.3: чужое/несуществующее
+                // не различаем текстом).
+                cb(htmlNotice(k404NotFound, "Заявка не найдена"));
+                return;
+            }
+            HttpViewData data;
+            data.insert("rowJson", rowToJson(*found));
+            cb(HttpResponse::newHttpViewResponse("app_card",
+                                                 std::move(data)));
+        });
+}

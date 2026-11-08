@@ -217,3 +217,31 @@ button.ob-step:disabled{cursor:default}
    .skeleton.card. ==== */
 .people-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:0 1rem}
 .people-list .list-row p{margin-top:.15rem}
+
+/* ==== Стол сотрудника (views/staff.csp, views/staff/app_card.csp;
+   03 §4.8, Э7 — последний экран) ====================================
+   Сводка (счётчики очереди + «свежие изменения»), очередь заявок
+   (чипы-фильтры, карточки .app-card с кнопками переходов матрицы),
+   форма переноса и объявления. Карточка очереди — каркасная .app-card
+   (как в списках заявок студента); кнопки в карточке — каркасная
+   .button (actions wrap). Новых цветовых пар НЕТ (Р-16): бейдж
+   «Срок горит» — .badge.danger (--danger-bg/--danger-text), статусы —
+   .badge.info/.warn/.success/.outline, предупреждение в карточке —
+   .field-error (--danger-text), результаты форм — .notice.success
+   (--primary-soft-*) — все пары baseline tools/contrast_check.py
+   (0 FAIL, PASS обеих тем). Скелетоны — shimmer-база (.skeleton/.card). */
+.staff-sub-title{margin-top:2rem}
+.staff-metrics{flex-wrap:wrap;gap:1rem 1.75rem}
+.staff-changes,.staff-feed{list-style:none;margin:.75rem 0 0;padding:0}
+.staff-changes li,.staff-feed li{border-bottom:1px solid var(--border)}
+.staff-changes li:last-child,.staff-feed li:last-child{border-bottom:0}
+.staff-change{display:block;padding:1rem 0;color:var(--text);text-decoration:none}
+.staff-change strong{font-size:.9375rem;line-height:1.45}
+.staff-change .caption{margin-top:.3rem}
+.staff-change p{margin-top:.25rem}
+.staff-feed li{padding:1rem 0}
+.staff-feed li p{margin-top:.35rem}
+.staff-actions{margin-top:.75rem}
+.staff-actions-done{margin-top:.6rem}
+#queue .chips{margin-bottom:.5rem}
+button.chip{font:inherit;cursor:pointer}

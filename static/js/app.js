@@ -3312,4 +3312,520 @@
 
     loadSchedule();
   }
+
+  /* ---------- стол сотрудника (views/staff.csp; 03 §4.8, Э7) ------------ */
+  /* Последний экран Э7. Сводка (GET /v1/staff/dashboard: счётчики очереди
+     5 активных статусов + свежие изменения), очередь (GET /v1/staff/
+     applications?status=&type=&overdue=1 — чипы-фильтры, карточки с
+     владельцем и «Срок горит»), перенос пары (POST /v1/staff/schedule/
+     changes; 201 {recipients} → «Уведомлено N студентов») и объявления
+     (POST /v1/staff/announcements — без push, подпись в форме, 01 §4.5;
+     лента GET /v1/announcements?cursor=).
+     Смена статуса — кнопки допустимых переходов матрицы (TRANSITIONS —
+     зеркало constexpr-матрицы src/models/Applications.h, как APP_STATUS —
+     зеркало словаря статусов): POST /v1/staff/applications/{id}/status
+     (raw fetch — нужны коды 409/400/404); успех → htmx-перерисовка
+     карточки серверным фрагментом GET /staff/app-card?id= (htmx.ajax,
+     outerHTML — паттерн /schedule/segment, Р-19; разметка карточки —
+     views/staff/app_card.csp, клиентская сборка повторяет её классы);
+     409 «Недопустимый переход статуса заявки» (и 400/404) — inline-
+     предупреждение в слоте data-app-warn карточки, БЕЗ перерисовки.
+     Состояния 03 §5: скелетоны в разметке, пустые тексты («Очередь
+     разобрана» — staff-states.html), ошибки с «Повторить» (повторный
+     fetch), офлайн — баннер каркаса (fetchJSON/postJSON переводят сами).
+     Вставка — только createElement/textContent (02 §6.4). */
+  if (document.body.dataset.page === 'staff') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    /* метки статусов — слова таймлайна 01 §4.4 (словарь CHECK DDL 0003) */
+    const APP_STATUS = {
+      draft: 'Черновик', submitted: 'Подана', accepted: 'Принята',
+      in_progress: 'В работе', need_info: 'Требуется уточнение',
+      ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
+    };
+    /* класс бейджа — словарь views/applications.csp (03 §4.5.1) */
+    const BADGE = {
+      draft: 'outline', submitted: 'info', accepted: 'info', in_progress: 'info',
+      need_info: 'warn', ready: 'success', issued: 'success',
+      rejected: 'danger', cancelled: 'danger'
+    };
+    /* матрица переходов — зеркало kApplicationStatusTransitions (модели);
+       кнопки карточки строятся только из неё */
+    const TRANSITIONS = {
+      draft: ['submitted', 'cancelled'],
+      submitted: ['accepted', 'rejected', 'cancelled'],
+      accepted: ['in_progress', 'rejected', 'cancelled'],
+      in_progress: ['ready', 'need_info', 'rejected', 'cancelled'],
+      need_info: ['in_progress', 'rejected', 'cancelled'],
+      ready: ['issued'],
+      issued: [], rejected: [], cancelled: []
+    };
+    const CHANGE_LABEL = { moved: 'Перенесена', cancelled: 'Отменена', substituted: 'Замена' };
+    const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '';
+    const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
+    const dayMonth = (ymd) => {
+      const p = (ymd || '').split('-').map(Number);
+      if (p.length !== 3 || p.some(Number.isNaN)) return ymd || '';
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+    };
+    const stampOf = (iso) => (typeof iso === 'string' && iso.length >= 16)
+      ? dayMonth(iso.slice(0, 10)) + ', ' + iso.slice(11, 16) : '';
+    const plural = (n, one, few, many) => {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return one;
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+      return many;
+    };
+    const busy = (btn, on, busyLabel) => {
+      if (!btn) return;
+      if (on) {
+        btn.dataset.wasLabel = btn.textContent;
+        btn.textContent = busyLabel || 'Сохраняем…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = btn.dataset.wasLabel || btn.textContent;
+        delete btn.dataset.wasLabel;
+        btn.disabled = false;
+      }
+    };
+    /* POST JSON с кодами ответа (raw fetch — inline-ошибки из тела
+       {error:{code,message}}, 02 §5.1; сетевой сброс — офлайн-баннер) */
+    const postJSON = async (url, payload) => {
+      if (!navigator.onLine) { applyOffline(true); return null; }
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        let body = null;
+        try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
+        return { ok: resp.ok, status: resp.status, body };
+      } catch (e) {
+        if (!navigator.onLine) applyOffline(true);
+        return null;
+      }
+    };
+    const errorMessage = (r) => (r && r.body && r.body.error && r.body.error.message)
+      ? String(r.body.error.message) : '';
+
+    /* истёкшая сессия на htmx-запросе: фильтр отвечает 303 → /login, XHR
+       следует редиректу — прерываем обмен и уводим браузер на вход
+       (паттерн экрана «Расписание») */
+    document.body.addEventListener('htmx:beforeSwap', (e) => {
+      const xhr = e.detail && e.detail.xhr;
+      if (xhr && /\/login(?:\?.*)?$/.test(xhr.responseURL || '')) {
+        e.detail.shouldSwap = false;
+        window.location.href = '/login';
+      }
+    });
+
+    /* --- сводка: счётчики + свежие изменения (03 §4.8) ------------------ */
+    const QUEUE_KEYS = ['submitted', 'accepted', 'in_progress', 'need_info', 'ready'];
+    const changeRow = (e) => {
+      const li = el('li');
+      const link = el('a', 'staff-change');
+      const day = dateOf(e.starts_at);
+      link.href = day ? '/schedule?date=' + day : '/schedule';
+      link.append(el('strong', null, e.discipline || 'Занятие'));
+      if (CHANGE_LABEL[e.status]) link.append(' ', el('span', 'badge ' + (e.status === 'cancelled' ? 'danger' : e.status === 'substituted' ? 'info' : 'warn'), CHANGE_LABEL[e.status]));
+      const pieces = [];
+      if (e.status === 'moved') {
+        pieces.push('ауд. ' + (e.prev_room || '—') + ' → ' + (e.room || '—'));
+        if (timeOf(e.prev_starts_at) && timeOf(e.prev_starts_at) !== timeOf(e.starts_at)) {
+          pieces.push(timeOf(e.prev_starts_at) + ' → ' + timeOf(e.starts_at));
+        }
+      } else if (e.status === 'cancelled') {
+        pieces.push('ауд. ' + (e.room || '—') + ' — отменена');
+      } else if (e.room) {
+        pieces.push('ауд. ' + e.room);
+      }
+      if (pieces.length) link.append(el('p', 'caption', pieces.join(' · ')));
+      if (e.changed_at) link.append(el('p', 'caption muted tnum', 'сообщено ' + stampOf(e.changed_at)));
+      li.append(link);
+      return li;
+    };
+    /* select формы переноса — из «свежих изменений» (постановка экрана) */
+    const fillEventSelect = (changes) => {
+      const sel = document.querySelector('[data-change-event]');
+      if (!sel) return;
+      const previous = sel.value;
+      sel.replaceChildren();
+      const ph = el('option', null, changes.length ? 'Выберите событие…' : 'Свежих изменений нет — укажите id события вручную');
+      ph.value = '';
+      sel.append(ph);
+      changes.forEach((e) => {
+        const label = '#' + e.id + ' · ' + (e.discipline || 'Занятие')
+          + ' · ' + dayMonth(dateOf(e.starts_at)) + ' ' + timeOf(e.starts_at);
+        const o = el('option', null, label);
+        o.value = String(e.id);
+        o.dataset.starts = e.starts_at || '';
+        o.dataset.room = e.room || '';
+        sel.append(o);
+      });
+      if (previous && Array.from(sel.options).some((o) => o.value === previous)) sel.value = previous;
+    };
+    const loadSummary = async (silent) => {
+      if (!silent) {
+        show('[data-staff-error]', false);
+        show('[data-metrics-loading]', true);
+        show('[data-changes-loading]', true);
+        show('[data-metrics-body]', false);
+        show('[data-changes-body]', false);
+        show('[data-changes-empty]', false);
+      }
+      const data = await fetchJSON('/v1/staff/dashboard');
+      if (!silent) {
+        show('[data-metrics-loading]', false);
+        show('[data-changes-loading]', false);
+      }
+      if (!data || !data.queue) {
+        if (!silent) show('[data-staff-error]', true);
+        return;
+      }
+      /* тихое обновление удалось — ошибка (если показывалась) снята */
+      show('[data-staff-error]', false);
+      QUEUE_KEYS.forEach((k) => {
+        const n = document.querySelector('[data-queue-count="' + k + '"]');
+        if (n) n.textContent = String(data.queue[k] || 0);
+      });
+      if (!silent) show('[data-metrics-body]', true);
+      const changes = Array.isArray(data.recent_changes) ? data.recent_changes : [];
+      const list = document.querySelector('[data-changes-body]');
+      show('[data-changes-empty]', false);
+      if (list) {
+        list.replaceChildren();
+        if (!changes.length) {
+          list.hidden = true;
+          show('[data-changes-empty]', true);
+        } else {
+          changes.forEach((e) => list.append(changeRow(e)));
+          list.hidden = false;
+        }
+      }
+      fillEventSelect(changes);
+    };
+    const summaryRetry = document.querySelector('[data-staff-retry]');
+    if (summaryRetry) summaryRetry.addEventListener('click', () => loadSummary(false));
+
+    /* --- очередь: чипы-фильтры + карточки (GET /v1/staff/applications) -- */
+    const filters = { status: '', type: '', overdue: false };
+    document.querySelectorAll('[data-queue-chip]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const f = chip.dataset.filter;
+        if (f === 'overdue') {
+          filters.overdue = !filters.overdue;
+          chip.setAttribute('aria-pressed', String(filters.overdue));
+        } else {
+          filters[f] = chip.dataset.value || '';
+          document.querySelectorAll('[data-queue-chip][data-filter="' + f + '"]').forEach((c) => {
+            c.setAttribute('aria-pressed', String(c === chip));
+          });
+        }
+        loadQueue();
+      });
+    });
+    const hasFilter = () => Boolean(filters.status || filters.type || filters.overdue);
+    /* клиентская сборка карточки — ТЕ ЖЕ классы и data-атрибуты, что в
+       серверном фрагменте views/staff/app_card.csp (после смены статуса
+       карточку заменит фрагмент: контракт — классы) */
+    const appCard = (a) => {
+      const card = el('article', 'app-card');
+      card.dataset.appCard = '';
+      card.dataset.appId = String(a.id);
+      card.dataset.status = a.status || '';
+      const head = el('div', 'row wrap');
+      head.append(el('h3', null, a.type_title || a.type || 'Заявка'));
+      head.append(el('span', 'badge ' + (BADGE[a.status] || ''), APP_STATUS[a.status] || a.status || ''));
+      if (a.overdue) head.append(el('span', 'badge danger', 'Срок горит'));
+      card.append(head);
+      const fio = a.owner && a.owner.fio ? a.owner.fio : '—';
+      const group = a.owner && a.owner.group ? a.owner.group : '';
+      card.append(el('p', 'caption', fio + (group ? ' · группа ' + group : '')));
+      const upd = el('p', 'caption muted');
+      upd.append('обновлено ');
+      upd.append(el('span', 'tnum', stampOf(a.updated_at)));
+      card.append(upd);
+      const warn = el('p', 'field-error');
+      warn.hidden = true;
+      warn.setAttribute('aria-live', 'polite');
+      warn.setAttribute('data-app-warn', '');
+      card.append(warn);
+      const tos = TRANSITIONS[a.status] || [];
+      if (!tos.length) {
+        card.append(el('p', 'caption muted staff-actions-done', 'Дальнейших шагов нет — заявка завершена.'));
+      } else {
+        const actions = el('div', 'actions staff-actions');
+        tos.forEach((to) => {
+          const b = el('button', 'button', APP_STATUS[to] || to);
+          b.type = 'button';
+          b.setAttribute('data-app-status-btn', '');
+          b.setAttribute('data-to-status', to);
+          actions.append(b);
+        });
+        card.append(actions);
+      }
+      return card;
+    };
+    const setWarn = (card, text) => {
+      const warn = card ? card.querySelector('[data-app-warn]') : null;
+      if (!warn) return;
+      warn.textContent = text;
+      warn.hidden = !text;
+    };
+    const loadQueue = async () => {
+      show('[data-queue-loading]', true);
+      show('[data-queue-error]', false);
+      show('[data-queue-empty]', false);
+      const body = document.querySelector('[data-queue-body]');
+      if (body) { body.hidden = true; body.replaceChildren(); }
+      const qs = new URLSearchParams();
+      if (filters.status) qs.set('status', filters.status);
+      if (filters.type) qs.set('type', filters.type);
+      if (filters.overdue) qs.set('overdue', '1');
+      const url = '/v1/staff/applications' + (qs.toString() ? '?' + qs.toString() : '');
+      const data = await fetchJSON(url);
+      show('[data-queue-loading]', false);
+      if (!data || !Array.isArray(data.applications)) {
+        show('[data-queue-error]', true);
+        return;
+      }
+      if (!data.applications.length) {
+        const t = document.querySelector('[data-queue-empty-text]');
+        if (t) t.textContent = hasFilter() ? 'По этому фильтру пока ничего не было.' : 'Новые заявки появятся здесь автоматически.';
+        show('[data-queue-empty]', true);
+        return;
+      }
+      if (!body) return;
+      data.applications.forEach((a) => body.append(appCard(a)));
+      body.hidden = false;
+    };
+    const queueRetry = document.querySelector('[data-queue-retry]');
+    if (queueRetry) queueRetry.addEventListener('click', () => loadQueue());
+
+    /* --- смена статуса: POST API → htmx-перерисовка фрагментом ---------- */
+    const redrawCard = (id, card) => {
+      /* данные уже изменены (200 от API); карточку заменяет серверный
+         фрагмент GET /staff/app-card (HX-Request автоматически) — свежие
+         статус/владелец/«Срок горит» и кнопки новой матрицы. Сбой перери-
+         совки (сеть) — перестраиваем очередь целиком. */
+      if (window.htmx && card && card.isConnected) {
+        htmx.ajax('GET', '/staff/app-card?id=' + encodeURIComponent(id), { target: card, swap: 'outerHTML' })
+          .catch(() => loadQueue());
+        return;
+      }
+      loadQueue();
+    };
+    document.addEventListener('click', async (event) => {
+      const btn = event.target.closest('[data-app-status-btn]');
+      if (!btn || btn.disabled) return;
+      const card = btn.closest('[data-app-card]');
+      if (!card) return;
+      if (!navigator.onLine) { applyOffline(true); return; }
+      const id = card.dataset.appId;
+      const to = btn.dataset.toStatus;
+      if (!id || !to) return;
+      setWarn(card, '');
+      busy(btn, true, 'Меняем…');
+      const r = await postJSON('/v1/staff/applications/' + encodeURIComponent(id) + '/status', { to_status: to });
+      busy(btn, false);
+      if (r && r.ok) {
+        redrawCard(id, card);
+        loadSummary(true); /* счётчики и «свежие изменения» — молча */
+        return;
+      }
+      if (r === null) {
+        setWarn(card, 'Не получилось сменить статус — проверьте интернет');
+        return;
+      }
+      const message = errorMessage(r) || 'Ошибка ' + r.status;
+      if (r.status >= 500) toast(message);
+      /* 409 «Недопустимый переход статуса заявки» (и 400/404) — inline в
+          карточке, без перерисовки (постановка экрана) */
+      setWarn(card, message);
+    });
+
+    /* --- перенос пары (POST /v1/staff/schedule/changes) ----------------- */
+    const changeForm = document.querySelector('[data-change-form]');
+    if (changeForm) {
+      const sel = changeForm.querySelector('[data-change-event]');
+      const manualId = changeForm.querySelector('[data-change-event-id]');
+      const actionSel = changeForm.querySelector('[data-change-action]');
+      const moveFields = changeForm.querySelector('[data-change-move-fields]');
+      const startsInput = changeForm.querySelector('[data-change-starts]');
+      const roomInput = changeForm.querySelector('[data-change-room]');
+      const reasonInput = changeForm.querySelector('[data-change-reason]');
+      const errBox = changeForm.querySelector('[data-change-error]');
+      const resultBox = changeForm.querySelector('[data-change-result]');
+      const submitBtn = changeForm.querySelector('button[type="submit"]');
+      const showErr = (text) => { if (errBox) { errBox.textContent = text; errBox.hidden = !text; } };
+      /* выбор события — подставляем его ТЕКУЩИЕ время/аудиторию как
+         заготовку «стало» (черновик staff.html: правка конкретной пары) */
+      sel.addEventListener('change', () => {
+        const o = sel.selectedOptions[0];
+        if (!o || !o.value) return;
+        if (startsInput && o.dataset.starts && o.dataset.starts.length >= 16) {
+          startsInput.value = o.dataset.starts.slice(0, 16);
+        }
+        if (roomInput && o.dataset.room) roomInput.value = o.dataset.room;
+      });
+      actionSel.addEventListener('change', () => {
+        if (moveFields) moveFields.hidden = actionSel.value !== 'move';
+      });
+      changeForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (submitBtn && submitBtn.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        showErr('');
+        if (resultBox) resultBox.hidden = true;
+        const rawId = manualId && manualId.value.trim() ? manualId.value.trim() : (sel ? sel.value : '');
+        if (!/^[1-9][0-9]*$/.test(rawId)) {
+          showErr('Выберите событие из списка или укажите его id');
+          return;
+        }
+        const action = actionSel ? actionSel.value : 'move';
+        const payload = { event_id: Number(rawId), action, reason: reasonInput ? reasonInput.value.trim() : '' };
+        if (action === 'move') {
+          const dt = startsInput ? startsInput.value : '';
+          const room = roomInput ? roomInput.value.trim() : '';
+          if (!dt) { showErr('Укажите новые дату и время'); return; }
+          if (!room) { showErr('Укажите новую аудиторию'); return; }
+          /* datetime-local (минуты) → ISO «…Z» 02 §5.2 */
+          payload.starts_at = dt.length === 16 ? dt + ':00Z' : dt + 'Z';
+          payload.room = room;
+        }
+        busy(submitBtn, true, 'Сохраняем…');
+        const r = await postJSON('/v1/staff/schedule/changes', payload);
+        busy(submitBtn, false);
+        if (r && r.ok) {
+          const n = r.body && typeof r.body.recipients !== 'undefined' ? Number(r.body.recipients) || 0 : null;
+          if (resultBox) {
+            resultBox.textContent = n === null
+              ? 'Перенос сохранён.'
+              : 'Уведомлено ' + n + ' ' + plural(n, 'студент', 'студента', 'студентов') + ' о переносе.';
+            resultBox.hidden = false;
+          }
+          toast('Изменение расписания сохранено');
+          changeForm.reset();
+          if (moveFields) moveFields.hidden = false;
+          loadSummary(true); /* счётчики и «свежие изменения» — молча */
+          return;
+        }
+        if (r === null) {
+          showErr('Не получилось сохранить перенос — проверьте интернет');
+          return;
+        }
+        const message = errorMessage(r) || 'Ошибка ' + r.status;
+        if (r.status >= 500) toast(message);
+        showErr(message);
+      });
+    }
+
+    /* --- объявления (POST /v1/staff/announcements; лента GET
+       /v1/announcements?cursor=) ------------------------------------------ */
+    const announceForm = document.querySelector('[data-announce-form]');
+    const announceTitle = document.querySelector('[data-announce-title]');
+    const announceBody = document.querySelector('[data-announce-body]');
+    const announceGroup = document.querySelector('[data-announce-group]');
+    const announceErr = document.querySelector('[data-announce-error]');
+    const showAnnounceErr = (text) => { if (announceErr) { announceErr.textContent = text; announceErr.hidden = !text; } };
+    if (announceForm) {
+      /* радио «Группе» — включаем поле номера группы */
+      announceForm.querySelectorAll('input[name="announce-audience"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          const checked = announceForm.querySelector('input[name="announce-audience"]:checked');
+          if (announceGroup) announceGroup.disabled = !(checked && checked.value === 'group');
+        });
+      });
+      announceForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const btn = announceForm.querySelector('button[type="submit"]');
+        if (btn && btn.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        showAnnounceErr('');
+        const title = announceTitle ? announceTitle.value.trim() : '';
+        const body = announceBody ? announceBody.value.trim() : '';
+        if (!title) { showAnnounceErr('Напишите заголовок'); return; }
+        if (!body) { showAnnounceErr('Напишите текст объявления'); return; }
+        const payload = { title, body };
+        const mode = announceForm.querySelector('input[name="announce-audience"]:checked');
+        if (mode && mode.value === 'group') {
+          const g = announceGroup ? announceGroup.value.trim() : '';
+          if (!/^[1-9][0-9]*$/.test(g)) { showAnnounceErr('Укажите номер группы — число от 1'); return; }
+          payload.audience = ['group:' + Number(g)];
+        }
+        busy(btn, true, 'Публикуем…');
+        const r = await postJSON('/v1/staff/announcements', payload);
+        busy(btn, false);
+        if (r && r.ok) {
+          /* объявления БЕЗ push и БЕЗ уведомлений — только лента (01 §4.5;
+             подпись об этом стоит в форме) */
+          toast('Объявление опубликовано — оно появится только в ленте');
+          announceForm.reset();
+          if (announceGroup) announceGroup.disabled = true;
+          loadFeed(true);
+          return;
+        }
+        if (r === null) { showAnnounceErr('Не получилось опубликовать — проверьте интернет'); return; }
+        const message = errorMessage(r) || 'Ошибка ' + r.status;
+        if (r.status >= 500) toast(message);
+        showAnnounceErr(message);
+      });
+    }
+    let feedCursor = null;
+    const audienceLabel = (a) => {
+      if (a === 'all') return 'для всех';
+      if (Array.isArray(a) && a.length) {
+        const items = a.map((x) => typeof x === 'string' && x.indexOf('group:') === 0
+          ? 'группа ' + x.slice(6) : String(x));
+        return 'для ' + items.join(', ');
+      }
+      return '';
+    };
+    const renderFeed = (items, append) => {
+      const body = document.querySelector('[data-feed-body]');
+      if (!body) return;
+      if (!append) body.replaceChildren();
+      items.forEach((n) => {
+        const li = el('li', 'staff-feed-item');
+        li.append(el('strong', null, n.title || ''));
+        li.append(el('p', 'small', n.body || ''));
+        const cap = [n.author, stampOf(n.published_at), audienceLabel(n.audience)].filter(Boolean).join(' · ');
+        if (cap) li.append(el('p', 'caption muted', cap));
+        body.append(li);
+      });
+      body.hidden = items.length === 0 && !append;
+    };
+    const loadFeed = async (reset) => {
+      if (reset) feedCursor = null;
+      show('[data-feed-loading]', true);
+      show('[data-feed-error]', false);
+      if (reset) show('[data-feed-empty]', false);
+      const url = '/v1/announcements' + (feedCursor ? '?cursor=' + encodeURIComponent(feedCursor) : '');
+      const data = await fetchJSON(url);
+      show('[data-feed-loading]', false);
+      if (!data || !Array.isArray(data.announcements)) {
+        show('[data-feed-error]', true);
+        return;
+      }
+      renderFeed(data.announcements, !reset);
+      if (reset && !data.announcements.length) show('[data-feed-empty]', true);
+      feedCursor = data.next_cursor || null;
+      const more = document.querySelector('[data-feed-more]');
+      if (more) more.hidden = !feedCursor;
+    };
+    const feedRetry = document.querySelector('[data-feed-retry]');
+    if (feedRetry) feedRetry.addEventListener('click', () => loadFeed(true));
+    const feedMore = document.querySelector('[data-feed-more]');
+    if (feedMore) feedMore.addEventListener('click', () => loadFeed(false));
+
+    loadSummary(false);
+    loadQueue();
+    loadFeed(true);
+  }
 })();

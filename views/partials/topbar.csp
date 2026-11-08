@@ -17,6 +17,21 @@
 <header class="site-header">
   <div class="header-inner">
     <a class="brand" href="/" aria-label="Пара, на главную"><span class="brand-symbol" aria-hidden="true"></span>пара</a>
+<%c++
+/* Вход сотрудника в шапке (фикс ревью экрана «Стол сотрудника» — без
+   него /staff недостижим из навигации). Блок рендерится ТОЛЬКО когда
+   контроллер страницы положил view-переменную staffEntry="1" по роли
+   ИЗ СЕССИИ сервера (DashboardCtrl::page и StaffCtrl::staffPage, 02
+   §6.3: параметр роли от клиента не принимается). У студента переменной
+   нет — HttpViewData::get возвращает пустую строку, блок пропускается,
+   разметка остальных экранов не меняется. Классы .staff-label (виден
+   на ≥1024px) и .staff-nav — каркасные (app.css, бриф html-дорожки). */
+const std::string staffEntry = @@.get<std::string>("staffEntry");
+if (staffEntry == "1") {
+%>
+    <span class="staff-label">Учебный офис</span>
+    <nav class="staff-nav" aria-label="Разделы сотрудника"><a href="/staff">Стол сотрудника</a></nav>
+<%c++ } %>
     <div class="header-actions">
       <a class="icon-button" href="/notifications" aria-label="Уведомления">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
