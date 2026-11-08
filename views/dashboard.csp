@@ -46,6 +46,21 @@
       <p>Всё важное — на один экран.</p>
     </div>
   </div>
+  <!-- ==== Онбординг С5 (Э7 «Профиль», 03 §4.7/§4.9.4): чеклист «4 шага»
+       поверх «Сейчас важно» при незавершённом onboarding_json — показывает
+       app.js (GET /v1/notifications/settings, дефолт DDL «[]», шаги
+       именует FE: login/schedule/application/notifications); отметка шага
+       (тап по строке) → PUT settings {onboarding_json}; все 4 или
+       «Пропустить» — карточка исчезает навсегда. ==== -->
+  <section class="section surface flow onboarding" data-onboarding hidden aria-labelledby="ob-title">
+    <p class="overline" id="ob-title">Настраиваем кабинет · <span class="tnum" data-ob-count>0/4</span></p>
+    <div class="progress ob-progress" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0" aria-label="Прогресс чеклиста" data-ob-bar></div>
+    <div class="ob-steps" data-ob-steps></div>
+    <div class="ob-footer">
+      <button class="button ghost" type="button" data-ob-skip>Пропустить</button>
+      <p class="caption">Продолжить можно в профиле.</p>
+    </div>
+  </section>
   <div class="dashboard-grid">
     <div data-main-column>
       <!-- ==== Что сдать завтра (03 §4.2: 18:00–23:00 — сверху; пары —

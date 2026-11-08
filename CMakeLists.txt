@@ -90,6 +90,7 @@ add_executable(para
                src/controllers/CanteensCtrl.cpp
                src/controllers/MapCtrl.cpp
                src/controllers/DashboardCtrl.cpp
+               src/controllers/ProfileCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp

@@ -158,6 +158,95 @@
   };
   refreshUnreadBadge();
 
+  /* ---------- тема и настройки (settings.theme — серверная настройка) ---------- */
+  /* Тема применяется на КАЖДОМ экране: applyTheme ставит/снимает
+     data-theme на <html> — так её читают токены (static/css/tokens.css:
+     :root[data-theme=dark] и @media prefers-color-scheme с :root:not(
+     [data-theme=light])); «system» — атрибут снимается (схема по системе).
+     Локального хранилища нет — данные только с сервера: на старте каждой
+     страницы настройки читаются из GET /v1/notifications/settings
+     (401 у гостя — fetchJSON вернёт null, остаётся системная схема).
+     Экран «Профиль» переиспользует applyTheme/putSettings для сегмента
+     «Оформление» (смена применяется сразу, сохранение — PUT, 02 §5.2). */
+  const applyTheme = (theme) => {
+    if (theme === 'light' || theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', theme);
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  };
+  const loadSettings = () => fetchJSON('/v1/notifications/settings');
+  const putSettings = (patch) => fetchJSON('/v1/notifications/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch)
+  });
+  loadSettings().then((s) => { if (s && s.theme) applyTheme(s.theme); });
+
+  /* ---------- онбординг С5 (03 §4.7/§4.9.4) ---------- */
+  /* Состояние чеклиста — onboarding_json настроек: массив КЛЮЧЕЙ закрытых
+     шагов (дефолт DDL «[]» — SettingsService.h/0004). Ключи и подписи —
+     FE (постановка экрана «Профиль»): PUT onboarding_json — строка с JSON
+     (SettingsService::applyPatch). «Вошёл» отмечается сам при первом
+     показе чеклиста (пользователь уже в сессии); все 4 — чеклист исчезает
+     навсегда (оверлей дашборда не показывается). */
+  const ONBOARD_STEPS = [
+    { key: 'login', label: 'Вошёл' },
+    { key: 'schedule', label: 'Посмотрел расписание' },
+    { key: 'application', label: 'Подал заявку' },
+    { key: 'notifications', label: 'Включил уведомления' }
+  ];
+  const ONBOARD_KEYS = ONBOARD_STEPS.map((s) => s.key);
+  /* только известные ключи, в каноничном порядке (тело PUT и рендер) */
+  const obNormalize = (arr) =>
+    ONBOARD_KEYS.filter((k) => Array.isArray(arr) && arr.indexOf(k) !== -1);
+  const saveOnboarding = (steps) =>
+    putSettings({ onboarding_json: JSON.stringify(steps) });
+  const obEl = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  /* Рендер чеклиста в контейнер ([data-ob-steps]/[data-ob-count]/
+     [data-ob-bar]): строки-кнопки ≥44px (тап — отметка → PUT settings;
+     03 §6.2 «тап по всей строке»), счётчик N/4 и полоса прогресса
+     (--value — ширина :before каркасного .progress, app.css). Возвращает
+     актуальный массив шагов; onChange(steps) — после каждого сохранения. */
+  const renderOnboarding = (root, steps, onChange) => {
+    const stepsBox = root.querySelector('[data-ob-steps]');
+    if (!stepsBox) return steps;
+    stepsBox.replaceChildren();
+    ONBOARD_STEPS.forEach((s) => {
+      const done = steps.indexOf(s.key) !== -1;
+      const row = obEl('button', 'ob-step');
+      row.type = 'button';
+      row.setAttribute('aria-pressed', String(done));
+      row.append(obEl('span', 'ob-mark', done ? '✓' : ''), obEl('span', 'ob-label', s.label));
+      row.disabled = done; /* выполненный шаг — отметка уже сохранена */
+      row.addEventListener('click', async () => {
+        if (row.disabled || steps.indexOf(s.key) !== -1) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        row.disabled = true;
+        const saved = await saveOnboarding(obNormalize(steps.concat(s.key)));
+        row.disabled = false;
+        if (!saved) { toast('Не получилось отметить шаг — проверьте интернет'); return; }
+        steps = obNormalize(saved.onboarding);
+        renderOnboarding(root, steps, onChange);
+        if (onChange) onChange(steps);
+      });
+      stepsBox.append(row);
+    });
+    const countEl = root.querySelector('[data-ob-count]');
+    if (countEl) countEl.textContent = steps.length + '/4';
+    const bar = root.querySelector('[data-ob-bar]');
+    if (bar) {
+      bar.setAttribute('aria-valuenow', String(steps.length));
+      bar.style.setProperty('--value', (steps.length * 25) + '%');
+    }
+    return steps;
+  };
+
   /* ---------- демо-доступы на входе (03 §4.1) ---------- */
   /* Тап по строке демо-доступа ([data-demo-login="anya.demo"]) подставляет
      логин в поле #login и переводит фокус в #password. Само поле пароля
@@ -747,6 +836,44 @@
     /* компактные «Повторить» виджетов — перезапрашивают весь агрегат
        (03 §5.3: «кнопка „Повторить“ всегда реально перезапрашивает») */
     document.querySelectorAll('[data-widget-retry]').forEach((b) => b.addEventListener('click', () => { loadDashboard(); }));
+
+    /* --- онбординг С5 (03 §4.7/§4.9.4): чеклист «4 шага» поверх «Сейчас
+       важно», пока onboarding_json не завершён. Показ — [data-onboarding]
+       (разметка над .dashboard-grid, «поверх карточек»); отметка шага —
+       тап по строке (renderOnboarding → PUT settings); все 4 или
+       «Пропустить» — карточка исчезает навсегда (ключи всех шагов в
+       onboarding_json). Сбой настроек чеклист не показывает (баннер
+       каркаса уже отреагировал) — виджеты агрегата не зависят от него. --- */
+    const initOnboarding = async () => {
+      const card = document.querySelector('[data-onboarding]');
+      if (!card) return;
+      const s = await loadSettings();
+      if (!s) return;
+      let steps = obNormalize(s.onboarding);
+      if (steps.indexOf('login') === -1) {
+        /* «Вошёл» выполнен самим фактом входа — отмечается при первом
+           показе (проволочная рамка 03 §4.9.4: старт «1/4») */
+        steps = obNormalize(steps.concat('login'));
+        const saved = await saveOnboarding(steps);
+        if (saved) steps = obNormalize(saved.onboarding);
+      }
+      if (steps.length >= ONBOARD_KEYS.length) return; /* завершён — никогда */
+      card.hidden = false;
+      renderOnboarding(card, steps);
+      const skip = card.querySelector('[data-ob-skip]');
+      if (skip) {
+        skip.addEventListener('click', async () => {
+          if (skip.disabled) return;
+          if (!navigator.onLine) { applyOffline(true); return; }
+          skip.disabled = true;
+          const saved = await saveOnboarding(ONBOARD_KEYS.slice());
+          skip.disabled = false;
+          if (!saved) { toast('Не получилось сохранить — проверьте интернет'); return; }
+          card.hidden = true;
+        });
+      }
+    };
+    initOnboarding();
     loadDashboard();
   }
 
@@ -2081,5 +2208,321 @@
     if (feedRetry) feedRetry.addEventListener('click', () => load(null));
 
     load(null);
+  }
+
+  /* ---------- экран «Профиль» (views/profile.csp; 03 §4.7, §5) ---------- */
+  /* Данные — клиентские fetch (паттерн views/rooms.csp): /v1/me,
+     /v1/library/my-card, /v1/notifications/settings (GET при загрузке),
+     POST/DELETE /v1/ics/token, POST /v1/auth/logout. Вставка — только
+     createElement/textContent (02 §6.4). QR — вендоренный
+     qrcode-generator 1.5.0 (Р-21, docs/decisions.md): canvas по
+     getModuleCount()/isDark(); данные — вымышленные номера карточек
+     «para-demo:{student_card_no}» и card_no (константа приложения — не
+     секрет, 01 §5.9/§5.12); stringToBytes переключается на UTF-8 —
+     дефолтная усекает charCodeAt до 8 бит и портит кириллицу номеров
+     («ФМО-101-26/001»). Пиксели — светлые значения существующей пары
+     токенов --surface/--text: код сканируется камерой и не тематизируется
+     (комментарий .qr-canvas в app.css). Пустых состояний нет — профиль
+     есть у каждого студента (постановка); сотрудник без профиля
+     (02 §4.1) — студенческие строки скрыты, имя = login. */
+  if (document.body.dataset.page === 'profile') {
+    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+
+    /* --- профиль (GET /v1/me): скелетон → карточка | ошибка с «Повторить» --- */
+    let meData = null; /* для QR-карточки студента (данные последнего ответа) */
+    const fillProfile = (me) => {
+      meData = me;
+      const p = me && me.profile ? me.profile : null;
+      const name = p ? p.fio : ((me && me.login) || '');
+      const initials = name.split(/\s+/).filter(Boolean).slice(0, 2)
+        .map((w) => w.charAt(0)).join('').toUpperCase();
+      const av = $('[data-avatar-initials]');
+      if (av) av.textContent = initials;
+      const nameEl = $('[data-account-name]');
+      if (nameEl) nameEl.textContent = name;
+      const meta = $('[data-account-meta]');
+      if (meta) meta.textContent = p ? p.course + ' курс · ' + p.faculty : '';
+      const prog = $('[data-account-program]');
+      if (prog) prog.textContent = p ? p.program : '';
+      const group = $('[data-account-group]');
+      if (group) group.textContent = p ? p.group : '';
+      const card = $('[data-account-card]');
+      if (card) card.textContent = p ? p.student_card_no : '';
+      /* сотрудник без профиля (02 §4.1): студенческие строки и QR скрыты */
+      document.querySelectorAll('[data-student-line]').forEach((n) => { n.hidden = !p; });
+      const lib = $('[data-library-block]');
+      if (lib && !p) lib.hidden = true;
+      show('[data-profile-body]', true);
+    };
+    const loadProfile = async () => {
+      show('[data-profile-loading]', true);
+      show('[data-profile-error]', false);
+      show('[data-profile-body]', false);
+      const me = await fetchJSON('/v1/me');
+      show('[data-profile-loading]', false);
+      if (!me) { show('[data-profile-error]', true); return; }
+      fillProfile(me);
+      /* читательский билет (5.12): 200 — номер + QR; 404 (нет билета —
+         office.demo, Э6а) и любой другой ответ — блок остаётся скрытым */
+      const mine = await fetchJSON('/v1/library/my-card');
+      if (me.profile && mine && mine.card_no) {
+        const no = $('[data-library-card-no]');
+        if (no) no.textContent = mine.card_no;
+        show('[data-library-block]', true);
+      }
+    };
+    const profileRetry = $('[data-profile-retry]');
+    if (profileRetry) profileRetry.addEventListener('click', () => { loadProfile(); });
+    loadProfile();
+
+    /* --- настройки (GET при загрузке): тумблеры, тихие часы, тема,
+       онбординг С5. Состояния секции — как у профиля (03 §5). --- */
+    const markTheme = (t) => {
+      document.querySelectorAll('[data-theme-choice]').forEach((b) => {
+        b.setAttribute('aria-pressed', String(b.dataset.themeChoice === t));
+      });
+    };
+    const applySettings = (s) => {
+      document.querySelectorAll('[data-setting]').forEach((input) => {
+        input.checked = Boolean(s[input.dataset.setting]);
+      });
+      const q = (s && s.quiet_hours) || {};
+      const from = $('[data-quiet-from]');
+      const to = $('[data-quiet-to]');
+      if (from && typeof q.from === 'string') from.value = q.from;
+      if (to && typeof q.to === 'string') to.value = q.to;
+      if (s.theme) { applyTheme(s.theme); markTheme(s.theme); }
+      show('[data-settings-body]', true);
+      show('[data-theme-group]', true);
+    };
+    const loadSettingsUI = async () => {
+      show('[data-settings-loading]', true);
+      show('[data-settings-error]', false);
+      show('[data-settings-body]', false);
+      show('[data-theme-group]', false);
+      const s = await loadSettings();
+      show('[data-settings-loading]', false);
+      if (!s) { show('[data-settings-error]', true); return; }
+      applySettings(s);
+      /* онбординг С5: выполненные отмечены, шаг отмечается кнопкой
+         (renderOnboarding — общий с оверлеем дашборда) */
+      const obRoot = $('[data-ob-card]');
+      if (obRoot) {
+        const onChange = (steps) => {
+          const done = $('[data-ob-done]');
+          if (done) done.hidden = steps.length < ONBOARD_KEYS.length;
+        };
+        onChange(renderOnboarding(obRoot, obNormalize(s.onboarding), onChange));
+      }
+    };
+    const settingsRetry = $('[data-settings-retry]');
+    if (settingsRetry) settingsRetry.addEventListener('click', () => { loadSettingsUI(); });
+    loadSettingsUI();
+
+    /* тумблеры: change → PUT {notify_*} (частичное обновление 02 §5.2);
+       ошибка — значение откатывается, текст — toast */
+    document.querySelectorAll('[data-setting]').forEach((input) => {
+      input.addEventListener('change', async () => {
+        if (!navigator.onLine) { applyOffline(true); input.checked = !input.checked; return; }
+        input.disabled = true;
+        const patch = {};
+        patch[input.dataset.setting] = input.checked;
+        const saved = await putSettings(patch);
+        input.disabled = false;
+        if (!saved) {
+          input.checked = !input.checked;
+          toast('Не получилось сохранить настройку');
+        }
+      });
+    });
+    /* тихие часы: два time-инпута → PUT quiet_hours_json (строка с JSON —
+       формат сервера {"from":"HH:MM","to":"HH:MM"}, дефолт 23:00–07:00;
+       интервал через полночь допустим — проверка на не-пустоту) */
+    const saveQuiet = async () => {
+      const from = $('[data-quiet-from]');
+      const to = $('[data-quiet-to]');
+      if (!from || !to || !from.value || !to.value) return;
+      if (!navigator.onLine) { applyOffline(true); return; }
+      const saved = await putSettings({
+        quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
+      });
+      if (saved) toast('Тихие часы сохранены');
+      else toast('Не получилось сохранить тихие часы');
+    };
+    const quietFrom = $('[data-quiet-from]');
+    const quietTo = $('[data-quiet-to]');
+    if (quietFrom) quietFrom.addEventListener('change', saveQuiet);
+    if (quietTo) quietTo.addEventListener('change', saveQuiet);
+    /* тема: смена применяется СРАЗУ (applyTheme — data-theme на <html>),
+       сохранение — PUT {theme}; сбой сети — вид остаётся локальным,
+       офлайн-баннер покажет каркас */
+    document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const t = btn.dataset.themeChoice;
+        applyTheme(t);
+        markTheme(t);
+        if (!navigator.onLine) { applyOffline(true); return; }
+        const saved = await putSettings({ theme: t });
+        if (saved) toast('Оформление сохранено');
+        else toast('Не получилось сохранить тему');
+      });
+    });
+
+    /* --- подписка на календарь (5.4): POST /v1/ics/token → 201 {token}
+       (Р-11: 256 бит, 64 hex); ПОВТОРНОЕ создание ротирует токен — прежняя
+       ссылка перестаёт обновляться (подсказка в блоке); DELETE → 204.
+       GET «есть ли подписка» в API нет (02 §5.2) — экран стартует в
+       состоянии «нет подписки» (постановка). --- */
+    const showIcs = (token) => {
+      if (!/^[0-9a-f]{64}$/.test(token)) return;
+      const path = '/ics/' + token;
+      const url = $('[data-ics-url]');
+      const webcal = $('[data-ics-webcal]');
+      if (url) url.textContent = location.origin + path;
+      if (webcal) webcal.href = 'webcal://' + location.host + path;
+      show('[data-ics-none]', false);
+      show('[data-ics-active]', true);
+    };
+    const icsCreate = $('[data-ics-create]');
+    if (icsCreate) {
+      icsCreate.addEventListener('click', async () => {
+        if (icsCreate.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        icsCreate.disabled = true;
+        icsCreate.textContent = 'Создаём…';
+        const data = await fetchJSON('/v1/ics/token', { method: 'POST' });
+        icsCreate.disabled = false;
+        icsCreate.textContent = 'Создать подписку';
+        if (data && data.token) {
+          showIcs(data.token);
+          toast('Подписка создана — прежняя ссылка отозвана');
+        } else {
+          toast('Не получилось создать подписку');
+        }
+      });
+    }
+    const icsRevoke = $('[data-ics-revoke]');
+    if (icsRevoke) {
+      icsRevoke.addEventListener('click', async () => {
+        if (icsRevoke.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        icsRevoke.disabled = true;
+        let revoked = false;
+        try {
+          const resp = await fetch('/v1/ics/token', {
+            method: 'DELETE',
+            headers: { Accept: 'application/json' }
+          });
+          revoked = resp.status === 204;
+        } catch (e) { /* сеть ушла — баннер покажет каркас */ }
+        icsRevoke.disabled = false;
+        if (revoked) {
+          show('[data-ics-active]', false);
+          show('[data-ics-none]', true);
+          toast('Подписка отозвана — календарь больше не обновляется');
+        } else {
+          toast('Не получилось отозвать подписку');
+        }
+      });
+    }
+
+    /* --- QR-карточки (5.9 студбилет, 5.12 библиотека): dialog-sheet
+       (как «Детали пары»/отмена брони), QR ~240px, имя и номер под ним,
+       закрытие тапом по коду или кнопкой (01 §5.9). --- */
+    const qrDialog = $('#qr-dialog');
+    const drawQr = (text) => {
+      if (!qrDialog || typeof window.qrcode !== 'function') {
+        toast('QR-модуль не загрузился — обновите страницу');
+        return false;
+      }
+      window.qrcode.stringToBytes = window.qrcode.stringToBytesFuncs['UTF-8'];
+      const qr = window.qrcode(0, 'M'); /* автоподбор версии, коррекция M */
+      qr.addData(text);
+      qr.make();
+      const count = qr.getModuleCount();
+      const quiet = 2; /* тихая зона в модулях */
+      const cell = Math.max(2, Math.floor(240 / (count + quiet * 2)));
+      const size = cell * (count + quiet * 2);
+      const canvas = qrDialog.querySelector('[data-qr-canvas]');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#FFFFFF'; /* --surface светлой темы */
+      ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = '#273F3A'; /* --text светлой темы */
+      for (let row = 0; row < count; row++) {
+        for (let col = 0; col < count; col++) {
+          if (qr.isDark(row, col)) {
+            ctx.fillRect((col + quiet) * cell, (row + quiet) * cell, cell, cell);
+          }
+        }
+      }
+      return true;
+    };
+    const openQr = (title, text, value) => {
+      if (!drawQr(text)) return;
+      const t = $('[data-qr-title]');
+      const v = $('[data-qr-value]');
+      if (t) t.textContent = title;
+      if (v) v.textContent = value;
+      qrDialog.showModal();
+    };
+    const studentQr = $('[data-qr-student]');
+    if (studentQr) {
+      studentQr.addEventListener('click', () => {
+        const p = meData && meData.profile;
+        if (!p) return;
+        /* «para-demo:{student_card_no}» — константа приложения, не секрет */
+        openQr('QR-карточка студента', 'para-demo:' + p.student_card_no,
+          p.fio + ' · студ. билет № ' + p.student_card_no);
+      });
+    }
+    const libraryQr = $('[data-qr-library]');
+    if (libraryQr) {
+      libraryQr.addEventListener('click', () => {
+        const no = $('[data-library-card-no]');
+        openQr('Читательский билет', no ? no.textContent : '', 'Библиотека · билет № ' + (no ? no.textContent : ''));
+      });
+    }
+    if (qrDialog) {
+      qrDialog.querySelector('[data-qr-canvas]').addEventListener('click', () => qrDialog.close());
+      const qrClose = qrDialog.querySelector('[data-qr-close]');
+      if (qrClose) qrClose.addEventListener('click', () => qrDialog.close());
+    }
+
+    /* --- выход (03 §4.7: диалог с danger-подтверждением; POST
+       /v1/auth/logout → 200 {ok} — сессия инвалидирована на сервере —
+       редирект /login). --- */
+    const logoutDialog = $('#logout-dialog');
+    const logoutOpen = $('[data-logout-open]');
+    if (logoutDialog && logoutOpen) {
+      logoutOpen.addEventListener('click', () => logoutDialog.showModal());
+      const logoutClose = logoutDialog.querySelector('[data-logout-close]');
+      if (logoutClose) logoutClose.addEventListener('click', () => logoutDialog.close());
+      const logoutConfirm = logoutDialog.querySelector('[data-logout-confirm]');
+      if (logoutConfirm) {
+        logoutConfirm.addEventListener('click', async () => {
+          if (logoutConfirm.disabled) return;
+          if (!navigator.onLine) { applyOffline(true); return; }
+          logoutConfirm.disabled = true;
+          logoutConfirm.textContent = 'Выходим…';
+          let done = false;
+          try {
+            const resp = await fetch('/v1/auth/logout', {
+              method: 'POST',
+              headers: { Accept: 'application/json' }
+            });
+            done = resp.ok; /* 200 {ok:true} — сессия удалена (02 §5.2) */
+          } catch (e) { /* сеть ушла — баннер покажет каркас */ }
+          if (done) {
+            window.location.href = '/login';
+            return;
+          }
+          logoutConfirm.disabled = false;
+          logoutConfirm.textContent = 'Выйти';
+          toast('Не получилось выйти — проверьте интернет');
+        });
+      }
+    }
   }
 })();
