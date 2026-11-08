@@ -427,15 +427,16 @@
   }
 
   /* ---------- экраны «Успеваемость» (views/grades.csp, views/
-     grades-discipline.csp; 03 §4.4/§4.9.3) и «Зачётная книжка»
-     (views/gradebook.csp; 03 §4.9.6) ---------- */
-  /* Контент — SSR (тела GradesService/GradebookService рендерит сервер);
-     догрузки на клиенте нет — скелетон не нужен (03 §5.1), ошибку данных
-     показывает сам шаблон (failed=1, состояние 03 §5.3). Здесь только
-     «Повторить»: реально перезапрашивает — перезагрузка страницы; офлайн
-     обслуживает баннер каркаса (topbar + applyOffline, 03 §5.4). */
-  if (document.body.dataset.page === 'grades' || document.body.dataset.page === 'discipline' || document.body.dataset.page === 'gradebook') {
-    const gradesRetry = document.querySelector('[data-grades-retry], [data-gradebook-retry]');
+     grades-discipline.csp; 03 §4.4/§4.9.3), «Зачётная книжка»
+     (views/gradebook.csp) и «Рейтинг» (views/rating.csp); 03 §4.9.6 --- */
+  /* Контент — SSR (тела GradesService/GradebookService/RatingService
+     рендерит сервер); догрузки на клиенте нет — скелетон не нужен
+     (03 §5.1), ошибку данных показывает сам шаблон (failed=1, состояние
+     03 §5.3). Здесь только «Повторить»: реально перезапрашивает —
+     перезагрузка страницы; офлайн обслуживает баннер каркаса (topbar +
+     applyOffline, 03 §5.4). */
+  if (document.body.dataset.page === 'grades' || document.body.dataset.page === 'discipline' || document.body.dataset.page === 'gradebook' || document.body.dataset.page === 'rating') {
+    const gradesRetry = document.querySelector('[data-grades-retry], [data-gradebook-retry], [data-rating-retry]');
     if (gradesRetry) gradesRetry.addEventListener('click', () => window.location.reload());
   }
 

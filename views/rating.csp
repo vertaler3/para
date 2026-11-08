@@ -1,0 +1,194 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+%>
+<%c++
+/* Рейтинг факультета (Э7, группа «Учёба»; 03 §4.9.6 «Рейтинг 5.14»,
+   design-drafts/ranking.html). Полная страница: partials каркаса;
+   pageTitle и activeTab — view-переменные RatingCtrl::ratingPage
+   (серверные константы, 02 §6.4). Контент — SSR: тело
+   RatingService::rating — ТОТ ЖЕ метод, что стоит за JSON API 02 §5.2
+   (SQL в шаблоне нет, AGENTS §5.5) — приходит сериализованной строкой
+   bodyJson; разбор здесь, имена выводит HttpViewData::htmlTranslate при
+   выводе (02 §6.4, Р-16: автоэкранирования в csp v1.9.14 нет).
+   МАСКИРОВАНИЕ — НА СЕРВЕРЕ (Р-15, контракт RatingService.h:60-63):
+   чужие имена приходят УЖЕ маскированными («И. Фамилия»), рисуем КАК
+   ПРИШЛО, полные не восстанавливаем; своё полное имя — только в строке
+   с флагом self=true. Своя строка определяется ФЛАГОМ self из тела
+   сервиса — сопоставление с /v1/me на клиенте не нужно; у staff и
+   студента без оценок своей строки нет (рейтинг = студенты со средним,
+   Р-15) — блок «Ваша позиция» не рисуется, вместо него финальный текст
+   03 §5.2 «Оценки появятся после первой аттестации».
+   average — взвешенный процент Σscore/Σmax×100, ЦЕЛОЕ (шкала «/ 100» —
+   как на «Успеваемости»/«Зачётке»; null в строке — защита: рисуем «—»).
+   query faculty/limit страница НЕ принимает — общий рейтинг (дефолт API,
+   уточнение Р-15).
+   Состояния (03 §5):
+     data  — есть строки: «Ваша позиция» (если self есть) + список
+             «место · имя · балл»; #rating-root data-state="data";
+     empty — строк нет (ни у одного студента нет среднего): текст ШАБЛОНА
+             — в 03 §5.2 строки для рейтинга нет, формулировка своя,
+             факт из контракта («рейтинг = студенты со средним»,
+             RatingService.h:17-19); data-state="empty";
+     error — сбой БД при сборке страницы (failed=1 от контроллера) или
+             сбой разбора тела: «Не получилось загрузить рейтинг» с
+             «Повторить» ([data-rating-retry] — app.js, перезагрузка
+             страницы) — вне #rating-root (паттерн grades.csp);
+     офлайн — баннер каркаса (topbar + app.js, 03 §5.4); скелетона нет —
+             страница целиком SSR, догрузки на клиенте нет (03 §5.1). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN); htmx экрану не нужен —
+     динамических сегментов нет, контент SSR. -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="rating">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/gradebook"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
+      <h1>Рейтинг</h1>
+      <p>Место, имя и средний балл</p>
+    </div>
+  </div>
+<%c++
+const std::string failed = @@.get<std::string>("failed");
+if (failed == "1") {
+%>
+  <!-- Состояние «Ошибка» (03 §5.3, формулировка «Не получилось загрузить
+       {раздел}»): «Повторить» реально перезапрашивает — перезагрузка
+       страницы (app.js). -->
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить рейтинг</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-rating-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else {
+// --- Разбор тела сервиса; сбой разбора — состояние ошибки, не падение ----
+const std::string bodyJson = @@.get<std::string>("bodyJson");
+bool broken = false;
+Json::Value body(Json::objectValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    if (bodyJson.empty() || !reader->parse(bodyJson.data(),
+                                           bodyJson.data() + bodyJson.size(),
+                                           &body, &errs))
+        broken = true;
+}
+Json::Value rating(Json::arrayValue);
+if (!broken && body.isMember("rating") && body["rating"].isArray())
+    rating = body["rating"];
+const bool hasRows = !broken && rating.size() > 0;
+
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+const int64_t total = static_cast<int64_t>(rating.size());
+// Своя строка — по флагу self контракта (см. шапку шаблона)
+const Json::Value* self = nullptr;
+for (const auto& r : rating)
+    if (r["self"].asBool()) { self = &r; break; }
+%>
+<%c++
+if (broken) {
+%>
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить рейтинг</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-rating-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else if (!hasRows) {
+    // Пустой рейтинг (03 §5.2 строки «Рейтинг» нет — текст шаблона,
+    // факт из контракта: рейтинг = студенты со средним, см. шапку).
+%>
+  <div id="rating-root" class="content-narrow" data-state="empty">
+    <div class="surface">
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><rect x="6" y="13" width="3" height="5"/><rect x="11" y="9" width="3" height="9"/><rect x="16" y="5" width="3" height="13"/></svg></div>
+        <h2>В рейтинге пока никого нет</h2>
+        <p>Рейтинг строят по среднему баллу — строки появятся, когда преподаватели закроют первые ведомости.</p>
+      </div>
+    </div>
+  </div>
+<%c++
+} else {
+    // --- Данные (SSR): «Ваша позиция» + список «место · имя · балл» -----
+%>
+  <div id="rating-root" class="content-narrow" data-state="data">
+<%c++
+    if (self) {
+        // Шапка «Ваша позиция» (черновик ranking.html): rank tnum + «из N»
+        // (N — все строки ответа: страница без ?limit=, список полный),
+        // справа — своё полное имя (как пришло с сервера) и средний.
+        const int64_t selfRank = (*self)["rank"].asInt64();
+        const bool selfHasAverage =
+            (*self).isMember("average") && (*self)["average"].isIntegral();
+        const int64_t selfAverage =
+            selfHasAverage ? (*self)["average"].asInt64() : 0;
+%>
+    <div class="study-summary">
+      <div>
+        <p class="overline">Ваша позиция</p>
+        <p class="metric"><span class="tnum"><%c++ $$ << selfRank; %></span><span class="caption"> из <%c++ $$ << total; %></span></p>
+      </div>
+      <p class="small muted"><%c++ $$ << esc((*self)["fio"].asString()); %><br>Средний балл · <%c++ if (selfHasAverage) $$ << selfAverage; else $$ << "—"; %><%c++ if (selfHasAverage) $$ << " / 100"; %></p>
+    </div>
+<%c++
+    } else {
+        // Своей строки нет (staff; студент без оценок — Р-15 «рейтинг =
+        // студенты со средним») — финальный текст 03 §5.2.
+%>
+    <p class="small muted">Оценки появятся после первой аттестации</p>
+<%c++
+    }
+%>
+    <section class="section">
+      <div class="section-title"><h2>Студенты</h2><span class="caption"><%c++ $$ << total; %></span></div>
+<%c++
+        // Строки «место · имя · балл» (черновик ranking.html, каркасное
+        // .ranking-row/.ranking-row.self): место и балл tnum; имя КАК
+        // ПРИШЛО с сервера — чужие уже маскированные («И. Фамилия»),
+        // своё — полное с меткой «вы» (Р-15: полные не восстанавливаем).
+        for (const auto& r : rating)
+        {
+            const int64_t rank = r["rank"].asInt64();
+            const bool isSelf = r["self"].asBool();
+            $$ << "<div class=\"ranking-row"
+               << (isSelf ? " self" : "") << "\">";
+            $$ << "<strong class=\"tnum\">"
+               << (rank < 10 ? "0" : "") << rank << "</strong>";
+            $$ << "<span>" << esc(r["fio"].asString());
+            if (isSelf)
+                $$ << " <span class=\"badge\">вы</span>";
+            $$ << "</span>";
+            $$ << "<strong class=\"tnum\">";
+            if (r.isMember("average") && r["average"].isIntegral())
+                $$ << r["average"].asInt64();
+            else
+                $$ << "—";
+            $$ << "</strong>";
+            $$ << "</div>";
+        }
+%>
+      <p class="caption">Чужие имена сокращены. Данные вымышленные.</p>
+    </section>
+  </div>
+<%c++
+    }
+}  // else (failed != "1")
+%>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>
