@@ -39,6 +39,11 @@
    кнопочных умолчаний, сетка .lesson общая; фокус — глобальный
    :focus-visible каркаса (2px --primary). ==== */
 button.lesson{width:100%;border:0;background:var(--clear);padding:1.1rem 0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+/* акцентная линия переноса (.lesson.moved inset box-shadow) у первой/
+   последней пары пересекала скруглённую границу списка: border-radius без
+   overflow потомков не клипит — клип по радиусу карточки (линия обрезается
+   точно по углам, и телефон, и десктоп) */
+.schedule-list{overflow:hidden}
 .lesson.moved{box-shadow:inset 3px 0 0 0 var(--warning-text)}
 .lesson.moved .lesson-detail{color:var(--warning-text)}
 .lesson.cancelled .lesson-subject,.lesson.cancelled .lesson-time strong{text-decoration:line-through;color:var(--text-3)}
