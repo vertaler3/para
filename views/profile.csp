@@ -151,6 +151,30 @@
       </a>
     </section>
 
+    <!-- ==== Зачётка и рейтинг (5.15/5.14) — точка входа: страницы
+         вёрстились Батчем 4, входов на них не было (в брифе Батча 4
+         не значились; fix). В черновике profile.html вход «Зачётная
+         книжка и рейтинг» — строкой среди ссылок («Ваш кампус»);
+         здесь — отдельным блоком рядом с «Кампусом», стиль соседних
+         блоков — .list-row. Подписи строк — заголовки страниц-
+         приёмников (gradebook.csp:60 «Итоги по дисциплинам»,
+         rating.csp:53 «Место, имя и средний балл»); href — реальные
+         маршруты /gradebook (GradebookCtrl.h:32) и /rating
+         (RatingCtrl.h:42), оба LoginFilter. Разметка-константа —
+         view-данных не нужно (Р-16). Цвета — только токены
+         .list-row (тёмная тема красит автоматически). ==== -->
+    <section class="section" aria-labelledby="recordbook-title">
+      <div class="section-title"><h2 id="recordbook-title">Зачётка и рейтинг</h2></div>
+      <a class="list-row" href="/gradebook">
+        <div><strong>Зачётная книжка</strong><p>Итоги по дисциплинам</p></div>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </a>
+      <a class="list-row" href="/rating">
+        <div><strong>Рейтинг факультета</strong><p>Место, имя и средний балл</p></div>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </a>
+    </section>
+
     <!-- ==== Онбординг С5 (onboarding_json — массив закрытых шагов,
          дефолт DDL «[]»; шаги именует FE: login/schedule/application/
          notifications). Здесь — управление: выполненные отмечены,

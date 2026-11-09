@@ -318,6 +318,23 @@ if (hasExams)
       </div>
       <p class="caption">Подписка на календарь — в профиле</p>
     </section>
+    <!-- ==== Зачётная книжка (5.15) — точка входа: в черновике
+         grades.html вход стоит внизу экрана (ghost-кнопка «Зачётная
+         книжка» в .actions.section после дисциплин — порядок сохранён,
+         fix: входы 5.15/5.14 не значились в брифе Батча 2). Карточка-
+         ссылка — класс .service-link секции «В кампусе» дашборда
+         (fix 3a75cbf); подпись — заголовок страницы-приёмника
+         (gradebook.csp:60 «Итоги по дисциплинам»); href — реальный
+         маршрут /gradebook (GradebookCtrl.h:32, LoginFilter). Ссылка-
+         константа — view-данных не нужно (Р-16). Цвета — только
+         токены .service-link (тёмная тема красит автоматически). ==== -->
+    <section class="section">
+      <a class="service-link" href="/gradebook">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg>
+        <div><strong>Зачётная книжка</strong><p>Итоги по дисциплинам</p></div>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </a>
+    </section>
   </div>
 <%c++
     }
