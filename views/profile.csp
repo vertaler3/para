@@ -142,11 +142,23 @@
       <p class="caption">Новая подписка отзывает прежнюю ссылку — старая перестанет обновляться. Ссылка секретная: по ней видно расписание без входа, не делитесь ею.</p>
     </section>
 
-    <!-- ==== Кампус: «Мои брони» → /rooms (03 §4.7, экран rooms.csp). ==== -->
+    <!-- ==== Кампус: «Мои брони» → /rooms (03 §4.7, экран rooms.csp);
+         fix — строка «Люди» → /people (каталог 5.11, 03 §4.9.6; входа в
+         навигации не было — на /people вёл только «назад» из person.csp;
+         в черновике profile.html сервисные строки сгруппированы в «Ваш
+         кампус» — здесь вторая строка секции «Кампус», как карточка
+         «Найти человека» — четвёртая в «В кампусе» дашборда; href сверен
+         — PeopleCtrl.h:76 ADD_METHOD_TO "/people", LoginFilter).
+         Разметка-константа — view-данных не нужно (Р-16); цвета —
+         токены .list-row (тёмная тема красит автоматически). ==== -->
     <section class="section" aria-labelledby="campus-title">
       <div class="section-title"><h2 id="campus-title">Кампус</h2></div>
       <a class="list-row" href="/rooms">
         <div><strong>Мои брони</strong><p>Место и время для ваших встреч</p></div>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </a>
+      <a class="list-row" href="/people">
+        <div><strong>Люди</strong><p>Преподаватели и студенты</p></div>
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
       </a>
     </section>
