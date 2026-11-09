@@ -87,11 +87,15 @@ PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
     }
 
     {
-        HPDF_UseUTFEncodings(pdf);  // TextOut/Info — строки UTF-8
-        // Потоки без сжатия (правки по гейту Э5 раунд 2): штамп-маркер
-        // «DEMO-FAKE-DATA» виден в сырых байтах И в контент-стриме страницы
-        // (при сжатии контент — FlateDecode, текстовый поиск по нему
-        // невозможен). Демо-объём файла не критичен.
+        // Регистрирует энкодер «UTF-8» (тип DOUBLE_BYTE, hpdf_encoder_utf.c
+        // пина v2.4.6) — его берёт HPDF_GetFont ниже. Info-словарь от этого
+        // энкодера НЕ зависит: строки Info пишет pdf->cur_encoder (базовый
+        // StandardEncoding — HPDF_SetCurrentEncoder никто не вызывает),
+        // литералом с октал-эскейпами UTF-8, как в пробе Э5 (Р-12) —
+        // revealKeywordsUtf8 ниже рассчитан именно на это.
+        HPDF_UseUTFEncodings(pdf);
+        // Потоки без сжатия (правки по гейту Э5 раунд 2): при сжатии контент
+        // — FlateDecode, поиск по нему невозможен. Демо-объём не критичен.
         HPDF_SetCompressionMode(pdf, HPDF_COMP_NONE);
         const char* fontName =
             HPDF_LoadTTFontFromFile(pdf, fontPath.c_str(), HPDF_TRUE);
@@ -104,7 +108,24 @@ PdfBuilder::Result PdfBuilder::certificate(const CertificateData& data,
 
         HPDF_Page page = HPDF_AddPage(pdf);
         HPDF_Page_SetSize(page, HPDF_PAGE_SIZE_A4, HPDF_PAGE_PORTRAIT);
-        HPDF_Font font = HPDF_GetFont(pdf, fontName, nullptr);
+        // ФИКС БАГА 6 (кириллица — мусорные глифы на устройствах): энкодер
+        // обязателен. Здесь раньше был nullptr — HPDF_GetFont без имени
+        // энкодера берёт StandardEncoding (hpdf_doc.c пина: «encoding-name
+        // is not specified → default-encoding»), однобайтовый BasicEncoder →
+        // простой шрифт /Subtype TrueType (HPDF_TTFont_New принимает только
+        // SINGLE_BYTE) и запись текста литералом (WriteEscapeText): сырые
+        // UTF-8 байты кириллицы мапились в глифы по одному байту — мусор
+        // на рантаймах вне контура. Энкодер «UTF-8» (симметрично вызову
+        // HPDF_UseUTFEncodings выше, согласован с записью строк UTF-8)
+        // переводит шрифт в Type0-путь (hpdf_font_cid.c: HPDF_Type0Font_New
+        // для TRUETYPE fontdef): /Encoding Identity-H, /ToUnicode,
+        // CIDFontType2 с CIDToGIDMap, дескриптор с /FontFile2; текст в
+        // контент-стриме — hex-CID (UTF-8→Unicode→CID в
+        // UTF8_Encoder_EncodeText_Func, hex-конвертация — WriteBinary),
+        // глифы читаемы на любом устройстве. Косинусная матрица штампа 45°
+        // (SetTextMatrix) — уровнем графики, от типа шрифта не зависит;
+        // /FontFile2 и самодостаточность файла сохраняются.
+        HPDF_Font font = HPDF_GetFont(pdf, fontName, "UTF-8");
         if (font == nullptr || HPDF_GetError(pdf) != HPDF_OK)
         {
             r.error = "HPDF_GetFont";
