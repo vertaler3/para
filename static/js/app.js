@@ -2544,6 +2544,26 @@
       const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
       return day + ', ' + time;
     };
+    /* ISO-метка ВНУТРИ текста с сервера (тело напоминания ReminderService:
+       «Срок: 2026-11-08T21:00:00Z» — QA-проход) не должна попадать в UI
+       сырой: каждый ISO-фрагмент строки заменяется на «8 ноября, 21:00» —
+       тот же формат «D месяца, HH:MM», что у stampOf выше и во всех
+       форматированных местах (дашборд shortStamp/dayLabel, staff stampOf,
+       таймлайн заявки toLocaleString — grep по app.js: сырых подстановок
+       больше нет). created_at/title/body карточек уведомлений идут через
+       это при рендере ниже */
+    const humanizeDates = (text) => {
+      if (typeof text !== 'string') return '';
+      return text.replace(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?Z?)?/g, (m) => {
+        const p = m.slice(0, 10).split('-').map(Number);
+        if (p.length !== 3 || p.some(Number.isNaN)) return m;
+        const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+        if (Number.isNaN(day.getTime())) return m;
+        const time = m.length >= 16 ? m.slice(11, 16) : '';
+        const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+        return time ? label + ', ' + time : label;
+      });
+    };
 
     const state = { type: '', unread: false, cursor: null, items: [] };
     const feedUrl = (cursor) => {
@@ -2617,14 +2637,14 @@
       row.classList.add(n.read_at ? 'is-read' : 'is-unread');
       row.append(document.createRange().createContextualFragment(FEED_ICON[n.type] || FEED_ICON.fallback));
       const mid = el('div');
-      const title = el('div', 'ntitle', n.title || 'Уведомление');
+      const title = el('div', 'ntitle', humanizeDates(n.title) || 'Уведомление');
       if (!n.read_at) {
         const dot = el('span', 'unread-mark');
         dot.setAttribute('aria-hidden', 'true');
         title.append(dot);
       }
       mid.append(title);
-      if (n.body) mid.append(el('p', 'nbody', n.body));
+      if (n.body) mid.append(el('p', 'nbody', humanizeDates(n.body)));
       const when = stampOf(n.created_at);
       if (when) mid.append(el('p', 'nwhen', when));
       row.append(mid);
