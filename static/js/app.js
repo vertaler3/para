@@ -2491,7 +2491,10 @@
      уход со страницы. Не-2xx (403 чужое — guard ДО пометки 02 §5.2,
      404, 5xx) — просто не помечаем: точка остаётся, бейдж не трогаем.
      deep_link — только относительный путь (первый символ «/»;
-     javascript:-URI и внешние схемы отсекаются при рендере, 02 §6.4);
+     javascript:-URI и внешние схемы отсекаются при рендере, 02 §6.4),
+     ПЕРЕД рендером нормализуется deepLinkTarget(): пути страниц,
+     которых в приложении нет, маппятся на живые экраны — таблица
+     маппинга в комментарии рядом с DEEP_LINK_MAP ниже;
      строки без deep_link — <button>, только пометка на месте.
      «Прочитать всё» → POST read-all → точки сняты, тост (дословно
      03 §4.6) и бейдж обнулён ПЕРЕИСПОЛЬЗОВАННОЙ каркасной
@@ -2552,10 +2555,61 @@
       return '/v1/notifications' + (q ? '?' + q : '');
     };
 
+    /* ===== deep_link → живая страница (багфикс QA: тап по уведомлению
+       «Отчёт по эконометрике» вёл на /deadlines — страницы нет, голая
+       системная 404 drogon вне каркаса). Сервер и sql/ клиент не правит
+       (дорожки 05 §4.5), поэтому deep_link нормализуется ЗДЕСЬ.
+       Все источники deep_link (проверено grep по sql/fixtures.sql:144
+       и src/services):
+         фикстуры (ids 1–6) и ScheduleChangeService.cpp:187
+                                       → /schedule?date=ГГГГ-ММ-ДД
+         ApplicationsService.cpp:306   → /applications/{id}
+         ReminderService.cpp:57        → /deadlines          (СТРАНИЦЫ НЕТ)
+         RoomsService.h:209 (снятие брони блокировкой)
+                                       → /room-bookings      (НЕТ)
+       Живые страницы (роуты ADD_METHOD_TO в src/controllers/*.h, views/):
+         / /login /schedule /grades /applications /profile
+         /notifications /rooms /library /canteens /map /people
+         /gradebook /rating /staff — с валидными вложенными
+         /applications/{id}, /applications/new, /grades/discipline/{id},
+         /people/{id}, /schedule/segment (htmx), /staff/app-card (htmx).
+       МАППИНГ несуществующих путей на родительский экран объекта:
+         /deadlines       → /grades   — дедлайны: виджет «Дедлайны»
+                                       дашборда ведёт «Все» на /grades
+                                       (views/dashboard.csp:126)
+         /exams           → /grades   — сессия/экзамены живут на /grades
+         /room-bookings   → /rooms    — брони: каталог и сетка аудиторий
+         /news            → /notifications — лента новостей = уведомления
+         /ics, /ics/…     → /profile  — подписка ICS — карточка профиля
+                                       (/ics/{token} — отдача календаря,
+                                       не экран)
+         прочее, чей первый сегмент пути не из живых
+                          → /notifications — тап случился на ленте:
+                                       возврат на неё безопаснее 404 */
+    const DEEP_LINK_MAP = {
+      '/deadlines': '/grades',
+      '/exams': '/grades',
+      '/room-bookings': '/rooms',
+      '/news': '/notifications'
+    };
+    const LIVE_FIRST_SEG = new Set([
+      '', 'login', 'schedule', 'grades', 'applications', 'profile',
+      'notifications', 'rooms', 'library', 'canteens', 'map', 'people',
+      'gradebook', 'rating', 'staff'
+    ]);
+    const deepLinkTarget = (href) => {
+      if (typeof href !== 'string' || href.charAt(0) !== '/') return '';
+      const path = href.split(/[?#]/)[0] || '/';
+      if (path === '/ics' || path.indexOf('/ics/') === 0) return '/profile';
+      if (Object.prototype.hasOwnProperty.call(DEEP_LINK_MAP, path)) return DEEP_LINK_MAP[path];
+      const seg = path.slice(1).split('/')[0];
+      return LIVE_FIRST_SEG.has(seg) ? href : '/notifications';
+    };
+
     /* строка ленты: <a> с deep_link / <button> без него (в <a> вложенный
        <a> невалиден — заголовок текстом + точка .unread-mark каркаса) */
     const renderRow = (n) => {
-      const href = typeof n.deep_link === 'string' && n.deep_link.charAt(0) === '/' ? n.deep_link : '';
+      const href = deepLinkTarget(n.deep_link);
       const row = href ? el('a', 'notification') : el('button', 'notification');
       if (href) row.href = href;
       else row.type = 'button';
