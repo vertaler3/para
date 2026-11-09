@@ -152,6 +152,22 @@ if (@@.get<std::string>("staffEntry") == "1") {
       </section>
     </aside>
   </div>
+  <!-- ==== В кампусе (design-drafts/dashboard.html: секция после сетки
+       виджетов, перед подвалом; fix — точки входа каталогов Э6б не имели
+       входа с дашборда). Серверных данных нет — константы разметки,
+       view-переменные не нужны (Р-16); иконки и подписи — как в
+       черновике, href —
+       реальные маршруты страниц Э7 (/library, /canteens, /map); цвета —
+       только токены .service-link из app.css (тёмная тема —
+       data-theme="dark" красит автоматически). ==== -->
+  <section class="section">
+    <div class="section-title"><h2>В кампусе</h2></div>
+    <div class="service-grid">
+      <a class="service-link" href="/library"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 0h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9"/></svg><div><strong>Библиотека</strong><p>Найти нужную книгу</p></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+      <a class="service-link" href="/canteens"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><div><strong>Столовая</strong><p>Посмотреть меню</p></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+      <a class="service-link" href="/map"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h1M15 15h1"/></svg><div><strong>Карта кампуса</strong><p>Найти кабинет</p></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+    </div>
+  </section>
   <!-- ==== Ошибка загрузки экрана (03 §5.3: «Не получилось загрузить
        {раздел}» / «Проверьте интернет — и попробуем ещё раз» / кнопка
        «Повторить»); достижима при сетевом сбое/невалидном теле — ошибки
