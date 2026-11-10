@@ -279,3 +279,183 @@ void ApplicationsCtrl::sendMessage(
                 });
         });
 }
+
+// --- Страничная плоскость (Э7 экран «Заявки»; см. шапку заголовка) --------
+
+namespace
+{
+
+// Сериализация тел сервиса для view-данных — как в ScheduleCtrl::page и
+// GradesCtrl::gradesPage: сырая кириллица — emitUTF8; разбор и вывод
+// с экранированием — шаблон (02 §6.4, Р-16).
+std::string pageJson(const Json::Value& body)
+{
+    Json::StreamWriterBuilder w;
+    w["emitUTF8"] = true;
+    return Json::writeString(w, body);
+}
+
+// Каркасные view-данные страниц (partials head/topbar/tabbar): pageTitle и
+// activeTab — серверные константы (02 §6.4).
+HttpViewData basePageData(const std::string& title)
+{
+    HttpViewData data;
+    data.insert("pageTitle", title);
+    data.insert("activeTab", std::string("applications"));
+    return data;
+}
+
+}  // namespace
+
+void ApplicationsCtrl::listPage(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // query status — тот же фильтр, что у JSON API (значение из словаря
+    // CHECK DDL). НЕИЗВЕСТНОЕ — решение шага (см. шапку заголовка): 303 на
+    // /applications — страница не отвечает голым JSON, фильтр сбрасывается.
+    std::optional<std::string> statusFilter;
+    const std::string status = req->getParameter("status");
+    if (!status.empty())
+    {
+        bool known = false;
+        for (const auto& s : models::kApplicationStatuses)
+            if (s == status)
+            {
+                known = true;
+                break;
+            }
+        if (!known)
+        {
+            cb(HttpResponse::newRedirectionResponse("/applications",
+                                                     k303SeeOther));
+            return;
+        }
+        statusFilter = status;
+    }
+    ApplicationsService::list(
+        app().getDbClient("para"), session.userId, statusFilter,
+        [cb = std::move(cb),
+         status = statusFilter](ApplicationsService::Result r) mutable {
+            HttpViewData data = basePageData("Мои заявки · Пара");
+            if (!r.ok)
+            {
+                // Ошибка БД при сборке страницы (03 §5.3): каркас с
+                // состоянием ошибки и «Повторить» ([data-applications-retry]
+                // — app.js, перезагрузка страницы); шаблон failed=1 рендерит
+                // только блок ошибки — данных в view-данные не кладём.
+                data.insert("failed", std::string("1"));
+            }
+            else
+            {
+                data.insert("failed", std::string("0"));
+                data.insert("statusFilter", std::string(status ? *status : ""));
+                data.insert("bodyJson", pageJson(r.body));
+            }
+            cb(HttpResponse::newHttpViewResponse("applications",
+                                                 std::move(data)));
+        });
+}
+
+void ApplicationsCtrl::newPage(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter; path-id НЕТ — OwnershipGuard не применим
+    // (правило — для эндпоинтов с {id} в пути, OwnershipGuard.h). Каталог
+    // типов и профиль страница не хардкодит: их грузит клиент
+    // (GET /v1/application-types и /v1/me — 02 §5.2), рендерит app.js;
+    // состояния загрузки/ошибки — в шаблоне и app.js (03 §5.1/§5.3).
+    (void)req;
+    HttpViewData data = basePageData("Новая заявка · Пара");
+    // Имя шаблона — application_form (подчёркивание): drogon_ctl 1.9.14
+    // генерирует из имени файла имя C++-класса, дефис не компилирует
+    // (прецедент Э7 экрана «Расписание»: schedule_today/schedule_week).
+    cb(HttpResponse::newHttpViewResponse("application_form", std::move(data)));
+}
+
+void ApplicationsCtrl::cardPage(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb,
+    int64_t applicationId)
+{
+    const auto session = req->attributes()->get<para::SessionInfo>("session");
+    auto db = app().getDbClient("para");
+    // РЕШЕНИЕ ПО GUARD на этом path-id (задокументировано в шапке
+    // заголовка): OwnershipGuard::check(Table::Applications) ДО любой отдачи
+    // данных (правило код-ревью в OwnershipGuard.h). Own — единственный путь
+    // к данным (ApplicationsService::one — по PK без user_id-условия:
+    // владение проверяется ровно один раз, здесь; паттерн getOne выше).
+    // Для страницы Forbidden/NotFound → ОДНА нейтральная карточка ошибки
+    // с РАЗНЫМИ кодами статуса 403/404 (03 §5.3: UI не различает
+    // чужое/несуществующее; DoD 01 п.2 — 403 проверяем жюри); Error → 500
+    // fail-closed. cb внешней лямбды — копия в КАЖДОЙ ветке (урок Э2 шаг 1:
+    // move в одной ветке оставил бы следующей пустой std::function).
+    OwnershipGuard::check(
+        db, OwnershipGuard::Table::Applications, session.userId, applicationId,
+        [db, applicationId, cb](OwnershipGuard::Verdict v) mutable {
+            switch (v)
+            {
+                case OwnershipGuard::Verdict::Own:
+                    ApplicationsService::one(
+                        db, applicationId,
+                        [cb](ApplicationsService::OneResult r) mutable {
+                            HttpViewData data = basePageData("Заявка · Пара");
+                            HttpStatusCode code = k200OK;
+                            switch (r.status)
+                            {
+                                case ApplicationsService::One::Found:
+                                    data.insert("mode", std::string("data"));
+                                    data.insert("bodyJson", pageJson(r.body));
+                                    break;
+                                case ApplicationsService::One::NotFound:
+                                    // Строка исчезла после Own (гонка
+                                    // удаления) — та же нейтральная
+                                    // карточка, 404.
+                                    data.insert("mode", std::string("guard"));
+                                    code = k404NotFound;
+                                    break;
+                                case ApplicationsService::One::Error:
+                                    data.insert("mode",
+                                                std::string("dberror"));
+                                    code = k500InternalServerError;
+                                    break;
+                            }
+                            auto resp = HttpResponse::newHttpViewResponse(
+                                "application", std::move(data));
+                            resp->setStatusCode(code);
+                            cb(std::move(resp));
+                        });
+                    return;
+                case OwnershipGuard::Verdict::NotFound:
+                case OwnershipGuard::Verdict::Forbidden:
+                {
+                    // Обе ситуации — одна нейтральная карточка «Не нашли то,
+                    // что искали» (03 §5.3); коды статуса разные.
+                    HttpViewData data = basePageData("Заявка · Пара");
+                    data.insert("mode", std::string("guard"));
+                    auto resp = HttpResponse::newHttpViewResponse(
+                        "application", std::move(data));
+                    resp->setStatusCode(v == OwnershipGuard::Verdict::Forbidden
+                                            ? k403Forbidden
+                                            : k404NotFound);
+                    cb(std::move(resp));
+                    return;
+                }
+                case OwnershipGuard::Verdict::Error:
+                {
+                    // Ошибка БД — fail-closed (разрешением не считается):
+                    // карточка «Сервис не отвечает», 500.
+                    HttpViewData data = basePageData("Заявка · Пара");
+                    data.insert("mode", std::string("dberror"));
+                    auto resp = HttpResponse::newHttpViewResponse(
+                        "application", std::move(data));
+                    resp->setStatusCode(k500InternalServerError);
+                    cb(std::move(resp));
+                    return;
+                }
+            }
+        });
+}

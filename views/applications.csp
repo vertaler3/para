@@ -1,0 +1,257 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+#include <utility>
+%>
+<%c++
+/* Мои заявки (Э7, экран «Заявки» 1 из 4; 03 §4.5.1, design-drafts/
+   applications.html и applications-states.html). Полная страница SSR:
+   partials каркаса; pageTitle/activeTab — view-переменные
+   ApplicationsCtrl::listPage (серверные константы, 02 §6.4). Тело —
+   ApplicationsService::list (ТОТ ЖЕ метод, что стоит за JSON
+   GET /v1/applications; SQL в шаблоне нет — AGENTS §5.5), приходит
+   сериализованной строкой bodyJson; разбор здесь, пользовательские
+   строки (названия типов) выводит HttpViewData::htmlTranslate при
+   выводе (02 §6.4, Р-16: автоэкранирования в csp v1.9.14 нет).
+   Фильтр ?status= — чипы-ссылки; активный — aria-current (03 §4.6:
+   «активный чип — primary-soft», .chip[aria-current] — app.css);
+   неизвестное значение контроллер сбрасывает 303 на /applications
+   (решение в шапке ApplicationsCtrl.h). Значения словаря — CHECK DDL
+   (models/Applications.h, kApplicationStatuses).
+   Бейджи статусов (03 §4.5.1): активные (submitted/accepted/
+   in_progress) — info, вопрос деканата (need_info) — warn, готовые
+   (ready/issued) — success, терминальные (rejected/cancelled) —
+   danger, черновик — outline; метки — слова таймлайна 01 §4.4
+   («подана → принята → в работе → готова → выдана», С7.5).
+   mini-progress — 5 стадий канонического пути заявки; заполнение —
+   по ТЕКУЩЕМУ статусу (истории переходов в теле списка НЕТ, честно):
+   submitted 1, accepted 2, in_progress|need_info 3, ready 4, issued 5;
+   draft и терминальные — без заполнения (путь не начат/прерван, смысл
+   несёт текст бейджа — цвет не единственный носитель смысла, 03 §6.4).
+   Карточка списка ЦЕЛИКОМ — ссылка /applications/{id} (03 §6.2: «в
+   списках весь ряд карточки кликабелен»).
+   Состояния (03 §5):
+     data  — есть заявки: контейнер #applications-root
+             data-state="data" (смок состояния, как #grades-root);
+     empty — заявок нет: «Заявок пока нет» + текст + действие
+             «Открыть каталог» — финальные тексты 03 §5.2:997,
+             data-state="empty";
+     error — сбой БД (failed=1 от контроллера) или разбора тела:
+             «Не получилось загрузить заявки» с «Повторить»
+             ([data-applications-retry] — app.js, перезагрузка
+             страницы) — вне data-state-контейнера, чтобы тот сохранял
+             значения data|empty (прецедент grades.csp);
+     скелетон — НЕ рендерится: страница целиком SSR, догрузки на
+             клиенте нет (03 §5.1:984 «скелетон при догрузке»;
+             прецедент grades.csp) — скелетон списков экрана заявок
+             живёт на /applications/new, где каталог типов грузится
+             fetch-ом;
+     офлайн — баннер каркаса (topbar + app.js applyOffline, 03 §5.4).
+   PDF-кнопки в списке нет (03 §4.5.1 черновик показывал её в карточке
+   «готова») — скачивание живёт в карточке заявки (роут
+   /v1/applications/{id}/pdf, обработка 409 not_ready — app.js). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="applications">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <h1>Мои заявки</h1>
+      <p>Каждый шаг — от подачи до получения</p>
+    </div>
+    <a class="button primary" href="/applications/new">+ Новая заявка</a>
+  </div>
+<%c++
+const std::string failed = @@.get<std::string>("failed");
+if (failed == "1") {
+%>
+  <!-- Состояние «Ошибка» (03 §5.3): «Повторить» реально перезапрашивает —
+       перезагрузка страницы (app.js, [data-applications-retry]). -->
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить заявки</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-applications-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else {
+// --- Разбор тела сервиса; сбой разбора — состояние ошибки, не падение ----
+const std::string bodyJson = @@.get<std::string>("bodyJson");
+const std::string statusFilter = @@.get<std::string>("statusFilter");
+bool broken = false;
+Json::Value apps(Json::arrayValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    Json::Value root;
+    if (bodyJson.empty() ||
+        !reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
+                       &root, &errs) ||
+        !root.isMember("applications") || !root["applications"].isArray())
+        broken = true;
+    else
+        apps = root["applications"];
+}
+const bool hasApps = !broken && apps.size() > 0;
+
+// --- серверные константы и форматирование (паттерн grades.csp) -----------
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
+                                "мая",      "июня",    "июля",     "августа",
+                                "сентября", "октября", "ноября",   "декабря"};
+// «2026-11-02T09:12:00Z» → «2 ноября» (данные фикстур в «…Z»);
+// kMonths — static storage, в захват лямбды не входит
+const auto dayMonthOf = [](const std::string& iso) -> std::string {
+    if (iso.size() < 10) return "";
+    int d = 0, m = 0;
+    try {
+        d = std::stoi(iso.substr(8, 2));
+        m = std::stoi(iso.substr(5, 2));
+    } catch (...) {
+        return "";
+    }
+    if (m < 1 || m > 12) return "";
+    return std::to_string(d) + " " + kMonths[m - 1];
+};
+// Метка статуса — слова таймлайна 01 §4.4 (С7.5); словарь CHECK DDL
+const auto statusTitle = [](const std::string& s) -> std::string {
+    if (s == "draft") return "Черновик";
+    if (s == "submitted") return "Подана";
+    if (s == "accepted") return "Принята";
+    if (s == "in_progress") return "В работе";
+    if (s == "need_info") return "Требуется уточнение";
+    if (s == "ready") return "Готова";
+    if (s == "issued") return "Выдана";
+    if (s == "rejected") return "Отклонена";
+    if (s == "cancelled") return "Отменена";
+    return s;
+};
+// Класс бейджа (см. шапку шаблона): неизвестный статус — нейтральный
+const auto badgeClass = [](const std::string& s) -> const char* {
+    if (s == "submitted" || s == "accepted" || s == "in_progress")
+        return "info";
+    if (s == "need_info") return "warn";
+    if (s == "ready" || s == "issued") return "success";
+    if (s == "rejected" || s == "cancelled") return "danger";
+    if (s == "draft") return "outline";
+    return "";
+};
+// Заполнение mini-progress по текущему статусу (см. шапку шаблона)
+const auto doneStages = [](const std::string& s) -> int {
+    if (s == "submitted") return 1;
+    if (s == "accepted") return 2;
+    if (s == "in_progress" || s == "need_info") return 3;
+    if (s == "ready") return 4;
+    if (s == "issued") return 5;
+    return 0;
+};
+%>
+  <div class="content-narrow">
+    <!-- Чипы-фильтры ?status= (03 §4.6: активный — primary-soft; ссылки —
+         SSR-фильтр страницы; aria-current подсвечивает активный) -->
+    <div class="chips section" aria-label="Фильтр заявок по статусу">
+      <a class="chip" href="/applications"<%c++
+if (statusFilter.empty()) $$ << " aria-current=\"page\"";
+%>>Все</a>
+<%c++
+// Метки чипов — словарь CHECK DDL в порядке объявления (как в моделях)
+const std::pair<const char*, const char*> kChips[] = {
+    {"draft", "Черновик"}, {"submitted", "Подана"}, {"accepted", "Принята"},
+    {"in_progress", "В работе"}, {"need_info", "Требуется уточнение"},
+    {"ready", "Готова"}, {"issued", "Выдана"}, {"rejected", "Отклонена"},
+    {"cancelled", "Отменена"}};
+for (const auto& c : kChips) {
+    const std::string key = c.first;
+    $$ << "<a class=\"chip\" href=\"/applications?status=" << c.first << "\"";
+    if (statusFilter == key) $$ << " aria-current=\"page\"";
+    $$ << ">" << esc(c.second) << "</a>";
+}
+%>
+    </div>
+<%c++
+if (broken) {
+%>
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить заявки</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-applications-retry>Повторить</button>
+    </section>
+<%c++
+} else if (!hasApps) {
+    // Пустой список (03 §4.5.1 и §5.2 — тексты финальные). ДВА варианта
+    // (правки по ревью раунд 1): БЕЗ фильтра — «Заявок пока нет» с CTA
+    // «Открыть каталог» (03 §5.2:997); С АКТИВНЫМ фильтром — «По этой
+    // теме пока ничего не было» без CTA (03 §5.2:1000: заявки в других
+    // статусах есть — «заявок нет» вводило бы в заблуждение; выход —
+    // сбросить фильтр чипом «Все»).
+%>
+    <div id="applications-root" data-state="empty">
+      <div class="surface">
+        <div class="empty">
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg></div>
+<%c++
+    if (!statusFilter.empty()) {
+%>
+          <p>По этой теме пока ничего не было</p>
+<%c++
+    } else {
+%>
+          <h2>Заявок пока нет</h2>
+          <p>Нужна справка или заявление? Начните с каталога — типовая справка занимает три касания.</p>
+          <a class="button" href="/applications/new">Открыть каталог</a>
+<%c++
+    }
+%>
+        </div>
+      </div>
+    </div>
+<%c++
+} else {
+    // --- Данные (SSR): карточки списком, каждая — ссылка на карточку ----
+%>
+    <div id="applications-root" data-state="data">
+      <div class="app-list">
+<%c++
+        for (const auto& a : apps)
+        {
+            const std::string st = a["status"].asString();
+            const int done = doneStages(st);
+            $$ << "<a class=\"app-card\" href=\"/applications/"
+               << a["id"].asInt64() << "\">";
+            $$ << "<div class=\"row wrap\"><h3>"
+               << esc(a["type_title"].asString()) << "</h3>";
+            $$ << "<span class=\"badge " << badgeClass(st) << "\">"
+               << esc(statusTitle(st)) << "</span></div>";
+            // 5 стадий канонического пути (01 §4.4); aria-label читается
+            // целиком — цвет/заполнение не единственный носитель (03 §6.4)
+            $$ << "<div class=\"mini-progress\" aria-label=\"Пройдено этапов: "
+               << done << " из 5\">";
+            for (int i = 0; i < 5; ++i)
+                $$ << "<span" << (i < done ? " class=\"done\"" : "")
+                   << "></span>";
+            $$ << "</div>";
+            $$ << "<p class=\"caption\">от "
+               << esc(dayMonthOf(a["created_at"].asString())) << "</p>";
+            $$ << "</a>";
+        }
+%>
+      </div>
+    </div>
+<%c++
+    }
+}  // else (failed != "1")
+%>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

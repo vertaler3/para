@@ -25,6 +25,16 @@ using namespace drogon;
 //
 // Ошибки — единый формат 02 §5.1 (api::errorResponse); успешные ответы —
 // api::jsonResponse (кириллица сырыми UTF-8 байтами, гейт-конвенция Э6 р1).
+//
+// Страничная плоскость (Э7, экран «Библиотека» 03 §4.9.6/5.12; Р-19 —
+// путь вне /v1/ по постановке экрана):
+//   GET /library           — SSR-страница views/library.csp: строка поиска,
+//       чипы филиалов (все + по одному), чип «Только доступные», строки
+//       книг с бейджем «свободно N из M». Без сессии LoginFilter отвечает
+//       303 → /login (страница). Данных страница не содержит — филиалы и
+//       наличие грузит клиент из ТЕХ ЖЕ JSON-роутов выше (GET
+//       /v1/library/branches, GET /v1/library/items — 02 §5.2; паттерн
+//       RoomsCtrl::roomsPage); читательский билет — на /profile (5.9/5.12).
 class LibraryCtrl : public HttpController<LibraryCtrl>
 {
   public:
@@ -35,6 +45,7 @@ class LibraryCtrl : public HttpController<LibraryCtrl>
                   "LoginFilter");
     ADD_METHOD_TO(LibraryCtrl::getMyCard, "/v1/library/my-card", Get,
                   "LoginFilter");
+    ADD_METHOD_TO(LibraryCtrl::libraryPage, "/library", Get, "LoginFilter");
     METHOD_LIST_END
 
     void getBranches(const HttpRequestPtr& req,
@@ -43,4 +54,6 @@ class LibraryCtrl : public HttpController<LibraryCtrl>
                   std::function<void(const HttpResponsePtr&)>&& cb);
     void getMyCard(const HttpRequestPtr& req,
                    std::function<void(const HttpResponsePtr&)>&& cb);
+    void libraryPage(const HttpRequestPtr& req,
+                     std::function<void(const HttpResponsePtr&)>&& cb);
 };

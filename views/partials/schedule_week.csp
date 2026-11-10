@@ -1,0 +1,415 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+%>
+<%c++
+/* Пара · сегмент «Неделя» расписания (Э7; 03 §4.3, design-drafts/
+   schedule-week.html): дни списком (7 колонок — только на десктопе,
+   app.css), «Изменения недели» — та же выборка ScheduleService::changeList,
+   что за GET /v1/schedule/changes?days=7 (02 §5.2). Рендерится страницей
+   views/schedule.csp (SSR) и возвращается контроллером как ОТВЕТ htmx на
+   GET /schedule/segment?segment=week&offset=N (HX-Request: true) — корень
+   #schedule-segment с data-state="data|empty" при outerHTML-обмене
+   приезжает свежим; имя класса — schedule_week: дефис drogon_ctl 1.9.14
+   в имя класса не допускает. Стрелки ±1 неделя — hx-get с offset±1,
+   тап ≥44px (.icon-button, 03 §2.8); на границе окна [-4..4] — disabled.
+   Данные — view-строки контроллера: bodyJson — сериализованный ответ
+   ScheduleService::week, changesJson — changeList, todayIso — UTC-дата
+   проекта (SQL в шаблоне нет — AGENTS §5.5). Пользовательские строки
+   экранируются htmlTranslate при выводе (02 §6.4, Р-16).
+   Карточка пары — как в сегменте «Сегодня» (кнопка с data-атрибутами,
+   sheet «Детали пары» — app.js). Сегмент пустой целиком (каникулы,
+   03 §5.2): «Расписания на эти даты нет» + «Расписание 2-го семестра
+   появится позже» (иконка calendar-x в круге — общая форма пустого
+   состояния); день без пар — «Свободный день · пар нет» строкой в списке
+   дня (03 §4.3); сегодняшний день — заголовок --primary и бейдж
+   «Сегодня» (03 §4.3, design-drafts/schedule-week.html). */
+const std::string bodyJson = @@.get<std::string>("bodyJson");
+const std::string changesJson = @@.get<std::string>("changesJson");
+const std::string todayIso = @@.get<std::string>("todayIso");
+
+Json::Value root(Json::objectValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    if (!reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
+                       &root, &errs))
+        root = Json::Value(Json::objectValue);
+}
+Json::Value changesRoot(Json::objectValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    if (!reader->parse(changesJson.data(),
+                       changesJson.data() + changesJson.size(), &changesRoot,
+                       &errs))
+        changesRoot = Json::Value(Json::objectValue);
+}
+// Отсутствующий ключ operator[] вставит null — isArray() отсечёт.
+const Json::Value& events = root["events"];
+const Json::Value& changes = changesRoot["changes"];
+const bool hasEvents = events.isArray() && events.size() > 0;
+const bool hasChanges = changes.isArray() && changes.size() > 0;
+const std::string from = root["from"].asString();
+const std::string to = root["to"].asString();
+int offset = root["offset"].isInt() ? root["offset"].asInt() : 0;
+
+// --- серверные константы и форматирование (как в schedule_today) -------
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+const auto timeOf = [](const std::string& iso) {
+    return iso.size() >= 16 ? iso.substr(11, 5) : std::string("--:--");
+};
+const auto dateOf = [](const std::string& iso) {
+    return iso.size() >= 10 ? iso.substr(0, 10) : std::string();
+};
+// Арифметика дат без <ctime>: days from civil / civil from days.
+const auto daysFromCivil = [](int y, int m, int d) -> long {
+    y -= m <= 2;
+    const long era = (y >= 0 ? y : y - 399) / 400;
+    const long yoe = y - era * 400;
+    const long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097L + doe - 719468L;
+};
+const auto civilFromDays = [](long z, int& y, int& m, int& d) {
+    z += 719468L;
+    const long era = (z >= 0 ? z : z - 146096L) / 146097L;
+    const long doe = z - era * 146097L;
+    const long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const long yy = yoe + era * 400;
+    const long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const long mp = (5 * doy + 2) / 153;
+    d = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+    m = static_cast<int>(mp < 10 ? mp + 3 : mp - 9);
+    y = static_cast<int>(yy + (m <= 2));
+};
+const auto pad2 = [](int v) {
+    return (v < 10 ? "0" : "") + std::to_string(v);
+};
+const auto ymdOf = [&pad2](int y, int m, int d) {
+    return std::to_string(y) + "-" + pad2(m) + "-" + pad2(d);
+};
+const auto splitYmd = [](const std::string& ymd, int& y, int& m, int& d) {
+    y = m = d = 0;
+    if (ymd.size() < 10) return false;
+    try {
+        y = std::stoi(ymd.substr(0, 4));
+        m = std::stoi(ymd.substr(5, 2));
+        d = std::stoi(ymd.substr(8, 2));
+        return true;
+    } catch (...) {
+        return false;
+    }
+};
+const auto weekdayOf = [&daysFromCivil, &splitYmd](const std::string& ymd) -> int {
+    int y = 0, m = 0, d = 0;
+    if (!splitYmd(ymd, y, m, d)) return -1;
+    return static_cast<int>((daysFromCivil(y, m, d) + 3) % 7);
+};
+static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
+                                "мая",      "июня",    "июля",     "августа",
+                                "сентября", "октября", "ноября",   "декабря"};
+static const char* kWeekdays[] = {"Понедельник", "Вторник",   "Среда",
+                                  "Четверг",    "Пятница",   "Суббота",
+                                  "Воскресенье"};
+static const char* kWeekdaysShort[] = {"Пн", "Вт", "Ср",
+                                       "Чт", "Пт", "Сб", "Вс"};
+const auto dayTitle = [&weekdayOf, &splitYmd](const std::string& ymd) {
+    const int w = weekdayOf(ymd);
+    int y = 0, m = 0, d = 0;
+    std::string out = w >= 0 ? std::string(kWeekdays[w]) : std::string();
+    if (splitYmd(ymd, y, m, d))
+    {
+        out += ", " + std::to_string(d);
+        if (m >= 1 && m <= 12) out += std::string(" ") + kMonths[m - 1];
+    }
+    return out;
+};
+const auto shortDay = [&weekdayOf, &splitYmd](const std::string& ymd) {
+    const int w = weekdayOf(ymd);
+    int y = 0, m = 0, d = 0;
+    std::string out = w >= 0 ? std::string(kWeekdaysShort[w]) : std::string();
+    if (splitYmd(ymd, y, m, d))
+    {
+        out += ", " + std::to_string(d);
+        if (m >= 1 && m <= 12) out += std::string(" ") + kMonths[m - 1];
+    }
+    return out;
+};
+// Подпись диапазона недели: «2–8 ноября 2026» / через месяц — «30 октября –
+// 5 ноября 2026» (design-drafts/schedule-week.html).
+const auto weekRange = [&splitYmd](const std::string& f, const std::string& t) {
+    int fy = 0, fm = 0, fd = 0, ty = 0, tm = 0, td = 0;
+    if (!splitYmd(f, fy, fm, fd) || !splitYmd(t, ty, tm, td)) return std::string();
+    std::string out = std::to_string(fd);
+    // Один месяц — «2–8 ноября», через месяц — «30 октября – 5 ноября».
+    if (fm != tm) out += std::string(" ") + (fm >= 1 && fm <= 12 ? kMonths[fm - 1] : "");
+    out += fm != tm ? " – " : "–";
+    out += std::to_string(td);
+    if (tm >= 1 && tm <= 12) out += std::string(" ") + kMonths[tm - 1];
+    out += " " + std::to_string(ty);
+    return out;
+};
+const auto kindLabel = [](const std::string& k) {
+    if (k == "lecture") return "Лекция";
+    if (k == "seminar") return "Семинар";
+    if (k == "practice") return "Практика";
+    return "";
+};
+const auto plural = [](int n, const char* one, const char* few,
+                       const char* many) {
+    const int m10 = n % 10, m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+};
+const auto statusBadge = [](const std::string& st) -> std::string {
+    if (st == "moved") return " <span class=\"badge warn\">Перенесена</span>";
+    if (st == "cancelled")
+        return " <span class=\"badge danger\">Отменена</span>";
+    if (st == "substituted") return " <span class=\"badge info\">Замена</span>";
+    return "";
+};
+const auto wasLine = [&esc, &timeOf](const Json::Value& e) -> std::string {
+    const std::string st = e["status"].asString();
+    if (st != "moved" && st != "cancelled") return "";
+    std::string out = "<p class=\"lesson-was\">";
+    if (st == "moved")
+    {
+        out += "<s>" + esc(e["prev_room"].asString()) + "</s>";
+        out += " <span aria-hidden=\"true\">→</span> " +
+               esc(e["room"].asString());
+        const std::string prevT = timeOf(e["prev_starts_at"].asString());
+        const std::string newT = timeOf(e["starts_at"].asString());
+        if (prevT != "--:--" && prevT != newT)
+            out += " · " + esc(prevT) + " → " + esc(newT);
+    }
+    else
+    {
+        out += "<s>" + esc(e["room"].asString()) + "</s>";
+    }
+    out += "</p>";
+    return out;
+};
+const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
+    std::string a;
+    a += " data-date=\"" + esc(dateOf(e["starts_at"].asString())) + "\"";
+    a += " data-start=\"" + esc(timeOf(e["starts_at"].asString())) + "\"";
+    a += " data-end=\"" + esc(timeOf(e["ends_at"].asString())) + "\"";
+    a += " data-kind=\"" + esc(e["kind"].asString()) + "\"";
+    a += " data-status=\"" + esc(e["status"].asString()) + "\"";
+    a += " data-room=\"" + esc(e["room"].asString()) + "\"";
+    if (e.isMember("prev_room") && !e["prev_room"].isNull())
+        a += " data-prev-room=\"" + esc(e["prev_room"].asString()) + "\"";
+    if (e.isMember("prev_starts_at") && !e["prev_starts_at"].isNull())
+        a += " data-prev-start=\"" +
+             esc(timeOf(e["prev_starts_at"].asString())) + "\"";
+    if (e.isMember("teacher_id") && !e["teacher_id"].isNull())
+        a += " data-teacher-id=\"" +
+             std::to_string(e["teacher_id"].asInt64()) + "\"";
+    return a;
+};
+%>
+<%c++ $$ << "<div id=\"schedule-segment\" class=\"content-narrow\" data-state=\"" << (hasEvents ? "data" : "empty") << "\">"; %>
+  <div class="calendar-toolbar">
+    <div class="segments" role="group" aria-label="Период расписания">
+      <button type="button" aria-pressed="false"
+        hx-get="/schedule/segment?segment=today" hx-target="#schedule-segment"
+        hx-swap="outerHTML" hx-push-url="/schedule?segment=today"
+        hx-indicator="#schedule-indicator" hx-disabled-elt="this">Сегодня</button>
+      <button type="button" aria-pressed="true"
+        hx-get="/schedule/segment?segment=week&amp;offset=0"
+        hx-target="#schedule-segment" hx-swap="outerHTML"
+        hx-push-url="/schedule?segment=week&amp;offset=0"
+        hx-indicator="#schedule-indicator" hx-disabled-elt="this">Неделя</button>
+    </div>
+    <!-- Ghost-ссылка входа в «Бронь аудитории» (03 §4.3:421, 5.10/§4.9.5):
+         в экране «Расписание» сознательно откладывалась (журнал 2026-11-08:
+         роута /rooms не было — не плодить мёртвую ссылку); с коммита
+         экрана «Бронь аудитории» GET /rooms живёт — откладка снята.
+         Внутри партиала — ссылка переживает htmx-обмен сегмента
+         (outerHTML #schedule-segment) в обоих сегментах. -->
+    <a class="button ghost rooms-ghost" href="/rooms">Забронировать аудиторию<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+    <div class="week-nav">
+<%c++
+// Стрелки ±1 (03 §4.3, тап ≥44px): на границе окна [-4..4] — disabled.
+if (offset - 1 < -4)
+    $$ << "<button type=\"button\" class=\"icon-button\" disabled aria-label=\"Предыдущая неделя\">";
+else
+    $$ << "<button type=\"button\" class=\"icon-button\" aria-label=\"Предыдущая неделя\" hx-get=\"/schedule/segment?segment=week&amp;offset=" << (offset - 1) << "\" hx-target=\"#schedule-segment\" hx-swap=\"outerHTML\" hx-push-url=\"/schedule?segment=week&amp;offset=" << (offset - 1) << "\" hx-indicator=\"#schedule-indicator\" hx-disabled-elt=\"this\">";
+$$ << "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m15 18-6-6 6-6\"/></svg></button>";
+%>
+      <span class="muted small" data-week-range><%c++ $$ << esc(weekRange(from, to)); %></span>
+<%c++
+if (offset + 1 > 4)
+    $$ << "<button type=\"button\" class=\"icon-button\" disabled aria-label=\"Следующая неделя\">";
+else
+    $$ << "<button type=\"button\" class=\"icon-button\" aria-label=\"Следующая неделя\" hx-get=\"/schedule/segment?segment=week&amp;offset=" << (offset + 1) << "\" hx-target=\"#schedule-segment\" hx-swap=\"outerHTML\" hx-push-url=\"/schedule?segment=week&amp;offset=" << (offset + 1) << "\" hx-indicator=\"#schedule-indicator\" hx-disabled-elt=\"this\">";
+$$ << "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m9 18 6-6-6-6\"/></svg></button>";
+%>
+    </div>
+  </div>
+<%c++
+if (hasEvents)
+{
+    // Неделя — вертикальный список дней (03 §4.3: 7 колонок только на
+    // десктопе — app.css .week-columns на ≥1024px).
+    $$ << "<div class=\"week-columns\">";
+    for (int i = 0; i < 7; ++i)
+    {
+        // Дата i-го дня недели: from + i суток (арифметика civil-дат).
+        int y = 0, m = 0, d = 0;
+        std::string day = from;
+        if (splitYmd(from, y, m, d))
+        {
+            int yy = 0, mm = 0, dd = 0;
+            civilFromDays(daysFromCivil(y, m, d) + i, yy, mm, dd);
+            day = ymdOf(yy, mm, dd);
+        }
+        const bool isToday = (day == todayIso);
+        Json::Value dayEvents(Json::arrayValue);
+        for (const auto& e : events)
+            if (dateOf(e["starts_at"].asString()) == day)
+                dayEvents.append(e);
+        const int n = static_cast<int>(dayEvents.size());
+        $$ << "<section class=\"day-group" << (isToday ? " is-today" : "")
+           << "\"><div class=\"section-title\"><h2>" << esc(dayTitle(day))
+           << "</h2>";
+        if (isToday)
+            $$ << "<span class=\"badge info\">Сегодня</span>";
+        else if (n > 0)
+            $$ << "<span class=\"caption\">" << n << " "
+               << plural(n, "пара", "пары", "пар") << "</span>";
+        else
+            $$ << "<span class=\"caption\">выходной</span>";
+        $$ << "</div><div class=\"schedule-list\">";
+        if (n == 0)
+        {
+            // Пустой день — строка в списке (03 §4.3/§5.2).
+            $$ << "<p class=\"muted small day-empty\">Свободный день · пар нет</p>";
+        }
+        else
+        {
+            for (const auto& e : dayEvents)
+            {
+                const std::string st = e["status"].asString();
+                std::string cls = "lesson";
+                if (st == "moved") cls += " moved";
+                else if (st == "cancelled") cls += " cancelled";
+                else if (st == "substituted") cls += " substituted";
+                $$ << "<button type=\"button\" class=\"" << cls
+                   << "\" data-event" << dataAttr(e) << ">";
+                $$ << "<div class=\"lesson-time\"><strong>"
+                   << esc(timeOf(e["starts_at"].asString())) << "</strong>";
+                const std::string tEnd = timeOf(e["ends_at"].asString());
+                if (tEnd != "--:--") $$ << "<span>" << esc(tEnd) << "</span>";
+                $$ << "</div><div><div class=\"lesson-subject\">"
+                   << esc(e["discipline"].asString()) << "</div>";
+                $$ << "<p class=\"lesson-detail\">"
+                   << esc(kindLabel(e["kind"].asString())) << statusBadge(st)
+                   << "</p>" << wasLine(e);
+                $$ << "</div><div class=\"lesson-room\">";
+                if (st == "cancelled")
+                    $$ << "<s>" << esc(e["room"].asString()) << "</s>";
+                else
+                    $$ << "<span>" << esc(e["room"].asString()) << "</span>";
+                $$ << "</div></button>";
+            }
+        }
+        $$ << "</div></section>";
+    }
+    $$ << "</div>";
+}
+else
+{
+    // Каникулы/нет данных (03 §5.2): общая форма пустого состояния,
+    // иконка calendar-x в круге; без кнопки (03 §5.2: «нет»).
+    $$ << "<div class=\"empty\"><div class=\"empty-icon\">"
+          "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+          "<rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"2\"/>"
+          "<path d=\"M16 3v4M8 3v4M3 11h18m-5.5 2.5-5 5m0-5 5 5\"/></svg>"
+          "</div><h2>Расписания на эти даты нет</h2>"
+          "<p>Расписание 2-го семестра появится позже</p></div>";
+}
+%>
+  <section class="section" aria-labelledby="changes-title">
+    <div class="section-title">
+      <h2 id="changes-title">Изменения недели</h2>
+      <span class="caption"><%c++
+if (hasChanges)
+    $$ << std::to_string(changes.size()) + " " +
+              plural(static_cast<int>(changes.size()), "изменение",
+                     "изменения", "изменений");
+else
+    $$ << "нет";
+      %></span>
+    </div>
+    <div class="changes-list">
+<%c++
+if (!hasChanges)
+{
+    $$ << "<p class=\"muted small day-empty\">Изменений за последние 7 дней нет</p>";
+}
+else
+{
+    // «Изменения недели» (С3) — те же данные, что /v1/schedule/changes
+    // ?days=7: moved — «было → стало», cancelled — зачёркнуто.
+    for (const auto& c : changes)
+    {
+        const std::string st = c["status"].asString();
+        const std::string cur = c["starts_at"].asString();
+        const std::string prev = c["prev_starts_at"].asString();
+        $$ << "<div class=\"change-block\">";
+        $$ << "<h3>" << esc(shortDay(cur)) << " · "
+           << esc(timeOf(cur)) << " · "
+           << esc(c["discipline"].asString()) << "</h3>";
+        if (st == "moved")
+        {
+            const bool sameTime =
+                dateOf(prev) == dateOf(cur) && timeOf(prev) == timeOf(cur);
+            $$ << "<span class=\"change-label\">"
+               << (sameTime ? "Перенос аудитории" : "Перенос занятия")
+               << "</span>";
+            $$ << "<div class=\"change-route\"><s>"
+               << esc(c["prev_room"].asString())
+               << "</s><span aria-hidden=\"true\">→</span><span>"
+               << esc(c["room"].asString()) << "</span></div>";
+            if (sameTime)
+                $$ << "<p class=\"caption\">Время прежнее · "
+                   << esc(timeOf(cur)) << "–"
+                   << esc(timeOf(c["ends_at"].asString())) << "</p>";
+            else
+                $$ << "<p class=\"caption\">Было: " << esc(shortDay(prev))
+                   << ", " << esc(timeOf(prev)) << "</p>";
+        }
+        else if (st == "cancelled")
+        {
+            $$ << "<span class=\"change-label\">Занятие отменено</span>";
+            $$ << "<div class=\"change-route\"><s>"
+               << esc(c["room"].asString()) << "</s></div>";
+            $$ << "<p class=\"caption\">" << esc(timeOf(cur)) << "–"
+               << esc(timeOf(c["ends_at"].asString())) << "</p>";
+        }
+        else if (st == "substituted")
+        {
+            // Замена преподавателя (С3): имена в schedule-ответе не
+            // отдаются — показываем время занятия, бейдж в карточках дня.
+            $$ << "<span class=\"change-label\">Замена преподавателя</span>";
+            $$ << "<p class=\"caption\">" << esc(timeOf(cur)) << "–"
+               << esc(timeOf(c["ends_at"].asString())) << "</p>";
+        }
+        $$ << "</div>";
+    }
+}
+%>
+    </div>
+  </section>
+  <div class="actions section">
+    <a class="button" href="/profile">Подписка на календарь</a>
+  </div>
+<%c++ $$ << "</div>"; %>

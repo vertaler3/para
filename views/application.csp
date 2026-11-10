@@ -1,0 +1,373 @@
+<%inc
+#include <json/json.h>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+%>
+<%c++
+/* Карточка заявки (Э7, экран «Заявки»; 03 §4.5.5, design-drafts/
+   application-timeline.html). SSR: тело — ApplicationsService::one (ТОТ ЖЕ
+   метод, что за JSON GET /v1/applications/{id}, вызов ПОСЛЕ Own-вердикта
+   OwnershipGuard — решение в шапке ApplicationsCtrl.h; SQL в шаблоне нет,
+   AGENTS §5.5), приходит сериализованной строкой bodyJson; разбор здесь,
+   пользовательские строки (тип, комментарии) выводит
+   HttpViewData::htmlTranslate (02 §6.4, Р-16).
+   Режимы (view-переменная mode от контроллера):
+     data    — своя заявка: шапка (тип + бейдж статуса), таймлайн,
+               детали payload, ветка «Требуется уточнение» (С7.6) и
+               «Скачать PDF» на ready|issued;
+     guard   — 403 (чужая) / 404 (несуществующая): ОДНА нейтральная
+               карточка «Не нашли то, что искали» — текст не различает
+               чужое/несуществующее (03 §5.3:1017/1021), коды статуса
+               различаются на ответе (DoD 01 п.2) — это HTML-страница,
+               НЕ голый JSON;
+     dberror — сбой БД (500, fail-closed): «Сервис не отвечает» /
+               «Мы уже знаем и чиним. Попробуйте через минуту» /
+               «Повторить» ([data-app-retry] — app.js, 03 §5.3:1013).
+   Таймлайн (03 §4.5.5: «таймлайн full: 5 точек с подписями и временем»):
+   события application_events (порядок записи at,id) рендерятся
+   хронологически одним списком:
+     канонические стадии (submitted/accepted/in_progress/ready/issued —
+       слова 01 §4.4) — li done, а стадия, совпадающая с ТЕКУЩИМ статусом
+       заявки, — li current (кольцо primary-soft);
+     need_info — li warn (точка warning, вопрос деканата текстом);
+     rejected/cancelled — li stop (красная точка, причина текстом;
+       «таймлайн останавливается на красной точке», 03 §4.5.5:650);
+     сообщение мини-диалога (from==to) — li «Сообщение» с текстом.
+   Несостоявшиеся стадии: после событий добавляются future-пункты
+   (подпись «—»), КРОМЕ терминальных статусов — там таймлайн остановлен.
+   Ветка С7.6 (03 §4.5.5, 03 §5.5): статус need_info — блок ответа
+   (notice.warn: вопрос = комментарий последнего need_info-события +
+   textarea + «Ответить»); app.js POST /{id}/messages → 201 c
+   application_status=="in_progress" → бейдж «В работе», событие в
+   таймлайн (данные только textContent, 02 §6.4).
+   PDF (03 §4.5.5): статус ready|issued — «Скачать PDF»
+   (/v1/applications/{id}/pdf, штамп «ДЕМО · вымышленные данные», 5.3 из
+   01); 409 not_ready → inline «Справка ещё не готова» у кнопки (app.js,
+   03 §5). Кнопка отрисовывается сервером по статусу (у не-готовой
+   заявки её нет).
+   Скелетона нет — страница целиком SSR (03 §5.1, прецедент grades.csp);
+   офлайн — баннер каркаса (03 §5.4). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="application">
+<%view topbar %>
+<main id="main" class="shell">
+<%c++
+const std::string mode = @@.get<std::string>("mode");
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+%>
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Мои заявки</a>
+<%c++
+std::string heading = "Заявка";
+Json::Value card(Json::objectValue);
+Json::Value timeline(Json::arrayValue);
+bool dataOk = false;
+if (mode == "data")
+{
+    // --- Разбор тела сервиса; сбой разбора — состояние ошибки -----------
+    const std::string bodyJson = @@.get<std::string>("bodyJson");
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    dataOk = !bodyJson.empty() &&
+             reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
+                           &card, &errs) &&
+             card.isMember("type_title");
+    if (dataOk && card.isMember("timeline") && card["timeline"].isArray())
+        timeline = card["timeline"];
+    if (dataOk)
+        heading = card["type_title"].asString();
+}
+$$ << "<h1>" << esc(heading) << "</h1>";
+if (mode == "data" && dataOk)
+{
+    $$ << "<p>от ";
+    // «2026-11-02T09:12:00Z» → «2 ноября» (дата подачи)
+    const std::string created = card["created_at"].asString();
+    static const char* kMonths[] = {"января",   "февраля", "марта",
+                                    "апреля",   "мая",     "июня",
+                                    "июля",     "августа", "сентября",
+                                    "октября",  "ноября",  "декабря"};
+    std::string dayMonth;
+    if (created.size() >= 10)
+    {
+        try
+        {
+            const int d = std::stoi(created.substr(8, 2));
+            const int m = std::stoi(created.substr(5, 2));
+            if (m >= 1 && m <= 12)
+                dayMonth = std::to_string(d) + " " + kMonths[m - 1];
+        }
+        catch (...)
+        {
+        }
+    }
+    $$ << esc(dayMonth.empty() ? created : dayMonth) << "</p>";
+}
+%>
+    </div>
+  </div>
+  <div class="content-form">
+<%c++
+if (mode == "guard")
+{
+    // 403/404 (см. шапку шаблона): нейтральная карточка 03 §5.3:1017 —
+    // «На главную» (secondary) + «Мои заявки»; иконка file-text в круге.
+%>
+    <div class="surface">
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg></div>
+        <h2>Не нашли то, что искали</h2>
+        <p>Возможно, ссылка устарела. Все ваши заявки и оценки — в разделах ниже.</p>
+        <div class="actions">
+          <a class="button" href="/">На главную</a>
+          <a class="button" href="/applications">Мои заявки</a>
+        </div>
+      </div>
+    </div>
+<%c++
+}
+else if (mode == "dberror" || (mode == "data" && !dataOk))
+{
+    // Ошибка БД (fail-closed) или разбора тела — 03 §5.3:1013.
+%>
+    <section class="section flow" role="alert">
+      <h3>Сервис не отвечает</h3>
+      <p class="muted">Мы уже знаем и чиним. Попробуйте через минуту.</p>
+      <button class="button" type="button" data-app-retry>Повторить</button>
+    </section>
+<%c++
+}
+else
+{
+    // --- Данные: бейдж, таймлайн, детали, ветки need_info/PDF ----------
+    const std::string status = card["status"].asString();
+    const std::string badgeClass =
+        status == "submitted" || status == "accepted" || status == "in_progress"
+            ? "info"
+        : status == "need_info" ? "warn"
+        : status == "ready" || status == "issued"
+            ? "success"
+        : status == "rejected" || status == "cancelled" ? "danger"
+        : status == "draft" ? "outline"
+                            : "";
+    const auto statusTitle = [](const std::string& s) -> std::string {
+        if (s == "draft") return "Черновик";
+        if (s == "submitted") return "Подана";
+        if (s == "accepted") return "Принята";
+        if (s == "in_progress") return "В работе";
+        if (s == "need_info") return "Требуется уточнение";
+        if (s == "ready") return "Готова";
+        if (s == "issued") return "Выдана";
+        if (s == "rejected") return "Отклонена";
+        if (s == "cancelled") return "Отменена";
+        return s;
+    };
+    // «2026-11-02T14:05:00Z» → «2 ноября, 14:05» (03 §4.5.5 формат)
+    static const char* kMonths[] = {"января",   "февраля", "марта",
+                                    "апреля",   "мая",     "июня",
+                                    "июля",     "августа", "сентября",
+                                    "октября",  "ноября",  "декабря"};
+    const auto stampOf = [](const std::string& iso) -> std::string {
+        if (iso.size() < 16) return "";
+        std::string out;
+        try
+        {
+            const int d = std::stoi(iso.substr(8, 2));
+            const int m = std::stoi(iso.substr(5, 2));
+            if (m < 1 || m > 12) return "";
+            out = std::to_string(d) + " " + kMonths[m - 1] + ", "
+                  + iso.substr(11, 5);
+        }
+        catch (...)
+        {
+            return "";
+        }
+        return out;
+    };
+    // Канонические стадии пути (01 §4.4); extras — остальные события
+    static const char* kCanonical[] = {"submitted", "accepted",
+                                       "in_progress", "ready", "issued"};
+    const auto isCanonical = [](const std::string& s) {
+        for (const char* c : kCanonical)
+            if (s == c) return true;
+        return false;
+    };
+    // Комментарий последнего need_info-события — вопрос блока ответа
+    std::string needInfoQuestion;
+    for (const auto& e : timeline)
+        if (e["to_status"].asString() == "need_info" &&
+            e["comment"].isString())
+            needInfoQuestion = e["comment"].asString();
+    const bool isNeedInfo = status == "need_info";
+    const bool canPdf = status == "ready" || status == "issued";
+    const bool terminal = status == "rejected" || status == "cancelled";
+    const int64_t appId = card["id"].asInt64();
+%>
+    <div class="row wrap">
+      <span class="badge <%c++ $$ << badgeClass; %>" data-app-badge><%c++ $$ << esc(statusTitle(status)); %></span>
+    </div>
+    <!-- Таймлайн (03 §4.5.5): хронология событий; [data-app-timeline] —
+         app.js дописывает событие ответа С7.6 -->
+    <ol class="timeline" data-app-timeline>
+<%c++
+    // Канонические стадии, УЖЕ имевшие событие, в общем хронологическом
+    // списке НЕ дублируем: состав имён стадий для future-блока
+    std::set<std::string> seenStages;
+    for (const auto& e : timeline)
+    {
+        const std::string to = e["to_status"].asString();
+        const std::string from =
+            e["from_status"].isString() ? e["from_status"].asString() : "";
+        const std::string comment =
+            e["comment"].isString() ? e["comment"].asString() : "";
+        const std::string stamp = stampOf(e["at"].asString());
+        std::string cls;
+        std::string label;
+        // Сообщение мини-диалога: from==to (матрица автомата переходов «в
+        // себя» не содержит — само-сообщение единственный такой случай);
+        // проверяется ПЕРВЫМ, иначе сообщение в in_progress маскировалось
+        // бы под каноническую стадию
+        if (from == to && !to.empty())
+        {
+            cls = "";
+            label = "Сообщение";
+        }
+        else if (isCanonical(to))
+        {
+            seenStages.insert(to);
+            // current — стадия совпадает с ТЕКУЩИМ статусом заявки
+            cls = to == status ? " class=\"current\"" : " class=\"done\"";
+            label = statusTitle(to);
+        }
+        else if (to == "need_info")
+        {
+            cls = " class=\"warn\"";
+            label = statusTitle(to);
+        }
+        else if (to == "rejected" || to == "cancelled")
+        {
+            cls = " class=\"stop\"";
+            label = statusTitle(to);
+        }
+        else
+        {
+            // Остальные события словаря (не должен случаться: CHECK DDL)
+            cls = "";
+            label = statusTitle(to);
+        }
+        $$ << "<li" << cls << "><strong>" << esc(label) << "</strong>";
+        $$ << "<p>";
+        if (!stamp.empty())
+            $$ << esc(stamp);
+        if (!comment.empty())
+        {
+            if (!stamp.empty())
+                $$ << " · ";
+            $$ << esc(comment);
+        }
+        $$ << "</p></li>";
+    }
+    // Future-стадии: канонические без событий; у терминальных статусов
+    // таймлайн остановлен (03 §4.5.5) — их не рисуем
+    for (const char* c : kCanonical)
+    {
+        const std::string stage = c;
+        if (seenStages.count(stage) || terminal)
+            continue;
+        if (stage == status)
+            $$ << "<li class=\"current\"><strong>" << esc(statusTitle(stage))
+               << "</strong><p>сейчас</p></li>";
+        else
+            $$ << "<li class=\"future\"><strong>" << esc(statusTitle(stage))
+               << "</strong><p>—</p></li>";
+    }
+%>
+    </ol>
+    <!-- Детали заявки — payload формы (ключи — примеры sql/fixtures.sql);
+         пусто/неразбираемо — секция не рисуется -->
+<%c++
+    const Json::Value& payload = card["payload"];
+    if (payload.isObject() && payload.size() > 0)
+    {
+        // Человекочитаемые подписи ключей payload (метки формы 03 §4.5.3)
+        const auto keyLabel = [](const std::string& k) -> std::string {
+            if (k == "copies") return "Количество экземпляров";
+            if (k == "delivery") return "Как получить";
+            if (k == "purpose") return "Куда нужна справка";
+            if (k == "topic") return "Тема ВКР";
+            if (k == "supervisor") return "Научный руководитель";
+            if (k == "comment") return "Комментарий";
+            return k;
+        };
+        const auto deliveryLabel = [](const std::string& v) -> std::string {
+            if (v == "pdf") return "PDF в кабинете";
+            if (v == "office") return "В деканате";
+            return v;
+        };
+        $$ << "<section class=\"section\"><div class=\"section-title\">"
+           << "<h2>Детали заявки</h2></div>";
+        for (const auto& key : payload.getMemberNames())
+        {
+            const Json::Value& v = payload[key];
+            $$ << "<div class=\"sheet-row\"><span class=\"sheet-label\">"
+               << esc(keyLabel(key)) << "</span><strong>";
+            if (v.isString())
+                $$ << esc(key == "delivery" ? deliveryLabel(v.asString())
+                                            : v.asString());
+            else if (v.isIntegral())
+                $$ << v.asInt64();
+            else if (v.isDouble())
+                $$ << v.asDouble();
+            $$ << "</strong></div>";
+        }
+        $$ << "</section>";
+    }
+%>
+    <!-- Ветка С7.6 «Требуется уточнение» (03 §4.5.5): рисуется ТОЛЬКО на
+         need_info; вопрос — комментарий последнего need_info-события;
+         ответ — POST /{id}/messages (app.js): 201 c application_status ==
+         "in_progress" → бейдж «В работе» + событие в таймлайн -->
+    <div class="flow section" data-reply-block data-app-id="<%c++ $$ << appId; %>"<%c++ if (!isNeedInfo) $$ << " hidden"; %>>
+      <p class="notice warn"><strong>Деканат просит уточнить</strong><br><span data-reply-question><%c++ $$ << esc(needInfoQuestion.empty() ? "Просим уточнить детали заявки" : needInfoQuestion); %></span></p>
+      <div class="field">
+        <label for="reply">Ваш ответ</label>
+        <textarea id="reply" data-reply-text rows="3" maxlength="1000" placeholder="Например: кафедра — мировая экономика"></textarea>
+      </div>
+      <p class="field-error" data-reply-error hidden></p>
+      <!-- «Ответить» — secondary (03 §4.5.5:650 «поле ответа 48px +
+           secondary „Ответить“»; primary — только «Отправить заявку»
+           формы, 03 §4.5.3) -->
+      <button class="button" type="button" data-reply-send data-network-action data-offline-label="Нужна сеть, чтобы отправить ответ">Ответить</button>
+    </div>
+    <p class="caption" role="status" data-reply-result hidden></p>
+    <!-- PDF (03 §4.5.5): только на ready|issued (сервер); кнопка —
+         secondary («На статусе „Готова“ — secondary „Скачать PDF“»,
+         03 §4.5.5:650; primary «Открыть готовый документ» из черновика
+         application-success.html не переносится — отдельной страницы
+         документа в продукте нет, файл скачивается сразу); 409
+         not_ready — inline «Справка ещё не готова» у кнопки (app.js);
+         штамп «ДЕМО · вымышленные данные» ставит PdfBuilder (5.3 из 01) -->
+    <div class="section" data-pdf-block<%c++ if (!canPdf) $$ << " hidden"; %>>
+      <a class="button" href="/v1/applications/<%c++ $$ << appId; %>/pdf" data-pdf-link>Скачать PDF</a>
+      <p class="field-error" data-pdf-error hidden></p>
+      <p class="caption">В файле — штамп «ДЕМО · вымышленные данные»</p>
+    </div>
+  </div>
+<%c++
+}  // else (данные)
+%>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

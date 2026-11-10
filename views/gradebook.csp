@@ -1,0 +1,204 @@
+<%inc
+#include <json/json.h>
+#include <memory>
+#include <string>
+%>
+<%c++
+/* Зачётная книжка (Э7, группа «Учёба»; 03 §4.9.6 «Зачётная книжка 5.15»,
+   design-drafts/recordbook.html). Полная страница: partials каркаса;
+   pageTitle и activeTab — view-переменные GradebookCtrl::gradebookPage
+   (серверные константы, 02 §6.4). Контент — SSR: тело
+   GradebookService::gradebook — ТОТ ЖЕ метод, что стоит за JSON API
+   02 §5.2 (SQL в шаблоне нет, AGENTS §5.5) — приходит сериализованной
+   строкой bodyJson; разбор здесь, пользовательские строки (дисциплины)
+   выводит HttpViewData::htmlTranslate при выводе (02 §6.4, Р-16:
+   автоэкранирования в csp v1.9.14 нет; сырой вывод — только серверные
+   константы и числа из тела сервиса).
+   КОНТРАКТ GradebookService (GradebookService.h:42-46) — поля страницы
+   фиксированы, ничего не придумывается:
+     average    — «средний балл»: взвешенный процент Σscore/Σmax×100,
+                  ЦЕЛОЕ (та же арифметика GradesService::summary — шапка
+                  «/ 100», как на «Успеваемости»); null — оценок нет;
+     disciplines[] — discipline_id, code, discipline, control_type,
+                  score_sum, max_sum, percent, works;
+     counters   — {disciplines, works}: disciplines = число дисциплин с
+                  итогами, works = число строк-работ оценок.
+   ЛАКУНЫ КОНТРАКТА против черновика recordbook.html (честно, не рисуем):
+     «семестр» дисциплины в ответе НЕТ — строки без него;
+     «прослушано N · закрыто M» — счётчика «закрыто» НЕТ, в подписи
+     реальные counters (дисциплины/работы).
+   Состояния (03 §5):
+     data  — есть итоги: шапка «Средний балл» (average, tnum), строки
+             дисциплин; #gradebook-root data-state="data";
+     empty — итогов нет (average null, список пуст — Аня): финальные
+             тексты 03 §5.2 «Оценки появятся после первой аттестации»,
+             действие «Открыть расписание» → /schedule; data-state="empty";
+     error — сбой БД при сборке страницы (failed=1 от контроллера) или
+             сбой разбора тела: «Не получилось загрузить зачётную книжку»
+             с «Повторить» ([data-gradebook-retry] — app.js, перезагрузка
+             страницы) — вне #gradebook-root, чтобы data-state сохранял
+             значения data|empty (паттерн grades.csp);
+     офлайн — баннер каркаса (topbar + app.js, 03 §5.4); скелетона нет —
+             страница целиком SSR, догрузки на клиенте нет (03 §5.1).
+   «Посмотреть рейтинг» → /rating (черновик recordbook.html) — страница
+   собирается следующим коммитом этой дорожки: между коммитами переход
+   даёт 404 — переходное состояние Э7, задокументировано (прецедент
+   «В календарь» → /profile экрана «Успеваемость»). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN); htmx экрану не нужен —
+     динамических сегментов нет, контент SSR. -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="gradebook">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
+      <h1>Зачётная книжка</h1>
+      <p>Итоги по дисциплинам</p>
+    </div>
+  </div>
+<%c++
+const std::string failed = @@.get<std::string>("failed");
+if (failed == "1") {
+%>
+  <!-- Состояние «Ошибка» (03 §5.3, формулировка «Не получилось загрузить
+       {раздел}»): «Повторить» реально перезапрашивает — перезагрузка
+       страницы (app.js). -->
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить зачётную книжку</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-gradebook-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else {
+// --- Разбор тела сервиса; сбой разбора — состояние ошибки, не падение ----
+const std::string bodyJson = @@.get<std::string>("bodyJson");
+bool broken = false;
+Json::Value body(Json::objectValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    if (bodyJson.empty() || !reader->parse(bodyJson.data(),
+                                           bodyJson.data() + bodyJson.size(),
+                                           &body, &errs))
+        broken = true;
+}
+Json::Value disciplines(Json::arrayValue);
+if (!broken && body.isMember("disciplines") && body["disciplines"].isArray())
+    disciplines = body["disciplines"];
+const bool hasData = !broken && disciplines.size() > 0;
+
+// --- серверные константы и форматирование (как в grades.csp) -------------
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+// Тип контроля дисциплины — словарь CHECK 0002; бейджи 03 §4.4:
+// «экзамен» info, «зачёт» success, «дифзачёт» neutral (без модификатора)
+const auto controlBadge = [&esc](const std::string& ct) -> std::string {
+    if (ct == "exam") return "<span class=\"badge info\">Экзамен</span>";
+    if (ct == "credit") return "<span class=\"badge success\">Зачёт</span>";
+    if (ct == "graded_credit")
+        return "<span class=\"badge\">Дифзачёт</span>";
+    return "<span class=\"badge\">" + esc(ct) + "</span>";
+};
+// Счётчики контракта counters{disciplines, works} — подпись справа от
+// «Среднего балла» (черновик recordbook.html: две строки small muted);
+// «прослушано/закрыто» черновика в контракте нет — реальные числа
+const int64_t counterDisciplines =
+    body.isMember("counters") && body["counters"].isMember("disciplines")
+        ? body["counters"]["disciplines"].asInt64() : 0;
+const int64_t counterWorks =
+    body.isMember("counters") && body["counters"].isMember("works")
+        ? body["counters"]["works"].asInt64() : 0;
+// average — целое; null (Аня) → пустое состояние, число не выдумываем
+const bool hasAverage = body.isMember("average") &&
+                        body["average"].isIntegral();
+const int64_t average = hasAverage ? body["average"].asInt64() : 0;
+%>
+<%c++
+if (broken) {
+%>
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить зачётную книжку</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-gradebook-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else if (!hasData) {
+    // Пустая зачётка (Аня, 03 §5.2 — тексты финальные; average null —
+    // «оценки появятся после первой аттестации», GradebookService.h:23-25):
+    // иконка graduation-cap, заголовок, текст-подсказка, действие.
+%>
+  <div id="gradebook-root" class="content-narrow" data-state="empty">
+    <div class="surface">
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg></div>
+        <h2>Оценки появятся после первой аттестации</h2>
+        <p>Как только преподаватели закроют ведомости, здесь появится средний балл и итоги по дисциплинам. Пока можно проверить расписание и включить уведомления о дедлайнах.</p>
+        <a class="button" href="/schedule">Открыть расписание</a>
+      </div>
+    </div>
+  </div>
+<%c++
+} else {
+    // --- Данные (SSR): шапка «Средний балл» + строки дисциплин -----------
+%>
+  <div id="gradebook-root" class="content-narrow" data-state="data">
+    <!-- Шапка «Средний балл» (черновик recordbook.html, 03 §4.9.6):
+         average — взвешенный процент Σscore/Σmax×100, целое; шкала «/ 100»
+         — как на «Успеваемости» (та же арифметика GradesService).
+         Справа — реальные счётчики counters (см. шапку шаблона). -->
+    <div class="study-summary">
+      <div>
+        <p class="overline">Средний балл</p>
+        <p class="metric"><span class="tnum"><%c++ $$ << average; %></span><span class="caption"> / 100</span></p>
+      </div>
+      <p class="small muted">Дисциплин: <%c++ $$ << counterDisciplines; %><br>Работ: <%c++ $$ << counterWorks; %></p>
+    </div>
+    <section class="section">
+      <div class="section-title"><h2>Дисциплины</h2><span class="caption"><%c++ $$ << disciplines.size(); %></span></div>
+      <div class="grade-list">
+<%c++
+        // Строки — каркасное .list-row (черновик recordbook.html):
+        // название + код, бейдж типа контроля, итог tnum. Полей «семестр»
+        // и оценки по 5-балльной шкале в контракте НЕТ — не рисуем
+        // (см. шапку шаблона).
+        for (const auto& d : disciplines)
+        {
+            $$ << "<div class=\"list-row\">";
+            $$ << "<div><strong>"
+               << esc(d["discipline"].asString()) << "</strong><p>"
+               << esc(d["code"].asString()) << "</p></div>";
+            $$ << controlBadge(d["control_type"].asString());
+            $$ << "<strong class=\"tnum\">"
+               << d["score_sum"].asInt64() << " / "
+               << d["max_sum"].asInt64() << "</strong>";
+            $$ << "</div>";
+        }
+%>
+      </div>
+    </section>
+    <!-- «Посмотреть рейтинг» (черновик recordbook.html) → /rating:
+         страница собирается следующим коммитом — переходное состояние
+         Э7 между коммитами (см. шапку шаблона). -->
+    <div class="actions">
+      <a class="button primary" href="/rating">Посмотреть рейтинг</a>
+    </div>
+  </div>
+<%c++
+    }
+}  // else (failed != "1")
+%>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

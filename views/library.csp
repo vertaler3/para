@@ -1,0 +1,102 @@
+<%c++
+/* Библиотека — наличие литературы (Э7, экран «Библиотека» 3 из 4;
+   03 §4.9.6/5.12, design-drafts/library.html). Страница НЕ содержит
+   данных: филиалы и наличие грузит клиент — fetch GET /v1/library/
+   branches и GET /v1/library/items (query q/branch_id/available — ТЕ ЖЕ
+   JSON-роуты LibraryCtrl, что стоят за API, 02 §5.2; паттерн
+   views/people.csp и rooms.csp). Контент строит static/js/app.js
+   (только createElement/textContent — 02 §6.4).
+   Строка книги (черновик library.html): .book-row — «обложка»
+   (.book-cover с иконкой книги), название, автор · тип издания (kind —
+   словарь DDL book|journal|textbook → «книга|журнал|учебное пособие»),
+   бейдж «свободно N из M» (available>0 — .badge.info, ноль — нейтральный
+   .badge: «свободно 0 из 4» честно виден), подпись «филиал · зал»
+   (hall nullable — пустой зал не рисуется). Читательский билет (QR) —
+   на /profile (5.12/5.9), сюда не дублируется.
+   Фильтры: чипы филиалов — «Все филиалы» + по одному на филиал
+   (GET /v1/library/branches; активный — aria-pressed, .chip
+   [aria-pressed=true] app.css); чип-тумблер «Только доступные»
+   (available=1, 02 §5.2). Поиск — debounce ~300 мс; гонку устаревших
+   ответов гасит монотонный номер запроса (seq) — как на «Людях».
+   Пустой результат — «Ничего не нашлось» + «Попробуйте другое название
+   или выберите все филиалы.» (дословно черновик library.html
+   #books-empty; 03 §5.2).
+   Состояния (03 §5): скелетон — показывается только если ответ дольше
+   300 мс (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить»
+   (повторный fetch, 03 §5.3); офлайн — баннер каркаса (topbar +
+   applyOffline, 03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
+   «Библиотека» — НЕ таб (03 §3.1, вход из профиля): LibraryCtrl::
+   libraryPage ставит пустой activeTab — ни один пункт таб-бара не
+   подсвечен. Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) —
+   строк-данных в шаблон не вставляется вовсе, страница статична.
+   htmx не нужен (без сегментов) — только app.js (defer, локальный путь —
+   AGENTS: без npm/CDN). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="library">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Профиль</a>
+      <h1>Библиотека</h1>
+      <p>Узнайте о наличии до похода в читальный зал</p>
+    </div>
+  </div>
+  <div class="content-narrow">
+
+    <!-- Поиск (черновик library.html: .field + type=search) -->
+    <div class="field">
+      <label for="library-q">Название книги или автор</label>
+      <input id="library-q" type="search" placeholder="Например, мировая экономика" data-library-q autocomplete="off">
+    </div>
+
+    <!-- Чипы филиалов: «Все филиалы» + по одному (строит app.js из
+         GET /v1/library/branches; aria-pressed проставляет app.js) -->
+    <div class="chips" role="group" aria-label="Филиалы" data-library-branches>
+      <button class="chip" type="button" data-branch-id="" aria-pressed="true">Все филиалы</button>
+    </div>
+
+    <!-- Чип-тумблер «Только доступные» (available=1, 02 §5.2) -->
+    <div class="chips section" role="group" aria-label="Доступность">
+      <button class="chip" type="button" data-library-available aria-pressed="false">Только доступные</button>
+    </div>
+
+    <!-- Скелетон (03 §5.1): 3 строки-карточки; показывается app.js ТОЛЬКО
+         если ответ дольше 300 мс. -->
+    <div class="section stack" data-library-loading hidden aria-busy="true" aria-label="Ищем">
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+    </div>
+
+    <!-- Пусто (03 §5.2/§5.3; дословно черновик library.html #books-empty) -->
+    <div class="surface" data-library-empty hidden>
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8.5 11h5"/></svg></div>
+        <h2>Ничего не нашлось</h2>
+        <p>Попробуйте другое название или выберите все филиалы.</p>
+      </div>
+    </div>
+
+    <!-- Ошибка (03 §5.3): «Повторить» реально перезапрашивает -->
+    <section class="section flow" data-library-error hidden role="alert">
+      <h3>Не получилось загрузить каталог</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-library-retry>Повторить</button>
+    </section>
+
+    <!-- Строки книг: строит app.js (.book-row — черновик library.html) -->
+    <div class="section" data-library-results hidden>
+      <div data-library-list></div>
+    </div>
+
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

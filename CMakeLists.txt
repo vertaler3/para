@@ -89,6 +89,8 @@ add_executable(para
                src/controllers/LibraryCtrl.cpp
                src/controllers/CanteensCtrl.cpp
                src/controllers/MapCtrl.cpp
+               src/controllers/DashboardCtrl.cpp
+               src/controllers/ProfileCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -117,6 +119,7 @@ add_executable(para
                src/services/LibraryService.cpp
                src/services/CanteensService.cpp
                src/services/MapService.cpp
+               src/services/DashboardService.cpp
                src/filters/LoginFilter.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp

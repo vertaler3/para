@@ -1,0 +1,78 @@
+<%c++
+/* Расписание (Э7, экран 1 из 2; 03 §4.3, design-drafts/schedule.html и
+   schedule-week.html). Полная страница: partials каркаса, activeTab=
+   "schedule" и pageTitle — view-переменные, которые ставит ScheduleCtrl::page
+   (Data-вставки — только серверные константы, 02 §6.4). Контент сегмента
+   «Сегодня | Неделя» — SSR: страница включает партиал schedule_today /
+   schedule_week по view-переменной segment; ТЕ ЖЕ партиалы возвращаются
+   контроллером как ответ htmx на GET /schedule/segment (HX-Request: true) —
+   outerHTML-обмен контейнера #schedule-segment, его data-state="data|empty"
+   (смок состояния) приезжает свежим с каждым фрагментом.
+   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) — строки-данные
+   вставляет партиал через $$ << с HttpViewData::htmlTranslate.
+   htmx — вендоренный локальный файл static/vendor/htmx.min.js (AGENTS §3;
+   лицензия BSD-2-Clause — docs/decisions.md Р-18), подключён до app.js:
+   порядок defer = порядок исполнения, htmx обрабатывает hx-атрибуты на
+   DOMContentLoaded. Vanilla JS (static/js/app.js): sheet «Детали пары»
+   (03 §4.3 — <dialog>, тап по карточке пары), состояния «Ошибка»
+   (htmx:afterRequest !successful → #schedule-error с «Повторить» —
+   ретриггер исходного запроса, 03 §5.3) и «Офлайн» (htmx:sendError →
+   баннер каркаса, 03 §5.4); скелетон #schedule-indicator — hx-indicator
+   всех сегментных запросов (shimmer каркаса). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: страница подключает htmx
+     (вендоренно, Р-18; до app.js — порядок defer) и app.js. -->
+<script defer src="/static/vendor/htmx.min.js"></script>
+<script defer src="/static/js/app.js"></script>
+<body data-page="schedule">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <h1>Расписание</h1>
+      <p>Пары, переносы «было → стало» и изменения недели</p>
+    </div>
+  </div>
+  <div id="schedule-indicator" class="skeleton block htmx-indicator" aria-hidden="true"></div>
+<%c++
+const std::string seg = @@.get<std::string>("segment");
+if (seg == "week") {
+%>
+<%view schedule_week %>
+<%c++ } else { %>
+<%view schedule_today %>
+<%c++ } %>
+  <!-- Состояние «Ошибка» (03 §5.3, schedule-states.html#error): показывает
+       app.js по htmx:afterRequest (!successful) / htmx:sendError; «Повторить»
+       перезапускает запрос элемента, на котором он оборвался. -->
+  <section class="section flow" id="schedule-error" hidden role="alert">
+    <h3>Не получилось загрузить расписание</h3>
+    <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+    <button class="button" type="button" data-schedule-retry>Повторить</button>
+  </section>
+  <!-- Sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet). Поля
+       заполняет app.js из data-атрибутов карточки (только textContent —
+       02 §6.4); имя преподавателя — GET /v1/people/{teacher_id+1000}
+       (Э6а, Р-15), страница /people/{id} — следующий экран Э7, ссылка
+       ведёт туда уже сейчас; «Подписка на календарь» — экран приватной
+       ссылки ICS в профиле (С6, 03 §4.3). Закрытие — кнопка/Esc
+       (нативный <dialog>). -->
+  <dialog id="lesson-sheet" class="lesson-sheet" aria-labelledby="lesson-sheet-title">
+    <h2 id="lesson-sheet-title" data-sheet-title>Детали пары</h2>
+    <p class="caption" data-sheet-kind></p>
+    <div class="sheet-row"><span class="sheet-label">Когда</span><span data-sheet-when></span></div>
+    <div class="sheet-row"><span class="sheet-label">Аудитория</span><span data-sheet-room></span></div>
+    <div class="sheet-row" data-sheet-change-row hidden><span class="sheet-label">Перенос</span><span data-sheet-change></span></div>
+    <div class="sheet-row"><span class="sheet-label">Статус</span><span data-sheet-status></span></div>
+    <div class="sheet-row"><span class="sheet-label">Преподаватель</span><span><a class="lesson-teacher" data-sheet-teacher hidden href="/profile"></a><span class="muted small" data-sheet-teacher-empty>—</span></span></div>
+    <div class="actions">
+      <a class="button" href="/profile">Подписка на календарь</a>
+      <button class="button ghost" type="button" data-sheet-close>Закрыть</button>
+    </div>
+  </dialog>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

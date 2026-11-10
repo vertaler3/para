@@ -1,0 +1,115 @@
+<%c++
+/* Уведомления (Э7, экран 3 из 4; 03 §4.6, design-drafts/notifications.html и
+   notifications-states.html). Страница НЕ содержит данных: плоскую ленту
+   (GET /v1/notifications, query unread/type/cursor — 02 §5.2), пометки
+   прочтения (POST /v1/notifications/{id}/read и /read-all) и пагинацию
+   курсором ведёт клиент — ТЕ ЖЕ JSON-роуты NotificationsFeedCtrl, что
+   стоят за API (паттерн views/rooms.csp). Контент строит static/js/app.js
+   (данные — только createElement/textContent, 02 §6.4).
+   Чипы-фильтры — «Все | Расписание | Дедлайны | Заявки | Объявления»
+   (дословно вайрфрейм 03 §4.6:657; типы — словарь CHECK 0004
+   sql/migrations/0004:10 schedule/deadline/application/announcement;
+   «Система» из первого раунда УБРАНА по замечанию ревью раунда 1:
+   значения «system» в словаре нет — сервис отвечает 400 bad_request,
+   сломанный чип на штатном пути). «Непрочитанные» — чип-тумблер
+   unread=1.
+   Уведомления — НЕ таб (03 §3.2: колокольчик в шапке): NotificationsFeedCtrl::page
+   ставит пустой activeTab — ни один пункт таб-бара не получает aria-current.
+   В разметке — состояния (03 §5):
+     скелетон — 4 строки «иконка-круг 24 + 2 строки текста» (03 §5.1);
+     пусто    — «Тихо. Всё под контролем» + текст + «Включить уведомления»
+                (дословно 03 §5.2; ссылка ведёт в настройки уведомлений
+                профиля — экран следующей очереди Э7, как /people/{id} в
+                schedule.csp: ссылка ведёт туда уже сейчас);
+     фильтр пуст — «По этой теме пока ничего не было» (03 §5.2: без
+                действия; показывается и для пустого unread);
+     ошибка   — «Не получилось загрузить уведомления» + «Повторить»
+                (03 §5.3: повтор реально перезапрашивает — повторный fetch);
+     офлайн   — баннер каркаса (topbar + app.js applyOffline, 03 §5.4).
+   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) — страница статична,
+   строк-данных в шаблон не вставляется вовсе. htmx не нужен (без
+   сегментов) — только app.js (defer, локальный путь — AGENTS: без
+   npm/CDN). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="notifications">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <h1>Уведомления</h1>
+      <p>Изменения и задачи, которые важно заметить</p>
+    </div>
+  </div>
+  <div class="content-narrow">
+
+    <!-- Фильтры + «Прочитать всё» (03 §4.6: чипы, активный — primary-soft;
+         draft notifications.html — чипы и ghost-кнопка одной строкой;
+         row.wrap переносит на 360px). aria-pressed проставляет app.js. -->
+    <div class="row wrap notifications-toolbar">
+      <div class="chips" role="group" aria-label="Фильтр уведомлений">
+        <button class="chip" type="button" data-feed-filter="" aria-pressed="true">Все</button>
+        <button class="chip" type="button" data-feed-filter="schedule" aria-pressed="false">Расписание</button>
+        <button class="chip" type="button" data-feed-filter="deadline" aria-pressed="false">Дедлайны</button>
+        <button class="chip" type="button" data-feed-filter="application" aria-pressed="false">Заявки</button>
+        <button class="chip" type="button" data-feed-filter="announcement" aria-pressed="false">Объявления</button>
+        <button class="chip" type="button" data-feed-unread aria-pressed="false">Непрочитанные</button>
+      </div>
+      <button class="button ghost" type="button" data-read-all>Прочитать всё</button>
+    </div>
+
+    <!-- Скелетон ленты (03 §5.1: 4 строки — иконка-круг 24 + 2 строки
+         текста); прячется app.js по ответу (данные/пусто/ошибка). -->
+    <div data-feed-loading aria-busy="true" aria-label="Загрузка уведомлений">
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+    </div>
+
+    <!-- Ошибка (03 §5.3; states-черновик #error): «Повторить» —
+         повторный fetch первой страницы текущего фильтра. -->
+    <section class="section flow" data-feed-error hidden role="alert">
+      <h3>Не получилось загрузить уведомления</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-feed-retry>Повторить</button>
+    </section>
+
+    <!-- Пусто: вся лента без фильтров (дословно 03 §5.2, иконка bell-off;
+         действие — настройки уведомлений в профиле, экран следующей
+         очереди Э7). -->
+    <div class="empty" data-feed-empty hidden>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 3A6 6 0 0 1 18 8c0 2.4.4 4 .9 5.3M6.3 6.3C6.1 6.8 6 7.4 6 8c0 7-3 9-3 9h14"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="m2 2 20 20"/></svg></div>
+      <h2>Тихо. Всё под контролем</h2>
+      <p>Новые переносы, дедлайны и статусы заявок появятся здесь — и придут push-ем, если вы включите уведомления</p>
+      <a class="button primary" href="/profile#notifications">Включить уведомления</a>
+    </div>
+
+    <!-- Пустой фильтр (дословно 03 §5.2; без действия) -->
+    <div class="empty" data-feed-empty-filter hidden>
+      <p>По этой теме пока ничего не было</p>
+    </div>
+
+    <!-- Inline-предупреждение неудачной догрузки «Ещё» (03 §5.3): текст
+         ставит app.js; повтор — та же кнопка «Ещё». -->
+    <p class="notice warn" data-feed-warn role="alert" hidden></p>
+
+    <!-- Лента: строки строит app.js из GET /v1/notifications (иконка типа,
+         title, body-превью, время, точка непрочитанного — 03 §4.6).
+         Группировка по типам (02 §5.2) — опция отображения, здесь плоская
+         лента (постановка экрана). -->
+    <div data-feed-list hidden></div>
+
+    <!-- «Ещё» — следующая страница по next_cursor (составная пагинация
+         (created_at, id) — сервис); кнопку прячет app.js при
+         next_cursor=null (постановка экрана). -->
+    <button class="button full" type="button" data-feed-more hidden>Ещё</button>
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

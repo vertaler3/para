@@ -1,0 +1,321 @@
+<%inc
+#include <json/json.h>
+#include <cmath>
+#include <memory>
+#include <string>
+%>
+<%c++
+/* Экран дисциплины (Э7; 03 §4.9.3, design-drafts/discipline.html) — цель
+   тапа по карточке дисциплины в успеваемости (03 §4.4). Полная страница:
+   partials каркаса; pageTitle/activeTab — view-переменные
+   GradesCtrl::disciplinePage. Контент — SSR: тела GradesService::list/
+   summary/exams — те же методы, что за JSON API 02 §5.2 (SQL в шаблоне
+   нет, AGENTS §5.5) — приходят сериализованными строками listJson/
+   summaryJson/examsJson; строки дисциплины фильтруются по
+   disciplineId (path-id роута; контроллер уже ответил 404 not_found,
+   если среди СВОИХ оценок пользователя нет ни одной с таким
+   discipline_id — владение через выборку по user_id сессии, guard для
+   path-id СТРОК оценки здесь неприменим, решение — в шапке GradesCtrl.h).
+   Пользовательские строки выводит HttpViewData::htmlTranslate (02 §6.4,
+   Р-16); сырой вывод — только серверные константы и числа.
+   Состав экрана (03 §4.9.3): шапка «78 / 82» (score_sum / max_sum, tnum),
+   бейджи типа контроля (03 §4.4: экзамен info / зачёт success /
+   дифзачёт neutral) и статуса («В процессе» / «Порог достигнут» —
+   выведен из missing, честно по демо-арифметике сервиса); предупреждение
+   «до допуска не хватает N» при missing>0; баллы по компонентам
+   (score/max_score, attempt, дата, бар с пороговыми цветами 03 §4.4);
+   комментарий преподавателя — при наличии, в кавычках (03 §4.9.3);
+   события сессии по дисциплине (kind/дата/аудитория), пересдача —
+   акцент danger; тап по событию → «Сессия» (/grades#session).
+   Ссылка «добрать баллы» → /grades#session — блок «Сессия» экрана
+   успеваемости; страницы дедлайн-радара (03 §4.9.2) ещё нет, тап туда
+   отложен (зафиксировано в комментарии и журнале сессии Э7).
+   Состояния: data — карточка дисциплины; error — сбой БД/разбора
+   (failed=1 от контроллера) — блок «Повторить» ([data-grades-retry] —
+   app.js); офлайн — баннер каркаса (03 §5.4); скелетона нет — страница
+   целиком SSR. */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer); htmx экрану не нужен — контент SSR. -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="discipline">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
+      <h1>Баллы по дисциплине</h1>
+    </div>
+  </div>
+<%c++
+const std::string failed = @@.get<std::string>("failed");
+if (failed == "1") {
+%>
+  <!-- Состояние «Ошибка» (03 §5.3): «Повторить» — перезагрузка страницы. -->
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить дисциплину</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-grades-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else {
+// --- Разбор тел сервиса и выборка дисциплины -----------------------------
+const std::string summaryJson = @@.get<std::string>("summaryJson");
+const std::string listJson = @@.get<std::string>("listJson");
+const std::string examsJson = @@.get<std::string>("examsJson");
+bool broken = false;
+int64_t disciplineId = 0;
+try {
+    disciplineId = std::stoll(@@.get<std::string>("disciplineId"));
+} catch (...) {
+    broken = true;  // view-данных нет — не падение, состояние ошибки
+}
+Json::Value summary(Json::objectValue);
+Json::Value grades(Json::arrayValue);
+Json::Value exams(Json::arrayValue);
+{
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    const auto parseTo = [&broken, &reader, &errs](const std::string& src,
+                                                   Json::Value& out) {
+        if (src.empty() || !reader->parse(src.data(), src.data() + src.size(),
+                                          &out, &errs))
+            broken = true;
+    };
+    parseTo(summaryJson, summary);
+    Json::Value listRoot(Json::objectValue);
+    parseTo(listJson, listRoot);
+    if (listRoot.isMember("grades") && listRoot["grades"].isArray())
+        grades = listRoot["grades"];
+    Json::Value examsRoot(Json::objectValue);
+    parseTo(examsJson, examsRoot);
+    if (examsRoot.isMember("exams") && examsRoot["exams"].isArray())
+        exams = examsRoot["exams"];
+}
+// Свои оценки этой дисциплины — по времени выставления (порядок списка,
+// GradesService::list): «баллы по модулям в карточке — в этом порядке»
+Json::Value rows(Json::arrayValue);
+for (const auto& g : grades)
+    if (g["discipline_id"].asInt64() == disciplineId)
+        rows.append(g);
+// Строка сводки этой дисциплины (score_sum/max_sum/percent/missing)
+Json::Value ds;
+if (summary.isMember("disciplines") && summary["disciplines"].isArray())
+    for (const auto& d : summary["disciplines"])
+        if (d["discipline_id"].asInt64() == disciplineId) {
+            ds = d;
+            break;
+        }
+// События сессии по этой дисциплине (03 §4.9.3 «СВЯЗАННЫЕ СОБЫТИЯ»)
+Json::Value examRows(Json::arrayValue);
+for (const auto& e : exams)
+    if (e["discipline_id"].asInt64() == disciplineId)
+        examRows.append(e);
+
+const bool ready = !broken && ds.isMember("discipline_id") && rows.size() > 0;
+
+// --- серверные константы и форматирование (как в views/grades.csp) ------
+const auto esc = [](const std::string& s) {
+    return HttpViewData::htmlTranslate(s);
+};
+const auto plural = [](int n, const char* one, const char* few,
+                       const char* many) {
+    const int m10 = n % 10, m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+};
+static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
+                                "мая",      "июня",    "июля",     "августа",
+                                "сентября", "октября", "ноября",   "декабря"};
+const auto dayMonthOf = [](const std::string& iso) -> std::string {
+    if (iso.size() < 10) return "";
+    int d = 0, m = 0;
+    try {
+        d = std::stoi(iso.substr(8, 2));
+        m = std::stoi(iso.substr(5, 2));
+    } catch (...) {
+        return "";
+    }
+    if (m < 1 || m > 12) return "";
+    return std::to_string(d) + " " + kMonths[m - 1];
+};
+const auto timeOf = [](const std::string& iso) {
+    return iso.size() >= 16 ? iso.substr(11, 5) : std::string("--:--");
+};
+const auto examKindLabel = [](const std::string& k) -> const char* {
+    if (k == "consultation") return "Консультация";
+    if (k == "exam") return "Экзамен";
+    if (k == "credit") return "Зачёт";
+    if (k == "retake") return "Пересдача";
+    return "";
+};
+const auto controlBadge = [&esc](const std::string& ct) -> std::string {
+    if (ct == "exam") return "<span class=\"badge info\">Экзамен</span>";
+    if (ct == "credit") return "<span class=\"badge success\">Зачёт</span>";
+    if (ct == "graded_credit")
+        return "<span class=\"badge\">Дифзачёт</span>";
+    return "<span class=\"badge\">" + esc(ct) + "</span>";
+};
+const auto progressClass = [](int percent) -> const char* {
+    if (percent >= 60) return "ok";
+    if (percent >= 40) return "warn";
+    return "risk";
+};
+// Статус дисциплины — выведен из missing (демо-правило сервиса: порог
+// допуска = Σ max_score компонентов с оценками, GradesService.h):
+// «В процессе» / «Порог достигнут» — 03 §4.9.3 (бейдж рядом с типом)
+const auto statusBadge = [](int missing) -> std::string {
+    if (missing > 0)
+        return "<span class=\"badge\">В процессе</span>";
+    return "<span class=\"badge success\">Порог достигнут</span>";
+};
+%>
+<%c++
+if (!ready) {
+    // Защитная ветка (контроллер отвечает 404 до рендера, если своих
+    // оценок с таким id нет; сюда попадаем только при сбое данных)
+%>
+  <div class="content-narrow">
+    <section class="section flow" role="alert">
+      <h3>Не получилось загрузить дисциплину</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-grades-retry>Повторить</button>
+    </section>
+  </div>
+<%c++
+} else {
+    const int missing = ds["missing"].asInt();
+%>
+  <div class="content-narrow">
+    <!-- Шапка карточки (03 §4.9.3): баллы tnum, бейджи типа контроля и
+         статуса; порог допуска = max_sum (демо-арифметика Э4: 78/82) -->
+    <div class="study-summary">
+      <div>
+        <p class="overline"><%c++ $$ << esc(ds["code"].asString()); %></p>
+        <h2><%c++ $$ << esc(ds["discipline"].asString()); %></h2>
+        <p class="metric"><span class="tnum"><%c++ $$ << ds["score_sum"].asInt64(); %></span><span class="caption"> / <%c++ $$ << ds["max_sum"].asInt64(); %></span></p>
+      </div>
+      <div class="badge-col">
+<%c++
+        $$ << controlBadge(ds["control_type"].asString());
+        $$ << statusBadge(missing);
+%>
+      </div>
+    </div>
+<%c++
+    if (missing > 0)
+    {
+        // «до допуска не хватает N» (03 §4.9.3: warning-текст; демо: 4)
+        $$ << "<div class=\"notice danger section\"><p>До допуска не хватает "
+           << missing << " "
+           << plural(missing, "балл", "балла", "баллов")
+           << ". Порог допуска — " << ds["max_sum"].asInt64() << ".</p>";
+        // «добрать баллы» → блок «Сессия» экрана успеваемости; страницы
+        // дедлайн-радара (03 §4.9.2) ещё нет — тап туда отложен
+        // (см. журнал сессии Э7 экрана)
+        $$ << "<a class=\"button\" href=\"/grades#session\">Как добрать баллы</a></div>";
+    }
+%>
+    <section class="section">
+      <div class="section-title"><h2>Баллы</h2></div>
+      <div class="grade-list">
+<%c++
+        for (const auto& g : rows)
+        {
+            const int maxScore = static_cast<int>(g["max_score"].asInt64());
+            const int score = static_cast<int>(g["score"].asInt64());
+            // Тот же расчёт, что roundedPercent в GradesService (llround):
+            // бар компонента согласован с процентами сводки (25/60 → 42)
+            const int rowPercent =
+                maxScore > 0
+                    ? static_cast<int>(std::llround(100.0 * score / maxScore))
+                    : 0;
+            $$ << "<div class=\"grade-component\">";
+            $$ << "<div class=\"row\"><div><strong>"
+               << esc(g["component"].asString())
+               << "</strong><p class=\"caption\">"
+               << esc(dayMonthOf(g["graded_at"].asString()));
+            if (g["attempt"].asInt64() > 1)
+                $$ << " · попытка " << g["attempt"].asInt64();
+            $$ << "</p></div><strong class=\"tnum\">" << score << " / "
+               << maxScore << "</strong></div>";
+            $$ << "<div class=\"progress " << progressClass(rowPercent)
+               << "\" style=\"--value:" << rowPercent << "%\"></div>";
+            if (g["attempt"].asInt64() > 1)
+                $$ << "<p class=\"small grade-retake\">Пересдача</p>";
+            $$ << "</div>";
+        }
+%>
+      </div>
+    </section>
+<%c++
+    // Комментарий преподавателя — при наличии, в кавычках (03 §4.9.3);
+    // комментарий может быть у любого компонента — с атрибуцией
+    std::string comments;
+    for (const auto& g : rows)
+    {
+        if (g.isMember("comment") && !g["comment"].isNull())
+        {
+            comments += "<p class=\"small\">«" +
+                        esc(g["comment"].asString()) + "» — " +
+                        esc(g["component"].asString()) + "</p>";
+        }
+    }
+    if (!comments.empty())
+    {
+%>
+    <section class="section">
+      <div class="section-title"><h2>Комментарий преподавателя</h2></div>
+      <div class="notice"><%c++ $$ << comments; %></div>
+    </section>
+<%c++
+    }
+    if (examRows.size() > 0)
+    {
+        // События сессии по дисциплине; пересдача — акцент danger
+        // (03 §4.9.3); тап по событию → «Сессия» (/grades#session)
+%>
+    <section class="section">
+      <div class="section-title"><h2>Сессия по дисциплине</h2></div>
+      <div class="grade-list">
+<%c++
+        for (const auto& e : examRows)
+        {
+            const std::string kind = e["kind"].asString();
+            const bool isRetake = kind == "retake";
+            $$ << "<a class=\"exam-row\" href=\"/grades#session\"><div><strong>";
+            if (isRetake)
+                $$ << "<span class=\"exam-kind-retake\">";
+            $$ << examKindLabel(kind);
+            if (isRetake)
+                $$ << "</span>";
+            $$ << "</strong><p class=\"caption\">ауд. "
+               << esc(e["room"].asString()) << "</p></div>";
+            $$ << "<strong class=\"tnum exam-when\">"
+               << esc(dayMonthOf(e["starts_at"].asString())) << " · "
+               << esc(timeOf(e["starts_at"].asString())) << "</strong></a>";
+        }
+%>
+      </div>
+      <div class="actions">
+        <a class="button" href="/grades#session">Все события сессии</a>
+      </div>
+    </section>
+<%c++
+    }
+%>
+  </div>
+<%c++
+    }
+}  // else (failed != "1")
+%>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

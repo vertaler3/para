@@ -18,6 +18,22 @@ using namespace drogon;
 //
 // Ошибки — единый формат 02 §5.1 (api::errorResponse); успешные —
 // api::jsonResponse (кириллица сырыми UTF-8 байтами, гейт-конвенция Э6 р1).
+//
+// Страничная плоскость (Э7, экран «Карта» 03 §4.9.6/5.16; Р-19 — путь
+// вне /v1/ по постановке экрана):
+//   GET /map               — SSR-страница views/map.csp: корпуса (чипы),
+//       чипы этажей, кабинеты этажа и строка поиска кабинета. Без сессии
+//       LoginFilter отвечает 303 → /login (страница). Данных страница не
+//       содержит — корпуса и кабинеты грузит клиент из ТЕХ ЖЕ JSON-роутов
+//       выше (GET /v1/map/buildings, GET /v1/map/rooms — 02 §5.2; паттерн
+//       RoomsCtrl::roomsPage); query ?q= поисковой строки страница читает
+//       на клиенте (location.search) и сразу выполняет поиск при загрузке;
+//   GET /map/rooms         — алиас страницы: 303 → /map?q=<q> (q —
+//       urlEncodeComponent исходного значения). Сюда ведут ссылки кабинета
+//       из профилей людей (views/person.csp «Кабинет · …»; НЕ правятся —
+//       алиас сохраняет их адреса живыми, постановка экрана карты).
+//       С JSON-роутом /v1/map/rooms не конфликтует — пути различаются
+//       префиксом /v1/.
 class MapCtrl : public HttpController<MapCtrl>
 {
   public:
@@ -25,10 +41,16 @@ class MapCtrl : public HttpController<MapCtrl>
     ADD_METHOD_TO(MapCtrl::getBuildings, "/v1/map/buildings", Get,
                   "LoginFilter");
     ADD_METHOD_TO(MapCtrl::getRooms, "/v1/map/rooms", Get, "LoginFilter");
+    ADD_METHOD_TO(MapCtrl::mapPage, "/map", Get, "LoginFilter");
+    ADD_METHOD_TO(MapCtrl::mapRoomsAlias, "/map/rooms", Get, "LoginFilter");
     METHOD_LIST_END
 
     void getBuildings(const HttpRequestPtr& req,
                       std::function<void(const HttpResponsePtr&)>&& cb);
     void getRooms(const HttpRequestPtr& req,
                   std::function<void(const HttpResponsePtr&)>&& cb);
+    void mapPage(const HttpRequestPtr& req,
+                 std::function<void(const HttpResponsePtr&)>&& cb);
+    void mapRoomsAlias(const HttpRequestPtr& req,
+                       std::function<void(const HttpResponsePtr&)>&& cb);
 };

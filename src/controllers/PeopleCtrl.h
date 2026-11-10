@@ -36,6 +36,34 @@ using namespace drogon;
 // Роуты не конфликтуют: /v1/people/search — статический сегмент 3-го
 // уровня, {id} и {id}/schedule — 3-й и 4-й; статический приоритетнее
 // (сверено E2E в Э4 для /grades/summary).
+//
+// Страничная плоскость (Э7, экран «Люди»; путь вне /v1/ — по постановке
+// 02 §3.2, как /schedule — Р-19):
+//   GET /people      — views/people.csp: каталог-поиск (input + чипы
+//                      ролей Все|Преподаватели|Студенты|Сотрудники).
+//                      Данных в разметке НЕТ: результаты грузит клиент —
+//                      fetch GET /v1/people/search (debounce ~300 мс;
+//                      пустой запрос — подсказка + преподаватели первой
+//                      страницей search без q), состояния 03 §5 —
+//                      скелетон/пусто («Никого не нашли»)/ошибка с
+//                      «Повторить»/офлайн (баннер каркаса);
+//   GET /people/{id} — views/person.csp: профиль человека. Path-id БЕЗ
+//                      OwnershipGuard — people общий каталог: 403 в
+//                      people-роутах НЕ возникает (Р-15, шапка
+//                      PeopleService), чужой студент — легальный 200
+//                      с урезанными полями; маскирование имён — на
+//                      сервере (Р-15), клиент рисует как пришло. Нечисловой
+//                      id валидируется САМИМ контроллером (path-id приходит
+//                      строкой) → 404 HTML-карточка — для страницы
+//                      постановка требует 404, не 400 JSON (JSON-роут
+//                      /v1/people/{id} отвечает 400 средствами drogon —
+//                      контракты плоскостей разные, оба задокументированы).
+//                      Тело страницы — PeopleService::profile (ТОТ ЖЕ
+//                      метод, что за JSON API — SQL в контроллере нет,
+//                      AGENTS §5.5): NotFound → 404 карточка, Error → 500
+//                      fail-closed («Сервис не отвечает», 03 §5.3).
+//                      Блок «Занятия»/«Расписание группы» грузит клиент —
+//                      GET /v1/people/{id}/schedule (постановка экрана).
 class PeopleCtrl : public HttpController<PeopleCtrl>
 {
   public:
@@ -45,6 +73,8 @@ class PeopleCtrl : public HttpController<PeopleCtrl>
     ADD_METHOD_TO(PeopleCtrl::person, "/v1/people/{id}", Get, "LoginFilter");
     ADD_METHOD_TO(PeopleCtrl::schedule, "/v1/people/{id}/schedule", Get,
                   "LoginFilter");
+    ADD_METHOD_TO(PeopleCtrl::searchPage, "/people", Get, "LoginFilter");
+    ADD_METHOD_TO(PeopleCtrl::personPage, "/people/{id}", Get, "LoginFilter");
     METHOD_LIST_END
 
     void search(const HttpRequestPtr& req,
@@ -55,4 +85,9 @@ class PeopleCtrl : public HttpController<PeopleCtrl>
     void schedule(const HttpRequestPtr& req,
                   std::function<void(const HttpResponsePtr&)>&& cb,
                   int64_t personId);
+    void searchPage(const HttpRequestPtr& req,
+                    std::function<void(const HttpResponsePtr&)>&& cb);
+    void personPage(const HttpRequestPtr& req,
+                    std::function<void(const HttpResponsePtr&)>&& cb,
+                    const std::string& personId);
 };

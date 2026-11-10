@@ -345,3 +345,26 @@ void RoomsCtrl::blockRoom(const HttpRequestPtr& req,
             }
         });
 }
+
+// --- Страничная плоскость (Э7: GET /rooms; см. шапку заголовка) -----------
+
+void RoomsCtrl::roomsPage(const HttpRequestPtr& req,
+                          std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter (страница без сессии → 303 /login —
+    // правка фильтра Э7/Р-19, как ScheduleCtrl::page). Тонкая страница без
+    // данных (AGENTS §5.5): каталог/сетку слотов/«Мои брони» грузит клиент
+    // из тех же JSON-роутов этого контроллера (GET /v1/rooms,
+    // GET /v1/rooms/{id}/slots, GET /v1/room-bookings — 02 §5.2) — паттерн
+    // страницы «Новая заявка» (ApplicationsCtrl::newPage): значения не
+    // дублируются сервером, состояния 03 §5 — в шаблоне и app.js.
+    // query контракта каталога ?capacity= — тоже на клиенте (fetch).
+    (void)req;
+    HttpViewData data;
+    data.insert("pageTitle", std::string("Аудитории · Пара"));
+    // Экран НЕ таб (03 §3.1 — вход по ghost-ссылке «Забронировать
+    // аудиторию» шапки расписания, 03 §4.3/§4.9.5): пустой activeTab —
+    // ни один пункт таб-бара не получает aria-current.
+    data.insert("activeTab", std::string(""));
+    cb(HttpResponse::newHttpViewResponse("rooms", std::move(data)));
+}

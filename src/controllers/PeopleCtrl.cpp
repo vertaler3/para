@@ -1,5 +1,10 @@
 #include "controllers/PeopleCtrl.h"
 
+#include <json/json.h>
+
+#include <string>
+#include <utility>
+
 #include "services/PeopleService.h"
 #include "utils/ApiError.h"
 
@@ -97,5 +102,143 @@ void PeopleCtrl::schedule(const HttpRequestPtr&,
         app().getDbClient("para"), personId,
         [cb = std::move(cb)](PeopleService::Result r) mutable {
             sendResult(cb, std::move(r));
+        });
+}
+
+// --- Страничная плоскость (Э7 экран «Люди»; см. шапку заголовка) -----------
+
+namespace
+{
+
+// Сериализация тел сервиса для view-данных — как в ApplicationsCtrl::page:
+// сырая кириллица — emitUTF8; разбор и вывод с экранированием — шаблон
+// (02 §6.4, Р-16).
+std::string pageJson(const Json::Value& body)
+{
+    Json::StreamWriterBuilder w;
+    w["emitUTF8"] = true;
+    return Json::writeString(w, body);
+}
+
+// Каркасные view-данные страниц (partials head/topbar/tabbar): pageTitle и
+// activeTab — серверные константы (02 §6.4). «Люди» — вложенный экран
+// (вход из sheet «Детали пары» расписания и поиска), НЕ пункт таб-бара —
+// пустой activeTab, как на /notifications.
+HttpViewData basePageData(const std::string& title)
+{
+    HttpViewData data;
+    data.insert("pageTitle", title);
+    data.insert("activeTab", std::string(""));
+    return data;
+}
+
+// person.csp в одном из режимов view-переменной mode — data | notfound |
+// dberror (паттерн application.csp). Код статуса на ответе — настоящий
+// (200/404/500): страница с ошибкой — HTML-карточка, НЕ голый JSON.
+// personId отдаётся шаблону/клиенту только ПОСЛЕ валидации цифр (используется
+// блоком «Занятия» — GET /v1/people/{id}/schedule из app.js).
+void sendPersonPage(std::function<void(const HttpResponsePtr&)> cb,
+                    std::string mode,
+                    HttpStatusCode code,
+                    std::string personId,
+                    std::string bodyJson)
+{
+    HttpViewData data = basePageData("Профиль · Пара");
+    data.insert("mode", std::move(mode));
+    data.insert("personId", std::move(personId));
+    if (!bodyJson.empty())
+        data.insert("bodyJson", std::move(bodyJson));
+    auto resp = HttpResponse::newHttpViewResponse("person", std::move(data));
+    resp->setStatusCode(code);
+    cb(std::move(resp));
+}
+
+}  // namespace
+
+void PeopleCtrl::searchPage(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Страница без данных (паттерн notifications.csp): каталог-поиск грузит
+    // клиент — GET /v1/people/search из app.js (тот же JSON-роут выше);
+    // сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
+    (void)req;
+    HttpViewData data = basePageData("Люди · Пара");
+    cb(HttpResponse::newHttpViewResponse("people", std::move(data)));
+}
+
+void PeopleCtrl::personPage(
+    const HttpRequestPtr& req,
+    std::function<void(const HttpResponsePtr&)>&& cb,
+    const std::string& personId)
+{
+    const auto session = req->attributes()->get<SessionInfo>("session");
+
+    // Path-id строкой: НЕЧИСЛОВОЙ id → 404 HTML-карточка (постановка
+    // страницы; JSON-роут выше на нечисловом отвечает 400 средствами
+    // drogon — контракты плоскостей разные, см. шапку). Только цифры и
+    // влезание в int64_t — иначе нечисловой/переполнение → notfound.
+    int64_t id = 0;
+    bool numeric = !personId.empty() && personId.size() <= 18;
+    if (numeric)
+    {
+        for (const char c : personId)
+        {
+            if (c < '0' || c > '9')
+            {
+                numeric = false;
+                break;
+            }
+        }
+        if (numeric)
+        {
+            try
+            {
+                id = std::stoll(personId);
+            }
+            catch (...)
+            {
+                numeric = false;  // переполнение — тот же notfound
+            }
+        }
+    }
+    if (!numeric)
+    {
+        sendPersonPage(std::move(cb), "notfound", k404NotFound, personId, "");
+        return;
+    }
+
+    // Path-id БЕЗ OwnershipGuard (документируется по постановке экрана):
+    // people — общий каталог, 403 в people-роутах НЕ возникает (Р-15 в
+    // docs/decisions.md; шапка PeopleService) — чужой студент легально
+    // 200 с урезанными полями (маскирование имён на сервере, NameMask);
+    // оценки/заявки/брони чужих people-эндпоинты не отдают вовсе, DoD №2
+    // остаётся в силе на их собственных роутах (grades/applications/
+    // room-bookings — guard с Э2/Э4/Э5а).
+    PeopleService::profile(
+        app().getDbClient("para"), session.userId, id,
+        [cb = std::move(cb),
+         personId](PeopleService::Result r) mutable {
+            switch (r.status)
+            {
+                case PeopleService::Status::Ok:
+                    // Разбор/ветвление по полям (роль, кабинет) — шаблон;
+                    // сбой разбора шаблон покажет dberror-веткой (03 §5.3).
+                    sendPersonPage(std::move(cb), "data", k200OK, personId,
+                                   pageJson(r.body));
+                    return;
+                case PeopleService::Status::NotFound:
+                case PeopleService::Status::BadRequest:
+                    // BadRequest в profile не возвращается (только search) —
+                    // защитно та же карточка notfound.
+                    sendPersonPage(std::move(cb), "notfound", k404NotFound,
+                                   personId, "");
+                    return;
+                case PeopleService::Status::Error:
+                    // Ошибка БД — fail-closed (03 §5.3), 500 без деталей.
+                    sendPersonPage(std::move(cb), "dberror",
+                                   k500InternalServerError, personId, "");
+                    return;
+            }
         });
 }

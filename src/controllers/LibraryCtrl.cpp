@@ -1,5 +1,7 @@
 #include "controllers/LibraryCtrl.h"
 
+#include <drogon/drogon.h>
+
 #include "services/LibraryService.h"
 #include "utils/ApiError.h"
 
@@ -97,4 +99,25 @@ void LibraryCtrl::getMyCard(
                     return;
             }
         });
+}
+
+// --- Страничная плоскость (Э7: GET /library; см. шапку заголовка) ---------
+
+void LibraryCtrl::libraryPage(
+    const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Сессию проверил LoginFilter (страница без сессии → 303 /login —
+    // правка фильтра Э7/Р-19, как RoomsCtrl::roomsPage). Тонкая страница
+    // без данных (AGENTS §5.5): филиалы/наличие грузит клиент из тех же
+    // JSON-роутов этого контроллера (GET /v1/library/branches, GET
+    // /v1/library/items — 02 §5.2); query контракта (?q=, ?branch_id=,
+    // ?available=1) — тоже на клиенте (fetch). Состояния 03 §5 — в
+    // шаблоне и static/js/app.js.
+    (void)req;
+    HttpViewData data;
+    data.insert("pageTitle", std::string("Библиотека · Пара"));
+    // Экран НЕ таб (03 §3.1 — вход из профиля, 03 §4.9.6/5.12): пустой
+    // activeTab — ни один пункт таб-бара не получает aria-current.
+    data.insert("activeTab", std::string(""));
+    cb(HttpResponse::newHttpViewResponse("library", std::move(data)));
 }

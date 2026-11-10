@@ -37,6 +37,44 @@ class ScheduleCache;  // инвалидация кэша недели групп
 //       расписания (200);
 //   POST /v1/staff/announcements — публикация объявления; БЕЗ push и БЕЗ
 //       уведомлений — только лента (01 §4.5) (201).
+//
+// Страничная плоскость (Э7, экран «Стол сотрудника» — последний экран
+// Э7; 03 §4.8; путь вне /v1/ — по постановке экрана, как /schedule —
+// Р-19 в docs/decisions.md):
+//   GET /staff          — views/staff.csp: сводка, очередь, перенос,
+//                         объявления. Роут под LoginFilter БЕЗ StaffFilter:
+//                         СТРАНИЦА не отвечает API-JSON — роль проверяет
+//                         КОНТРОЛЛЕР сам по атрибуту сессии "session"
+//                         (его туда кладёт LoginFilter после
+//                         SessionService::findValid — паттерн
+//                         ScheduleCtrl/DashboardCtrl): не staff → HTTP 403
+//                         + HTML-карточка «Доступ только для сотрудников»
+//                         (views/staff.csp mode="forbidden" — тот же вид
+//                         карточки, что 403 у заявок; 03 §5). ЭТО НЕ МЕНЯЕТ
+//                         API: StaffFilter остаётся на всех /v1/staff/*
+//                         роутах выше и отвечает на них прежним JSON 403
+//                         {error:{code,message}} (02 §5.1/§5.2) — страница
+//                         и API-плоскость разделены путём (Р-19);
+//   GET /staff/app-card — htmx-ФРАГМЕНТ карточки очереди views/staff/
+//                         app_card.csp (паттерн /schedule/segment, Р-19):
+//                         при HX-Request: true — партиал одной карточки по
+//                         query id (целое; иначе 400 HTML-фрагментом —
+//                         02 §5.1 «ошибки валидации — HTML-фрагментом для
+//                         htmx»); прямой заход без HX-Request → 303 на
+//                         /staff. Роль — та же проверка контроллера:
+//                         не staff → 403 HTML-фрагментом (notice). Данные
+//                         карточки — ApplicationsService::queue (ТОТ ЖЕ
+//                         метод, что за JSON GET /v1/staff/applications;
+//                         выборка нужной строки — по id в памяти
+//                         контроллера: новой SQL нет, SQL в контроллерах
+//                         запрещён — AGENTS §5.5, src/services/ — BE-
+//                         дорожка). Потребитель фрагмента — app.js: после
+//                         успешного POST /v1/staff/applications/{id}/status
+//                         заменяет карточку очереди этим партиалом
+//                         (htmx.ajax, outerHTML) — «htmx-перерисовка
+//                         карточки», 03 §4.8; 409 недопустимого перехода
+//                         карточку НЕ перерисовывает — inline-предупреждение
+//                         в слоте data-app-warn.
 class StaffCtrl : public HttpController<StaffCtrl>
 {
   public:
@@ -52,6 +90,9 @@ class StaffCtrl : public HttpController<StaffCtrl>
                   "LoginFilter", "StaffFilter");
     ADD_METHOD_TO(StaffCtrl::publishAnnouncement, "/v1/staff/announcements",
                   Post, "LoginFilter", "StaffFilter");
+    ADD_METHOD_TO(StaffCtrl::staffPage, "/staff", Get, "LoginFilter");
+    ADD_METHOD_TO(StaffCtrl::appCardFragment, "/staff/app-card", Get,
+                  "LoginFilter");
     METHOD_LIST_END
 
     void queue(const HttpRequestPtr& req,
@@ -65,4 +106,8 @@ class StaffCtrl : public HttpController<StaffCtrl>
                    std::function<void(const HttpResponsePtr&)>&& cb);
     void publishAnnouncement(const HttpRequestPtr& req,
                              std::function<void(const HttpResponsePtr&)>&& cb);
+    void staffPage(const HttpRequestPtr& req,
+                   std::function<void(const HttpResponsePtr&)>&& cb);
+    void appCardFragment(const HttpRequestPtr& req,
+                         std::function<void(const HttpResponsePtr&)>&& cb);
 };

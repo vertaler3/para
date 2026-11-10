@@ -7,8 +7,10 @@
 using namespace drogon;
 
 // LoginFilter (02 §6.3): всё, кроме публичных путей, требует валидную
-// сессию (таблица sessions, 02 §6.1); без неё API отвечает 401 без деталей.
-// Для SSR-страниц будет 303 → /login — с Э2 (02 §6.3), здесь только API.
+// сессию (таблица sessions, 02 §6.1). Без сессии ответ зависит от плоскости:
+// API (/v1/* и push-канал /ws) — 401 JSON без деталей (02 §5.1); СТРАНИЦА
+// (SSR-HTML — /schedule, /grades, …) — 303 redirect → /login (02 §6.3:
+// «нет сессии → 303 /login (SSR)»; Э7, LoginFilter.cpp isApi).
 // Публичное: /healthz, POST /v1/auth/login, страница входа /login
 // (CSP-шаблон), статика FE (/css, /js, /vendor, /img, /icons, /fonts,
 // /static — префиксы по дереву 05 §2; точные пути статики согласует

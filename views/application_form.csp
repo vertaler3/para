@@ -1,0 +1,93 @@
+<%c++
+/* Новая заявка: каталог типов + форма 1–2 вопроса (Э7, экран «Заявки»;
+   03 §4.5.2–4.5.3, design-drafts/application-catalog.html и
+   application-form.html). Страница НЕ содержит данных: каталог типов
+   (GET /v1/application-types) и профиль (GET /v1/me) грузит клиент —
+   значения типов НЕ захардкожены сервером (постановка Э7); контент
+   строит static/js/app.js (только createElement/textContent — 02 §6.4).
+   В разметке — состояния (03 §5):
+     скелетон — начальное состояние, пока каталог/профиль грузятся
+                (shimmer каркаса; 03 §5.1:980 «Заявки — 2 карточки со
+                строками»); это единственный экран ветки заявок с
+                догрузкой на клиенте — список и карточка целиком SSR;
+     ошибка   — [data-form-error] «Не получилось загрузить каталог» с
+                «Повторить» ([data-form-retry] — повторный fetch,
+                03 §5.3: «Повторить всегда реально перезапрашивает»);
+     пусто    — каталог фиксированный (5 типов из constexpr-моделей,
+                словарь CHECK DDL), пустого состояния нет; профиль при
+                сбое не блокирует форму (карточка просто скрыта);
+     офлайн   — баннер каркаса (topbar + app.js applyOffline); кнопки
+                формы — data-network-action (disabled + helper-текст
+                «Нужна сеть…», 03 §5.4:1026).
+   Форма (03 §4.5.3 «правила формы»): 1–2 вопроса максимум — наборы
+   полей по типу из payload-примеров sql/fixtures.sql (copies/delivery/
+   purpose, topic/supervisor, comment) и меток каталога 03 §4.5.2;
+   профиль (ФИО/группа) — read-only карточка «подставлено из профиля»,
+   сервер форму профилем не наполняет. Кнопки: «Сохранить черновик»
+   (POST /v1/applications submit:false → тост «Черновик сохранён»,
+   далее автосохранение PUT /v1/applications/{id} раз в ~10 с и по
+   visibilitychange — ТОЛЬКО пока status=draft; 409 — молча прекратить,
+   С7) и «Отправить заявку» (POST submit:true → редирект на карточку;
+   loading «Отправляем…», 03 §5.1:984). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js — сама страница
+     (defer, локальный путь — AGENTS: без npm/CDN). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="application-form">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Мои заявки</a>
+      <h1>Новая заявка</h1>
+      <p>Выберите документ — форма подставит данные профиля</p>
+    </div>
+  </div>
+  <div class="content-form flow">
+    <!-- Профиль: автозаполнение из GET /v1/me (read-only); сбой — карточка
+         скрыта, форму не блокирует (решение в шапке шаблона) -->
+    <div class="notice" data-profile-card hidden>
+      <strong data-profile-fio></strong>
+      <p data-profile-meta></p>
+      <p class="caption">Данные подставлены из профиля — при получении проверьте паспорт</p>
+    </div>
+
+    <!-- Состояние «Загрузка» (03 §5.1): скелетоны каталога + профиля;
+         aria-busy на контейнере (03 §6.4). Скрыты при ответе (app.js). -->
+    <div data-form-loading aria-busy="true">
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+      <div class="skeleton short"></div>
+    </div>
+
+    <!-- Состояние «Ошибка» (03 §5.3): каталог не загрузился; «Повторить»
+         реально перезапрашивает (app.js, [data-form-retry]). -->
+    <section class="section flow" data-form-error hidden role="alert">
+      <h3>Не получилось загрузить каталог</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-form-retry>Повторить</button>
+    </section>
+
+    <!-- Каталог типов: строки строит app.js из GET /v1/application-types
+         (значения НЕ захардкожены — постановка Э7); тап → форма типа -->
+    <div class="stack" data-catalog hidden></div>
+
+    <!-- Форма типа: поля строит app.js по выбранному типу (1–2 вопроса,
+         03 §4.5.3); скрыта, пока тип не выбран -->
+    <form id="application-form" class="flow" data-form hidden>
+      <p class="caption"><span data-type-title></span> · <button type="button" class="offline-retry" data-type-back>выбрать другой тип</button></p>
+      <div data-type-fields></div>
+      <p class="field-error" data-form-error hidden></p>
+      <div class="actions section">
+        <button class="button" type="button" data-save-draft data-network-action data-offline-label="Нужна сеть для черновика">Сохранить черновик</button>
+        <button class="button primary" type="submit" data-submit-app data-network-action data-offline-label="Нужна сеть, чтобы отправить заявку">Отправить заявку</button>
+      </div>
+      <p class="caption" role="status" data-draft-status>Обычно готова до 3 рабочих дней</p>
+    </form>
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>

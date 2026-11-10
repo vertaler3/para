@@ -1,0 +1,116 @@
+<%c++
+/* Карта корпусов — поиск кабинета (Э7, экран «Карта» 3 из 4;
+   03 §4.9.6/5.16, design-drafts/map.html). Страница НЕ содержит данных:
+   корпуса и кабинеты грузит клиент — fetch GET /v1/map/buildings и GET
+   /v1/map/rooms (query q/building_id — ТЕ ЖЕ JSON-роуты MapCtrl, что
+   стоят за API, 02 §5.2; паттерн views/library.csp). Контент строит
+   static/js/app.js (только createElement/textContent — 02 §6.4).
+   Два пути (03 §4.9.6 «список корпусов → чипы этажей → кабинеты; поиск
+   „1207" → „корпус Б · этаж 2 · лаборатория"»):
+     — обзор: чипы корпусов (name; GET /v1/map/buildings) → чипы этажей
+       выбранного корпуса (distinct floor из GET /v1/map/rooms?
+       building_id=N) → кабинеты этажа плитками .map-plan/.map-room
+       (номер + тип caption; floor/kind nullable — пустое не рисуется);
+     — поиск: строка «Номер кабинета» → GET /v1/map/rooms?q= → карточки
+       «номер · корпус · этаж · тип» (формат черновика map.html).
+   Страница читает ?q= из location.search при загрузке (сюда ведут
+   ссылки кабинета из профилей людей через алиас GET /map/rooms → 303
+   /map?q=…): поле предзаполняется, поиск выполняется сразу; новый поиск
+   подменяет адрес history.replaceState — ссылка остаётся шареной.
+   Пустой результат поиска — «Ничего не нашлось»; этаж без кабинетов —
+   «На этом этаже кабинеты ещё не добавлены. Выберите другой этаж.»
+   (дословно черновик map.html #map-empty).
+   Состояния (03 §5): скелетоны секций — только если ответ дольше
+   300 мс (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить»
+   (повторный fetch, 03 §5.3); офлайн — баннер каркаса (topbar +
+   applyOffline, 03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
+   «Карта» — НЕ таб (03 §3.1): MapCtrl::mapPage ставит пустой activeTab.
+   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) — строк-данных в
+   шаблон не вставляется, страница статична. htmx не нужен (без
+   сегментов) — только app.js (defer, локальный путь — AGENTS: без
+   npm/CDN). */
+%>
+<%view head %>
+<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
+     (defer; htmx на этом экране не используется). -->
+<script defer src="/static/js/app.js"></script>
+<body data-page="map">
+<%view topbar %>
+<main id="main" class="shell">
+  <div class="page-heading">
+    <div>
+      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Профиль</a>
+      <h1>Найдём нужный кабинет</h1>
+      <p>Корпус → этаж → кабинет — или поиск по номеру</p>
+    </div>
+  </div>
+  <div class="content-narrow">
+
+    <!-- Поиск кабинета (черновик map.html: форма с q) -->
+    <form class="field" data-map-form>
+      <label for="map-q">Номер кабинета</label>
+      <input id="map-q" type="search" placeholder="1207 или Б-204" data-map-q autocomplete="off">
+      <p class="caption">Например, «1207» — покажем корпус, этаж и тип помещения.</p>
+    </form>
+
+    <!-- Результат поиска: карточки «номер · корпус · этаж · тип»
+         (строит app.js из GET /v1/map/rooms?q=) -->
+    <section class="section" aria-labelledby="map-search-title" data-search-section hidden>
+      <div class="section-title"><h2 id="map-search-title">Нашли по запросу</h2></div>
+      <div class="stack" data-search-loading hidden aria-busy="true" aria-label="Ищем">
+        <div class="skeleton card"></div>
+        <div class="skeleton card"></div>
+      </div>
+      <div class="surface" data-search-empty hidden>
+        <div class="empty">
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8.5 11h5"/></svg></div>
+          <h2>Ничего не нашлось</h2>
+          <p>Проверьте номер — например, 1207 или Б-204.</p>
+        </div>
+      </div>
+      <section class="section flow" data-search-error hidden role="alert">
+        <h3>Не получилось выполнить поиск</h3>
+        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+        <button class="button" type="button" data-search-retry>Повторить</button>
+      </section>
+      <div data-search-results hidden></div>
+    </section>
+
+    <!-- Обзор: корпуса → этажи → кабинеты -->
+    <section class="section" aria-labelledby="map-buildings-title">
+      <div class="section-title"><h2 id="map-buildings-title">Корпуса</h2></div>
+      <div class="chips" role="group" aria-label="Корпуса" data-building-chips></div>
+      <section class="section flow" data-buildings-error hidden role="alert">
+        <h3>Не получилось загрузить корпуса</h3>
+        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+        <button class="button" type="button" data-buildings-retry>Повторить</button>
+      </section>
+
+      <div data-floors-section hidden>
+        <p class="caption" data-building-address></p>
+        <div class="chips section" role="group" aria-label="Этажи" data-floor-chips></div>
+        <div class="stack" data-rooms-loading hidden aria-busy="true" aria-label="Загружаем этаж">
+          <div class="skeleton card"></div>
+          <div class="skeleton card"></div>
+        </div>
+        <div class="empty" data-rooms-empty hidden>
+          <h2>На этом этаже кабинеты ещё не добавлены</h2>
+          <p>Выберите другой этаж.</p>
+        </div>
+        <section class="section flow" data-rooms-error hidden role="alert">
+          <h3>Не получилось загрузить кабинеты</h3>
+          <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+          <button class="button" type="button" data-rooms-retry>Повторить</button>
+        </section>
+        <div class="map-plan" data-rooms-grid hidden></div>
+      </div>
+    </section>
+
+    <p class="notice section">Схематичный план вымышленного кампуса.</p>
+
+  </div>
+</main>
+<%view tabbar %>
+<%view footer %>
+</body>
+</html>
