@@ -1,4 +1,8 @@
 #include <drogon/drogon.h>
+
+#include <cstdlib>
+#include <fstream>
+#include <stdexcept>
 #include <string>
 
 #include "filters/CsrfCheck.h"
@@ -24,7 +28,44 @@ int main(int argc, char* argv[]) {
             ++i;
         }
     }
-    drogon::app().loadConfigFile(configPath);
+    // Э8 шаг 6 (02 §6.5 «секреты… в переменных окружения сервера»): config
+    // разбирается вручную, чтобы применить переопределения окружения ДО
+    // передачи в фреймворк (loadConfigJson — HttpAppFramework.h:469, v1.9.14;
+    // loadConfigFile — тот же путь, но без точки вмешательства). Сейчас
+    // переопределяется ровно один ключ: PARA_DB_PATH (env.example) — путь БД.
+    // Он меняется В ОБОИХ местах сразу: custom_config.db_path (миграционный
+    // раннер ниже) и db_clients[*].filename (пул Drogon) — иначе раннер
+    // мигрировал бы один файл, а пул открыл бы другой. Переменная не задана —
+    // работают значения config.json (дев-дефолт, /opt/para/data/para.db).
+    Json::Value root;
+    try {
+        std::ifstream in(configPath, std::ios::binary);
+        if (!in)
+            throw std::runtime_error("config-файл не открыт: " + configPath);
+        Json::CharReaderBuilder builder;
+        std::string errs;
+        // config.json содержит //-комментарии — jsoncpp читает их по умолчанию.
+        if (!Json::parseFromStream(builder, in, &root, &errs))
+            throw std::runtime_error("config не разобран (" + configPath +
+                                     "): " + errs);
+        if (const char* envDb = std::getenv("PARA_DB_PATH");
+            envDb != nullptr && *envDb != '\0') {
+            root["custom_config"]["db_path"] = envDb;
+            if (root["db_clients"].isArray())
+                for (Json::ArrayIndex i = 0; i < root["db_clients"].size(); ++i)
+                    if (root["db_clients"][i].isObject())
+                        root["db_clients"][i]["filename"] = envDb;
+            // Факт переопределения — без значения пути (правило шага 6 Э8:
+            // в логах факты/имена ключей, не значения).
+            LOG_INFO << "конфиг: путь БД переопределён из PARA_DB_PATH";
+        }
+    } catch (const std::exception& e) {
+        // Fail fast без деградации: без разобранного конфига приложение
+        // не поднимаем (тот же принцип, что у миграций ниже).
+        LOG_ERROR << "конфиг не загружен, запуск отменён: " << e.what();
+        return 1;
+    }
+    drogon::app().loadConfigJson(std::move(root));
 
     //Миграции — при старте и только при нём (02 §8.3), до поднятия роутов:
     //раннер синхронный (libsqlite3), работает до app().run(), когда пул

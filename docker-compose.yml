@@ -10,6 +10,12 @@ services:
       - "8080:8080"
     volumes:
       - para-data:/opt/para/data
+    # env-переменные сервера (02 §6.5): опциональный .env в корне проекта —
+    # он в .gitignore, значения в репо не попадают (env.example хранит только
+    # имена). Файла нет — контур живёт на дефолтах config.json (Э8 шаг 6).
+    env_file:
+      - path: .env
+        required: false
     restart: unless-stopped
 
   tests:
