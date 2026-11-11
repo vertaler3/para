@@ -124,6 +124,7 @@ set(PARA_APP_SOURCES
                src/services/MapService.cpp
                src/services/DashboardService.cpp
                src/filters/LoginFilter.cpp
+               src/filters/CsrfCheck.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
@@ -242,6 +243,13 @@ target_include_directories(security_tests
 # (ctest стартует в build/, ручной запуск — из корня проекта).
 target_compile_definitions(security_tests PRIVATE
                            PARA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+# CSP-шаблоны нужны и тестовому серверу: блок CSRF шага 2 Э8 рендерит
+# страницу GET /schedule (выдача токена) — без генерации
+# newHttpViewResponse("schedule") отвечал бы 404-заглушкой Drogon
+# (шаблон не зарегистрирован). Отдельный каталог generated-* — чтобы
+# генерации para и security_tests не писали в одни файлы.
+drogon_create_views(security_tests ${CMAKE_CURRENT_SOURCE_DIR}/views
+                        ${CMAKE_CURRENT_BINARY_DIR}/generated-security-tests)
 target_link_libraries(security_tests PRIVATE
                       ${PARA_DROGON_TARGETS}
                       ${PARA_SQLITE3_TARGET}

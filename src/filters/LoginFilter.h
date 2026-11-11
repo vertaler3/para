@@ -21,8 +21,11 @@ using namespace drogon;
 // Механика Drogon: глобальных фильтров нет — фильтр навешивается на роуты
 // явно (PATH_ADD/METHOD_ADD ..., "LoginFilter"); новые приватные роуты Э2+
 // обязаны добавляться с ним (правило код-ревью, 02 §6.3).
-// CSRF-проверка на state-changing — Э8 (02 §6.4); сейчас барьер —
-// SameSite=Lax у cookie.
+// CSRF double-submit на всех приватных state-changing — с шага 2 Э8:
+// LoginFilter ПОСЛЕ валидации сессии вызывает CsrfCheck::verify на
+// POST/PUT/DELETE (02 §6.4; единая точка — см. CsrfCheck.h). Публичный
+// POST /v1/auth/login фильтром не проходится — вход до сессии, токена
+// ещё нет (журнал Э8 шага 2); базовый барьер — SameSite=Lax cookie.
 class LoginFilter : public HttpFilter<LoginFilter>
 {
   public:

@@ -39,12 +39,14 @@
   ```bash
   curl -i -c c.txt -X POST localhost:8080/v1/auth/login \
     -H 'Content-Type: application/json' \
-    -d '{"login":"anya.demo","password":"<DEMO_PASSWORD>"}'  # 200 + Set-Cookie: para_session=…; HttpOnly; Secure; SameSite=Lax
+    -d '{"login":"anya.demo","password":"<DEMO_PASSWORD>"}'  # 200 + Set-Cookie: para_session=…; HttpOnly; Secure; SameSite=Lax + csrf=…; Secure; SameSite=Lax (без HttpOnly — токен CSRF, Э8)
   curl -i -b c.txt localhost:8080/v1/me                      # 200
-  curl -i -b c.txt -X POST localhost:8080/v1/auth/logout     # 200
+  curl -i -b c.txt -H "X-CSRF-Token: $(awk '$6=="csrf" {print $7}' c.txt)" \
+      -X POST localhost:8080/v1/auth/logout                  # 200 (CSRF double-submit — Р-23, Э8)
   curl -i -b c.txt localhost:8080/v1/me                      # 401 {"error":{"code":"unauthorized",…}}
   ```
   неверный пароль → 401 `invalid_credentials` без деталей; 4-я попытка подряд → 429 + `Retry-After: 15`;
+  CSRF double-submit (02 §6.4, Р-23): ВСЕ приватные state-changing (POST/PUT/DELETE) с Э8 шага 2 требуют cookie csrf + заголовок X-CSRF-Token (или поле `_csrf`); расхождение/отсутствие → 403 `csrf`; GET-чтение и сам вход — без токена (вход до сессии). Исторические смоки BE-частей Э2–Э7 ниже — датированные записи своего времени: их PUT/POST/DELETE-строки до Э8 шли без токена.
 - **Идемпотентность сидирования:** `docker compose restart para` → `users` до/после равны (маркер `fixtures` в schema_migrations, Р-5/Р-8); пересеивание фикстур с нуля (в т.ч. после ротации пароля) — `docker compose down -v`, затем `up` снова.
 - **BE-часть Э2** (фактически проверено 05.11.2026 в одноразовом контейнере `drogonframework/drogon:v1.9.14` — сборка в /tmp, не `docker compose`; compose-прогоны гейта поверх того же кода — ниже):
   - **настройки (JSON, оба маршрута под LoginFilter; тело ошибок — 02 §5.1):**

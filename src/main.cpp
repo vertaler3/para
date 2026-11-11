@@ -1,6 +1,7 @@
 #include <drogon/drogon.h>
 #include <string>
 
+#include "filters/CsrfCheck.h"
 #include "services/MigrationRunner.h"
 #include "services/NotifyDispatcher.h"
 #include "services/ReminderService.h"
@@ -54,6 +55,14 @@ int main(int argc, char* argv[]) {
     //LoginFilter не регистрируется явно: HttpFilter<T> в Drogon создаётся
     //и регистрируется автоматически по имени класса ("LoginFilter") —
     //на него ссылаются роуты AuthCtrl через METHOD_LIST.
+
+    // Выдача CSRF-токена на страницах (02 §6.4, Э8 шаг 2): post-handling
+    // advice — ЕДИНАЯ точка issuance (Set-Cookie csrf при расхождении с
+    // сессией + <meta name="csrf-token"> в <head> каждой страницы).
+    // Состояния нет: токен перевычисляется от сессии (CsrfCheck.h). Тот же
+    // вызов делает security_tests — сервер в тесте конфигурационно
+    // идентичен продовому.
+    para::CsrfCheck::registerPageIssuanceAdvice();
 
     // Таймер Э6 (гайд BE §9; 02 §4 поток 4): раз в минуту — базовое
     // напоминание «за 1 день» (deadlines.reminded), персональные

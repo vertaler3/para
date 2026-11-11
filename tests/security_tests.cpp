@@ -42,6 +42,13 @@
 //           ФАКТ НЕИЗМЕННОСТИ: «мои брони» Ани по-прежнему содержат строку
 //           booked; +контроль: свой DELETE → 204 и строка уходит из
 //           списка; несуществующий id → 404;
+//   +CSRF double-submit (02 §6.4, шаг 2 Э8): страница выдаёт токен (cookie
+//           csrf + <meta name="csrf-token"> в <head>); state-changing БЕЗ
+//           токена / с неверным заголовком / с ПОДДЕЛАННОЙ cookie csrf →
+//           403 error.code=csrf; с валидным токеном → проходит (201/204);
+//           GET-чтение и POST /v1/auth/login — вне CsrfCheck (спека:
+//           state-changing только POST/PUT/DELETE; вход до сессии —
+//           решение журнала Э8, AGENTS §4 смок сохранён);
 //   +429 лимитера входа (02 §6.4): 3 неверных пароля под одним логином →
 //           4-я попытка → 429 too_many_attempts + Retry-After (штатный
 //           LoginLimiter: блок 15 с — тест НЕ ждёт разблокировку);
@@ -54,13 +61,13 @@
 // сам тест через PasswordHasher::hash() поверх временной БД; в
 // репозитории и логах его нет.
 //
-// CSRF/ЗАГОЛОВКИ (02 §6.4) — шаги 2–3 Э8: сейчас CsrfCheck и заголовки
-// CSP/nosniff у сервера НЕ реализованы, но НИ ОДИН шаг §9.3 от них не
-// зависит — поэтому на этом шаге все проверки зелёные. Когда CsrfCheck
-// появится (шаги 2–3 Э8), state-changing проверки этого файла
-// (POST/PUT/DELETE) потребуют синхронизации (cookie csrf + заголовок/
-// поле) и ДО неё будут ожидаемо красные — это норма; полное озеленение —
-// к шагу 5 Э8 (синхронизация файла входит в шаг 3).
+// CSRF (02 §6.4) — с шага 2 Э8 реализован: CsrfCheck (signed double-submit,
+// cookie csrf детерминированно привязан к сессии, CsrfCheck.h) вызывается из
+// LoginFilter на всех приватных POST/PUT/DELETE. ВСЕ state-changing запросы
+// этого файла ходят с cookie csrf + заголовком X-CSRF-Token (как браузер из
+// app.js); отдельный блок ниже проверяет нет/расхождение/подделку → 403.
+// Заголовки CSP/nosniff/frame-ancestors сервером ещё НЕ реализованы —
+// шаг 3 Э8; ни один шаг §9.3 от них не зависит.
 //
 // Service-level проверки шагов 4/8 (Э4 шаг 3, Э5а шаг 2) ЗАМЕНЕНЫ этим
 // HTTP-вариантом (сильнее: та же логика под настоящими LoginFilter/
@@ -93,6 +100,7 @@
 #include <thread>
 #include <vector>
 
+#include "filters/CsrfCheck.h"
 #include "services/MigrationRunner.h"
 #include "services/PasswordHasher.h"
 #include "services/SessionService.h"
@@ -163,12 +171,28 @@ struct TempDir
 
 drogon::HttpClientPtr g_client;
 
+// Живая сессия: токен para_session + токен CSRF (cookie csrf из Set-Cookie
+// ответа входа — как у браузера после POST /v1/auth/login). anon — запросы
+// без сессии (публичные вход/healthz и шаг 7 «без cookie»).
+struct Login
+{
+    std::string token;
+    std::string csrf;
+    drogon::Cookie cookie;
+};
+const Login anon;
+
 // Синхронный HTTP-запрос к встроенному серверу. Возвращает nullptr только
 // при транспортной ошибке (детали печатает вызывающий expect*).
+// csrfHeader/csrfCookie — зеркало токена double-submit (как браузер из
+// app.js): заголовок X-CSRF-Token + cookie csrf; пустые — запрос без токена
+// (вход, GET-чтение и отрицательные CSRF-кейсы).
 drogon::HttpResponsePtr sendHttp(drogon::HttpMethod method,
                                  const std::string& path,
                                  const std::string& sessionToken,
-                                 const Json::Value* jsonBody)
+                                 const Json::Value* jsonBody,
+                                 const std::string& csrfHeader = "",
+                                 const std::string& csrfCookie = "")
 {
     if (!g_client)
         return nullptr;
@@ -177,6 +201,10 @@ drogon::HttpResponsePtr sendHttp(drogon::HttpMethod method,
     req->setPath(path);
     if (!sessionToken.empty())
         req->addCookie(para::SessionService::kCookieName, sessionToken);
+    if (!csrfCookie.empty())
+        req->addCookie(para::CsrfCheck::kCookieName, csrfCookie);
+    if (!csrfHeader.empty())
+        req->addHeader(para::CsrfCheck::kHeaderName, csrfHeader);
     if (jsonBody != nullptr)
     {
         // Каноничный путь drogon для JSON-запроса (см. newHttpJsonRequest):
@@ -192,21 +220,23 @@ drogon::HttpResponsePtr sendHttp(drogon::HttpMethod method,
     return pair.second;
 }
 
-drogon::HttpResponsePtr get(const std::string& token, const std::string& path)
+drogon::HttpResponsePtr get(const Login& s, const std::string& path)
 {
-    return sendHttp(drogon::Get, path, token, nullptr);
+    // GET — чтение: токен CSRF не носится (02 §6.4: state-changing только
+    // POST/PUT/DELETE).
+    return sendHttp(drogon::Get, path, s.token, nullptr);
 }
 
-drogon::HttpResponsePtr post(const std::string& token,
+drogon::HttpResponsePtr post(const Login& s,
                              const std::string& path,
                              const Json::Value& body)
 {
-    return sendHttp(drogon::Post, path, token, &body);
+    return sendHttp(drogon::Post, path, s.token, &body, s.csrf, s.csrf);
 }
 
-drogon::HttpResponsePtr del(const std::string& token, const std::string& path)
+drogon::HttpResponsePtr del(const Login& s, const std::string& path)
 {
-    return sendHttp(drogon::Delete, path, token, nullptr);
+    return sendHttp(drogon::Delete, path, s.token, nullptr, s.csrf, s.csrf);
 }
 
 // Заголовок ответа без чувствительности к регистру (drogon хранит ключи
@@ -592,12 +622,6 @@ struct ServerGuard
 
 // Живые сессии ---------------------------------------------------------------
 
-struct Login
-{
-    std::string token;
-    drogon::Cookie cookie;
-};
-
 Login loginAs(const std::string& login, const std::string& password,
               const std::string& label)
 {
@@ -605,10 +629,11 @@ Login loginAs(const std::string& login, const std::string& password,
     body["login"] = login;
     body["password"] = password;
     Login out;
-    auto r = post("", "/v1/auth/login", body);
+    auto r = post(anon, "/v1/auth/login", body);
     expectStatus(r,
                  drogon::k200OK,
-                 label + ": POST /v1/auth/login → 200 (вход по реальному HTTP)",
+                 label + ": POST /v1/auth/login → 200 (вход по реальному HTTP; "
+                         "вход до сессии — вне CsrfCheck, решение Э8 шага 2)",
                  "POST /v1/auth/login " + login);
     if (r != nullptr)
         out.cookie = sessionCookieOf(r);
@@ -616,6 +641,18 @@ Login loginAs(const std::string& login, const std::string& password,
     check(!out.token.empty(),
           label + ": Set-Cookie " + para::SessionService::kCookieName +
               " → живой токен сессии");
+    // CSRF double-submit (02 §6.4): вход выдаёт и cookie csrf — с неё
+    // начинается жизнь токена у браузера (app.js читает cookie).
+    const drogon::Cookie csrf = r ? r->getCookie(para::CsrfCheck::kCookieName)
+                                  : drogon::Cookie();
+    out.csrf = csrf.value();
+    check(out.csrf.size() == 64,
+          label + ": Set-Cookie csrf → токен double-submit (64 hex = 256 бит)");
+    const bool csrfFlags = !csrf.isHttpOnly() && csrf.isSecure() &&
+                           csrf.sameSite() == drogon::Cookie::SameSite::kLax;
+    check(csrfFlags,
+          label + ": cookie csrf — без HttpOnly (читает app.js); Secure; "
+                  "SameSite=Lax (CsrfCheck::cookieFor)");
     return out;
 }
 
@@ -625,7 +662,7 @@ int main()
 {
     std::printf(
         "security_tests — ПОЛНЫЙ HTTP-вариант автотеста безопасности "
-        "02 §9.3 (Э8 шаг 1; DoD №2).\n");
+        "02 §9.3 (Э8 шаги 1–2; DoD №2).\n");
     std::printf("Встроенный сервер Drogon на 127.0.0.1:<свободный порт>; "
                 "две живые cookie-сессии; схема+фикстуры прод-типа.\n");
     std::printf("Пароль тестовых сессий генерируется в памяти процесса и "
@@ -687,6 +724,10 @@ int main()
         return 1;
     }
     drogon::app().loadConfigFile(configPath);
+    // Выдача CSRF-токена на страницах — тот же вызов, что в main.cpp:
+    // сервер в тесте обязан быть конфигурационно идентичен продовому
+    // (CsrfCheck::registerPageIssuanceAdvice — post-handling advice).
+    para::CsrfCheck::registerPageIssuanceAdvice();
     ServerGuard server;  // app().run() в отдельном потоке
 
     // HTTP-клиент — на собственном event loop (не loop приложения).
@@ -699,7 +740,7 @@ int main()
     bool ready = false;
     for (int i = 0; i < 200 && !ready; ++i)
     {
-        auto r = get("", "/healthz");
+        auto r = get(anon, "/healthz");
         ready = r != nullptr && r->getStatusCode() == drogon::k200OK;
         if (!ready)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -738,7 +779,7 @@ int main()
         Json::Value body;
         body["type"] = "academic_certificate";
         body["submit"] = true;
-        auto r = post(anya.token, "/v1/applications", body);
+        auto r = post(anya, "/v1/applications", body);
         expectStatus(r,
                      drogon::k201Created,
                      "шаг 1: POST /v1/applications (Аня) → 201",
@@ -755,7 +796,7 @@ int main()
         if (idA > 0)
         {
             auto own =
-                get(anya.token, "/v1/applications/" + std::to_string(idA));
+                get(anya, "/v1/applications/" + std::to_string(idA));
             expectStatus(own,
                          drogon::k200OK,
                          "контроль шага 1: GET /v1/applications/{id_A} своей "
@@ -768,7 +809,7 @@ int main()
     // Шаг 2: чужая заявка → 403.
     {
         StepScope s("Шаг 2 (02 §9.3): Олег GET чужой заявки → 403");
-        auto r = get(oleg.token, "/v1/applications/" + std::to_string(idA));
+        auto r = get(oleg, "/v1/applications/" + std::to_string(idA));
         expectStatus(r,
                      drogon::k403Forbidden,
                      "шаг 2: GET /v1/applications/{id_A} сессией Олега → 403 "
@@ -782,7 +823,7 @@ int main()
     // Шаг 3: несуществующая заявка → 404.
     {
         StepScope s("Шаг 3 (02 §9.3): Олег GET /v1/applications/999999 → 404");
-        auto r = get(oleg.token, "/v1/applications/999999");
+        auto r = get(oleg, "/v1/applications/999999");
         expectStatus(r,
                      drogon::k404NotFound,
                      "шаг 3: GET /v1/applications/999999 (Олег) → 404 "
@@ -798,7 +839,7 @@ int main()
         StepScope s("Шаг 4 (02 §9.3): Олег GET /v1/grades/{id_ани} → 403");
         const std::string gradePath =
             "/v1/grades/" + std::to_string(seed.gradeAnyaId);
-        auto r = get(oleg.token, gradePath);
+        auto r = get(oleg, gradePath);
         expectStatus(r,
                      drogon::k403Forbidden,
                      "шаг 4: GET /v1/grades/" +
@@ -808,13 +849,13 @@ int main()
                      "GET чужой " + gradePath);
         expectErrorCode(r.get(), "forbidden",
                         "тело 403 — error.code=forbidden");
-        auto own = get(anya.token, gradePath);
+        auto own = get(anya, gradePath);
         expectStatus(own,
                      drogon::k200OK,
                      "контроль шага 4: GET той же оценки сессией Ани → 200 "
                      "(свой объект доступен)",
                      "GET свой " + gradePath);
-        auto missing = get(oleg.token, "/v1/grades/999999");
+        auto missing = get(oleg, "/v1/grades/999999");
         expectStatus(missing,
                      drogon::k404NotFound,
                      "несуществующий grade (Олег → 999999) → 404",
@@ -828,7 +869,7 @@ int main()
         const std::string foreignPath =
             "/v1/notifications/" + std::to_string(seed.notifAnyaUnread) +
             "/read";
-        auto r = post(oleg.token, foreignPath, Json::Value(Json::objectValue));
+        auto r = post(oleg, foreignPath, Json::Value(Json::objectValue));
         expectStatus(r,
                      drogon::k403Forbidden,
                      "шаг 5: POST /v1/notifications/{id_ани}/read сессией "
@@ -842,7 +883,7 @@ int main()
 
         // Факт неизменности (только при заблокированной чужой попытке —
         // иначе проверка тривиально «проходит» на упавшем запросе).
-        auto feed = get(anya.token, "/v1/notifications?unread=1");
+        auto feed = get(anya, "/v1/notifications?unread=1");
         expectStatus(feed,
                      drogon::k200OK,
                      "лента Ани GET /v1/notifications?unread=1 → 200",
@@ -861,7 +902,7 @@ int main()
                   " по-прежнему в unread Ани (чужая попытка не пометила)");
 
         // Контроль: своё → 204 и строка уходит из unread.
-        auto own = post(anya.token,
+        auto own = post(anya,
                         "/v1/notifications/" +
                             std::to_string(seed.notifAnyaOwn) + "/read",
                         Json::Value(Json::objectValue));
@@ -872,7 +913,7 @@ int main()
                          std::to_string(seed.notifAnyaOwn));
         const bool ownMarked = own != nullptr &&
                                own->getStatusCode() == drogon::k204NoContent;
-        auto feed2 = get(anya.token, "/v1/notifications?unread=1");
+        auto feed2 = get(anya, "/v1/notifications?unread=1");
         bool gone = true;
         if (feed2 != nullptr)
         {
@@ -885,7 +926,7 @@ int main()
                   std::to_string(seed.notifAnyaOwn) +
                   " ушла из unread Ани");
 
-        auto missing = post(oleg.token,
+        auto missing = post(oleg,
                             "/v1/notifications/999999/read",
                             Json::Value(Json::objectValue));
         expectStatus(missing,
@@ -898,7 +939,7 @@ int main()
     // Шаг 6: студент на staff-роуте → 403 (+staff → 200).
     {
         StepScope s("Шаг 6 (02 §9.3): Аня вызывает staff-эндпоинт → 403");
-        auto r = get(anya.token, "/v1/staff/applications");
+        auto r = get(anya, "/v1/staff/applications");
         expectStatus(r,
                      drogon::k403Forbidden,
                      "шаг 6: GET /v1/staff/applications сессией Ани "
@@ -906,7 +947,7 @@ int main()
                      "GET /v1/staff/applications student-сессией");
         expectErrorCode(r.get(), "forbidden",
                         "тело 403 — error.code=forbidden");
-        auto staff = get(dean.token, "/v1/staff/applications");
+        auto staff = get(dean, "/v1/staff/applications");
         expectStatus(staff,
                      drogon::k200OK,
                      "контроль шага 6: тот же роут сессией dean.demo "
@@ -919,7 +960,7 @@ int main()
     {
         StepScope s("Шаг 7 (02 §9.3): без cookie → 401/303; /ws → 401 "
                     "без апгрейда");
-        auto me = get("", "/v1/me");
+        auto me = get(anon, "/v1/me");
         expectStatus(me,
                      drogon::k401Unauthorized,
                      "шаг 7: GET /v1/me БЕЗ cookie → 401 (LoginFilter, "
@@ -927,7 +968,7 @@ int main()
                      "GET /v1/me без cookie");
         expectErrorCode(me.get(), "unauthorized",
                         "тело 401 — error.code=unauthorized");
-        auto page = get("", "/schedule");
+        auto page = get(anon, "/schedule");
         expectStatus(page,
                      drogon::k303SeeOther,
                      "шаг 7: GET /schedule БЕЗ cookie → 303 (SSR-страница)",
@@ -964,7 +1005,7 @@ int main()
                      "GET /ws без cookie и без Upgrade");
         expectErrorCode(ws.get(), "unauthorized",
                         "тело 401 /ws — error.code=unauthorized");
-        auto withCookie = get(oleg.token, "/v1/me");
+        auto withCookie = get(oleg, "/v1/me");
         expectStatus(withCookie,
                      drogon::k200OK,
                      "контроль шага 7: /v1/me С cookie Олега → 200 "
@@ -981,7 +1022,7 @@ int main()
         Json::Value slot;
         slot["starts_at"] = "2026-11-13T10:00:00Z";
         slot["ends_at"] = "2026-11-13T11:00:00Z";
-        auto created = post(anya.token, "/v1/rooms/1/bookings", slot);
+        auto created = post(anya, "/v1/rooms/1/bookings", slot);
         expectStatus(created,
                      drogon::k201Created,
                      "предусловие шага 8: POST /v1/rooms/1/bookings (Аня, "
@@ -1000,7 +1041,7 @@ int main()
         if (idB > 0)
         {
 
-        auto r = del(oleg.token, "/v1/room-bookings/" + std::to_string(idB));
+        auto r = del(oleg, "/v1/room-bookings/" + std::to_string(idB));
         expectStatus(r,
                      drogon::k403Forbidden,
                      "шаг 8: DELETE /v1/room-bookings/{id_ани} сессией "
@@ -1012,7 +1053,7 @@ int main()
                                     r->getStatusCode() == drogon::k403Forbidden;
 
         // Факт неизменности (только при заблокированной чужой попытке).
-        auto list = get(anya.token, "/v1/room-bookings");
+        auto list = get(anya, "/v1/room-bookings");
         expectStatus(list,
                      drogon::k200OK,
                      "GET /v1/room-bookings (Аня) → 200",
@@ -1026,14 +1067,14 @@ int main()
                   " после чужого DELETE по-прежнему booked у Ани");
 
         // Контроль: своя бронь → 204 и уходит из списка активных.
-        auto own = del(anya.token, "/v1/room-bookings/" + std::to_string(idB));
+        auto own = del(anya, "/v1/room-bookings/" + std::to_string(idB));
         expectStatus(own,
                      drogon::k204NoContent,
                      "контроль шага 8: свой DELETE (Аня) → 204",
                      "DELETE своей брони id=" + std::to_string(idB));
         const bool ownCancelled = own != nullptr &&
                                   own->getStatusCode() == drogon::k204NoContent;
-        auto list2 = get(anya.token, "/v1/room-bookings");
+        auto list2 = get(anya, "/v1/room-bookings");
         const auto* gone = list2 != nullptr &&
                                    list2->getJsonObject() != nullptr
                                ? findObjWithId(*list2->getJsonObject(), idB)
@@ -1042,12 +1083,117 @@ int main()
               "факт отмены: бронь id=" + std::to_string(idB) +
                   " ушла из «моих броней» Ани (status='booked')");
 
-        auto missing = del(oleg.token, "/v1/room-bookings/999999");
+        auto missing = del(oleg, "/v1/room-bookings/999999");
         expectStatus(missing,
                      drogon::k404NotFound,
                      "несуществующая бронь (Олег → 999999) → 404",
                      "DELETE /v1/room-bookings/999999");
         }
+    }
+
+    // ====================================================================
+    // CSRF double-submit (02 §6.4, Э8 шаг 2): токен обязателен на всех
+    // state-changing; нет/расхождение/подделка → 403 csrf; выдача токена
+    // страницей; GET и вход вне проверки (спека + решение журнала Э8).
+    {
+        StepScope s("CSRF double-submit (02 §6.4, Э8 шаг 2): нет/расхождение "
+                    "токена на state-changing → 403");
+        const std::string appPath = "/v1/applications";
+        Json::Value draft;
+        draft["type"] = "academic_certificate";
+        draft["submit"] = false;  // черновик — только проверка пропуска токена
+
+        // 1) Выдача: страница несёт <meta name="csrf-token"> == cookie csrf
+        //    (advice registerPageIssuanceAdvice, как браузерный путь).
+        auto page = get(anya, "/schedule");
+        expectStatus(page,
+                     drogon::k200OK,
+                     "GET /schedule (Аня) → 200 — страница отдаётся",
+                     "GET /schedule с cookie");
+        std::string metaToken;
+        if (page != nullptr)
+        {
+            const std::string body(page->body());
+            const std::string marker = "name=\"csrf-token\" content=\"";
+            const auto at = body.find(marker);
+            if (at != std::string::npos)
+                metaToken = body.substr(at + marker.size(), 64);
+        }
+        check(!metaToken.empty() && metaToken == anya.csrf,
+              "страница выдаёт токен: <meta name=\"csrf-token\"> == cookie "
+              "csrf (выдача double-submit)");
+
+        // 2) БЕЗ токена → 403 (никаких исключений для приватных POST).
+        auto noTok = sendHttp(drogon::Post, appPath, anya.token, &draft);
+        expectStatus(noTok,
+                     drogon::k403Forbidden,
+                     "POST /v1/applications без csrf (cookie и заголовка нет) "
+                     "→ 403",
+                     "POST " + appPath + " без токена");
+        expectErrorCode(noTok.get(), "csrf",
+                        "тело 403 — error.code=csrf (формат 02 §5.1)");
+
+        // 3) Неверное ЗЕРКАЛО (cookie верная, заголовок иной) → 403.
+        const std::string wrong = randomHex(32);
+        auto badHdr = sendHttp(drogon::Post, appPath, anya.token, &draft,
+                               wrong, anya.csrf);
+        expectStatus(badHdr,
+                     drogon::k403Forbidden,
+                     "POST с X-CSRF-Token != cookie csrf → 403 (расхождение "
+                     "double-submit)",
+                     "POST " + appPath + " неверный заголовок");
+        expectErrorCode(badHdr.get(), "csrf",
+                        "тело 403 — error.code=csrf");
+
+        // 4) ПОДДЕЛАННАЯ cookie csrf (cookie == заголовок == мусор) → 403:
+        //    signed double-submit — cookie привязан к HttpOnly-сессии,
+        //    подкинуть верное значение извне нельзя.
+        auto forged = sendHttp(drogon::Post, appPath, anya.token, &draft,
+                               wrong, wrong);
+        expectStatus(forged,
+                     drogon::k403Forbidden,
+                     "POST с подделанной cookie csrf (cookie=заголовок) → "
+                     "403 (привязка токена к сессии)",
+                     "POST " + appPath + " подделка cookie csrf");
+        expectErrorCode(forged.get(), "csrf",
+                        "тело 403 — error.code=csrf");
+
+        // 5) С валидным токеном → проходит (201; контрпример к 2–4 — 403
+        //    именно про токен, а не сломанный роут).
+        auto withTok = post(anya, appPath, draft);
+        expectStatus(withTok,
+                     drogon::k201Created,
+                     "тот же POST с cookie csrf + X-CSRF-Token → 201 (роут "
+                     "жив, 403 выше — именно про токен)",
+                     "POST " + appPath + " с валидным токеном");
+
+        // 6) GET — чтение: токен не требуется (02 §6.4: state-changing
+        //    только POST/PUT/DELETE).
+        auto readNoTok = sendHttp(drogon::Get, "/v1/me", oleg.token, nullptr);
+        expectStatus(readNoTok,
+                     drogon::k200OK,
+                     "GET /v1/me без токена csrf → 200 (GET — вне CsrfCheck)",
+                     "GET /v1/me без токена");
+
+        // 7) Вход без csrf → 200: POST /v1/auth/login до сессии — токена
+        //    ещё не существует (решение журнала Э8; AGENTS §4 смок).
+        Login oleg2 = loginAs("oleg.demo", testPassword,
+                              "повторный вход Олега (токена csrf нет)");
+        // 8) Приватный state-changing с валидным токеном + инвалидация:
+        //    logout Олега (второй сессии) → 200, затем /v1/me → 401.
+        Json::Value empty;
+        auto out = post(oleg2, "/v1/auth/logout", empty);
+        expectStatus(out,
+                     drogon::k200OK,
+                     "POST /v1/auth/logout с валидным токеном (вторая "
+                     "сессия Олега) → 200",
+                     "POST /v1/auth/logout");
+        auto afterOut = get(oleg2, "/v1/me");
+        expectStatus(afterOut,
+                     drogon::k401Unauthorized,
+                     "/v1/me той же сессией после logout → 401 (сессия "
+                     "инвалидирована на сервере, 02 §6.1)",
+                     "GET /v1/me после logout");
     }
 
     // ====================================================================
@@ -1061,7 +1207,7 @@ int main()
         bad["password"] = wrongPassword;
         for (int attempt = 1; attempt <= 3; ++attempt)
         {
-            auto r = post("", "/v1/auth/login", bad);
+            auto r = post(anon, "/v1/auth/login", bad);
             expectStatus(r,
                          drogon::k401Unauthorized,
                          "неверная попытка " + std::to_string(attempt) +
@@ -1071,7 +1217,7 @@ int main()
                             "тело 401 — error.code=invalid_credentials "
                             "(без деталей логин/пароль)");
         }
-        auto blocked = post("", "/v1/auth/login", bad);
+        auto blocked = post(anon, "/v1/auth/login", bad);
         expectStatus(blocked,
                      drogon::k429TooManyRequests,
                      "4-я попытка (" + target + ") → 429 too_many_attempts "
@@ -1083,7 +1229,7 @@ int main()
               "429 несёт заголовок Retry-After (AuthCtrl)");
 
         // Контроль изоляции лимитера: другой логин не затронут.
-        auto other = post("",
+        auto other = post(anon,
                           "/v1/auth/login",
                           [&] {
                               Json::Value v;

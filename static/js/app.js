@@ -103,6 +103,48 @@
   });
   applyOffline(!navigator.onLine);
 
+  /* ---------- CSRF double-submit (02 §6.4, Э8 шаг 2) ---------- */
+  /* Токен живёт в cookie csrf (сервер выдаёт его и <meta name="csrf-token">
+     в <head> каждой страницы — канон htmx). Перехватчик fetch добавляет
+     заголовок X-CSRF-Token ко ВСЕМ не-GET запросам приложения
+     (относительные URL того же origin); htmx-запросам — слушатель
+     htmx:configRequest. GET-чтение токен не носит (02 §6.4: state-changing
+     — только POST/PUT/DELETE). Расхождение/отсутствие сервер отвечает 403
+     {error:{code:"csrf"}} — «обновите страницу» (тогда advice выдаст
+     свежий токен). */
+  const csrfToken = () => {
+    const match = document.cookie.match(/(?:^|;\s*)csrf=([A-Fa-f0-9]+)/);
+    if (match) return match[1];
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  };
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD' && url.charAt(0) === '/') {
+      const token = csrfToken();
+      if (token) {
+        const opts = init ? Object.assign({}, init) : {};
+        opts.headers = Object.assign({}, opts.headers, { 'X-CSRF-Token': token });
+        return nativeFetch(input, opts);
+      }
+    }
+    return nativeFetch(input, init);
+  };
+  if (window.htmx) {
+    /* htmx идёт поверх XHR (перехватчик fetch его не видит) — свой канал.
+       htmx-запросы проекта сегодня только GET (фрагменты), но защита
+       ставится на все будущие не-GET сразу. */
+    document.body.addEventListener('htmx:configRequest', (event) => {
+      const verb = String(event.detail.verb || 'get').toLowerCase();
+      if (verb !== 'get') {
+        const token = csrfToken();
+        if (token) event.detail.headers['X-CSRF-Token'] = token;
+      }
+    });
+  }
+
   /* ---------- единый доступ к /v1 API ---------- */
   /* Возвращает разобранный JSON или null. Не ходит в сеть офлайн; ошибки
      читает из тела {error:{code,message}} (02 §5.1); 5xx — тост, ошибки

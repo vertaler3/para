@@ -2,6 +2,7 @@
 
 #include <chrono>
 
+#include "filters/CsrfCheck.h"
 #include "services/PasswordHasher.h"
 #include "services/UserService.h"
 #include "utils/ApiError.h"
@@ -38,8 +39,11 @@ void AuthCtrl::loginPage(const HttpRequestPtr&,
 void AuthCtrl::login(const HttpRequestPtr& req,
                      std::function<void(const HttpResponsePtr&)>&& cb)
 {
-    // CSRF-проверка на state-changing — Э8 (02 §6.4: double-submit +
-    // HX-Request); сейчас барьер — SameSite=Lax у cookie.
+    // CSRF double-submit — с шага 2 Э8 проверяется CsrfCheck на всех
+    // приватных state-changing (вызов из LoginFilter, 02 §6.4). Сам вход —
+    // до сессии, токена ещё не существует: вне CsrfCheck (журнал Э8 шага 2;
+    // AGENTS §4 смок сохранён), барьеры — SameSite=Lax cookie и лимитер
+    // ниже.
     const auto json = req->getJsonObject();
     if (json == nullptr || !json->isMember("login") ||
         !json->isMember("password"))
@@ -110,6 +114,11 @@ void AuthCtrl::login(const HttpRequestPtr& req,
                     auto resp = jsonResponse(std::move(body), k200OK);
                     resp->addHeader("Set-Cookie",
                                     SessionService::sessionCookie(token, ttl));
+                    // CSRF double-submit (02 §6.4, Э8 шаг 2): вместе с
+                    // сессией выдаём cookie csrf (привязан к этой сессии,
+                    // без HttpOnly — токен читает app.js; CsrfCheck.h) —
+                    // все state-changing после входа требуют токена.
+                    resp->addCookie(CsrfCheck::cookieFor(token, ttl));
                     cb(resp);
                 });
         });

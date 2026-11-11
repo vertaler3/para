@@ -1,5 +1,6 @@
 #include "filters/LoginFilter.h"
 
+#include "filters/CsrfCheck.h"
 #include "utils/ApiError.h"
 
 namespace {
@@ -79,6 +80,23 @@ void LoginFilter::doFilter(const HttpRequestPtr& req,
                 return;
             }
             req->attributes()->insert("session", std::move(*session));
+            // CSRF double-submit (02 §6.4, шаг 2 Э8): все приватные
+            // state-changing (POST/PUT/DELETE) — через CsrfCheck::verify.
+            // ЕДИНСТВЕННАЯ точка вызова: покрывает все текущие и будущие
+            // роуты под этим фильтром (правило 02 §6.3 «новые приватные
+            // роуты обязаны добавляться с LoginFilter» — дрейфа нет).
+            // GET-чтение и /ws-handshake не проверяются — спека: state-
+            // changing только POST/PUT/DELETE. POST /v1/auth/login сюда
+            // не доходит (публичный, до сессии токена нет — журнал Э8).
+            const HttpMethod method = req->method();
+            if (method == Post || method == Put || method == Delete)
+            {
+                if (auto csrfFail = para::CsrfCheck::verify(req))
+                {
+                    fcb(std::move(*csrfFail));
+                    return;
+                }
+            }
             fccb();
         });
 }
