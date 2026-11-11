@@ -11,6 +11,7 @@
 #include "services/NotifyDispatcher.h"
 #include "services/ReminderService.h"
 #include "services/WsRegistry.h"
+#include "utils/ApiError.h"
 
 int main(int argc, char* argv[]) {
     //Load config file: --config <path> — его передаёт ENTRYPOINT Dockerfile
@@ -112,6 +113,28 @@ int main(int argc, char* argv[]) {
     // Referrer-Policy. Advice на СОЗДАНИЕ ответа — единственная точка
     // на процесс, контроллеры не трогаются (SecurityHeaders.h).
     para::SecurityHeaders::registerAdvice();
+
+    // Неизвестные пути API — единый формат ошибок 02 §5.1 (находка
+    // Э1-404-HTML «Неизвестные /v1-пути отвечают HTML-404 Drogon», закрыта
+    // кодом в шаге 7 Э8): router-miss под /v1/* и /ws/* отвечает
+    // {"error":{"code":"not_found",…}} 404. Regex-роут drogon
+    // (registerHandlerViaRegex, HttpAppFramework.h v1.9.14) проверяется
+    // ПОСЛЕ статических роутов — живой прогон шага 7: /v1/me со сессией
+    // → 200 (статические приоритетны), /v1/no-such → JSON. Публично и
+    // без CSRF: путь не существует — никакого действия защищать нечего,
+    // 404 не раскрывает больше, чем HTML-заглушка. SSR-пути (вне /v1|/ws)
+    // остаются на HTML-заглушке Drogon (заголовки — SecurityHeaders).
+    // Тот же вызов делает security_tests — сервер теста конфигурационно
+    // идентичен продовому.
+    drogon::app().registerHandlerViaRegex(
+        "^/(?:v1|ws)/.*",
+        [](const drogon::HttpRequestPtr&,
+           std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+            cb(para::api::errorResponse("not_found",
+                                        "Путь не найден",
+                                        drogon::k404NotFound));
+        },
+        {drogon::Get, drogon::Post, drogon::Put, drogon::Delete});
 
     // Таймер Э6 (гайд BE §9; 02 §4 поток 4): раз в минуту — базовое
     // напоминание «за 1 день» (deadlines.reminded), персональные

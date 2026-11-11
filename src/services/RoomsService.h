@@ -158,12 +158,29 @@ class RoomsService
     // И блокировки деканата ('blocked': перекрытие/тот же слот → Blocked —
     // бронирование поверх блокировки исключено; UNIQUE частичный индекс
     // blocked-строки не защищает — только серверная проверка).
+    // С шага 7 Э8 проверка и вставка — ОДИН атомарный guarded
+    // INSERT..SELECT (гонка Э5а: прежние раздельные SELECT+INSERT пропускали
+    // параллельные POST с разными пересекающимися интервалами); если
+    // предикат NOT EXISTS не вставил строку (affectedRows = 0), статус
+    // занятости классифицирует classifyTaken.
     static void create(drogon::orm::DbClientPtr db,
                        int64_t roomId,
                        int64_t userId,
                        const std::string& startsAt,
                        const std::string& endsAt,
                        std::function<void(CreateResult)> cb);
+
+    // Внутренняя (вызывается только из create): классификация занятого
+    // слота после нулевого affectedRows guarded INSERT — прежние две
+    // SELECT-проверки: «тот же starts_at» → SlotTaken (400), частичное
+    // перекрытие 'booked' → Conflict (409), перекрытие 'blocked' →
+    // Blocked; ничего не нашлось (гонка с отменой между INSERT и
+    // классификацией) — консервативный Conflict.
+    static void classifyTaken(drogon::orm::DbClientPtr db,
+                              int64_t roomId,
+                              const std::string& startsAt,
+                              const std::string& endsAt,
+                              std::function<void(CreateResult)> cb);
 
     // GET /v1/room-bookings — МОИ активные брони (status='booked'), по
     // starts_at (idx_bookings_user (user_id, starts_at) — 02 §4.2 «мои

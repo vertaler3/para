@@ -45,4 +45,15 @@ int LoginLimiter::failures(const std::string& login) const
     return it == entries_.end() ? 0 : it->second.failures;
 }
 
+int64_t LoginLimiter::lockUntilSec(const std::string& login,
+                                   int64_t nowSec) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = entries_.find(login);
+    if (it == entries_.end())
+        return 0;
+    const Entry& entry = it->second;
+    return entry.lockedUntil > nowSec ? entry.lockedUntil : 0;
+}
+
 }  // namespace para

@@ -36,11 +36,24 @@ class UserService
         int64_t userId,
         std::function<void(std::optional<Json::Value>)> cb);
 
-    // Зеркало лимитера в users.failed_attempts (02 §4.1/§6.4);
-    // best-effort: ошибки пишутся в лог, ход входа не ломают.
-    static void mirrorFailedAttempts(drogon::orm::DbClientPtr db,
-                                     const std::string& login,
-                                     int failures);
+    // Полное зеркало лимитера в users (02 §4.1/§6.4; Э8 шаг 7 — находка
+    // Э1 «неполное зеркало»: раньше писался только failed_attempts,
+    // locked_until не писал никто, а успешный вход не сбрасывал зеркала).
+    // Неудача пишет failed_attempts И locked_until (unix-сек → ISO-UTC,
+    // 0 → NULL — блокировки нет); успех — resetLimiterMirror (оба поля в
+    // исходные). best-effort: ошибки пишутся в лог, ход входа не ломают.
+    // Зеркало — СОСТОЯНИЕ ДЛЯ НАБЛЮДЕНИЯ, а не источник лимитера:
+    // blockedFor читает память процесса; сохранение блокировок между
+    // рестартами —
+    // Р-26 (сознательно отложено, там же точная задача).
+    static void mirrorLimiterState(drogon::orm::DbClientPtr db,
+                                   const std::string& login,
+                                   int failures,
+                                   int64_t lockedUntilSec);
+
+    // Сброс зеркала лимитера после успешного входа (см. выше).
+    static void resetLimiterMirror(drogon::orm::DbClientPtr db,
+                                   const std::string& login);
 };
 
 }  // namespace para

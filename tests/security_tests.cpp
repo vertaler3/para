@@ -52,12 +52,22 @@
 //   +429 лимитера входа (02 §6.4): 3 неверных пароля под одним логином →
 //           4-я попытка → 429 too_many_attempts + Retry-After (штатный
 //           LoginLimiter: блок 15 с — тест НЕ ждёт разблокировку);
+//           +зеркало лимитера в users (Э8 шаг 7, находка Э1 «неполное
+//           зеркало»): неудача реального аккаунта пишет failed_attempts,
+//           успешный вход сбрасывает его и locked_until (опрос БД —
+//           зеркальный UPDATE асинхронный); для несуществующего логина
+//           строки в users нет (UPDATE-only — ограничение зеркала,
+//           зафиксировано в UserService.h);
 //           +контроль изоляции: другой логин тем же паролем → 200;
+//   +Формат 404 неизвестных путей (02 §5.1, Э8 шаг 7, находка Э1-404-HTML):
+//           /v1/no-such → JSON {"error":{"code":"not_found"}}; /no-such
+//           (SSR-сторона) → HTML-заглушка Drogon; заголовки безопасности —
+//           на обоих (в блоке заголовков ниже);
 //   +Заголовки безопасности (02 §6.4, шаг 3 Э8): nosniff / X-Frame-Options:
 //           DENY / CSP / Referrer-Policy — точные значения на каждом
 //           классе ответов (SSR, статика, JSON-401 фильтра, 303,
-//           404-заглушка роутера, авторизованная страница); в CSP нет
-//           unsafe-eval.
+//           JSON-404 и HTML-404 роутера, авторизованная страница); в CSP
+//           нет unsafe-eval.
 //
 // СЕССИИ/ПАРОЛЬ (AGENTS.md §5.2): логины — anya.demo (id 1), oleg.demo
 // (id 2), dean.demo (id 5) из фикстур. Демо-пароль жюри тесту НЕ известен:
@@ -129,6 +139,7 @@
 #include "services/MigrationRunner.h"
 #include "services/PasswordHasher.h"
 #include "services/SessionService.h"
+#include "utils/ApiError.h"
 
 namespace fs = std::filesystem;
 
@@ -706,7 +717,7 @@ int main()
 {
     std::printf(
         "security_tests — ПОЛНЫЙ HTTP-вариант автотеста безопасности "
-        "02 §9.3 (Э8 шаги 1–3; DoD №2).\n");
+        "02 §9.3 (Э8 шаги 1–3; закрытие находок — шаг 7; DoD №2).\n");
     std::printf("Встроенный сервер Drogon на 127.0.0.1:<свободный порт>; "
                 "две живые cookie-сессии; схема+фикстуры прод-типа.\n");
     std::printf("Пароль тестовых сессий генерируется в памяти процесса и "
@@ -776,6 +787,19 @@ int main()
     // что в main.cpp (SecurityHeaders::registerAdvice — advice на
     // создание ответа, самая ранняя точка).
     para::SecurityHeaders::registerAdvice();
+    // Неизвестные пути API — JSON 02 §5.1 (Э8 шаг 7, находка Э1-404-HTML) —
+    // тот же вызов, что в main.cpp: regex-роут проверяется после
+    // статических (проверка ниже: /v1/me сессией → 200, /v1/no-such →
+    // JSON-404, /no-such → HTML-заглушка).
+    drogon::app().registerHandlerViaRegex(
+        "^/(?:v1|ws)/.*",
+        [](const drogon::HttpRequestPtr&,
+           std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+            cb(para::api::errorResponse("not_found",
+                                        "Путь не найден",
+                                        drogon::k404NotFound));
+        },
+        {drogon::Get, drogon::Post, drogon::Put, drogon::Delete});
     ServerGuard server;  // app().run() в отдельном потоке
 
     // HTTP-клиент — на собственном event loop (не loop приложения).
@@ -1228,13 +1252,14 @@ int main()
         Login oleg2 = loginAs("oleg.demo", testPassword,
                               "повторный вход Олега (токена csrf нет)");
         // 8) Приватный state-changing с валидным токеном + инвалидация:
-        //    logout Олега (второй сессии) → 200, затем /v1/me → 401.
+        //    logout Олега (второй сессии) → 204 (канон 02 §5.2, Э8 шаг 7 —
+        //    находка Э1-logout-200 закрыта кодом), затем /v1/me → 401.
         Json::Value empty;
         auto out = post(oleg2, "/v1/auth/logout", empty);
         expectStatus(out,
-                     drogon::k200OK,
+                     drogon::k204NoContent,
                      "POST /v1/auth/logout с валидным токеном (вторая "
-                     "сессия Олега) → 200",
+                     "сессия Олега) → 204 (02 §5.2)",
                      "POST /v1/auth/logout");
         auto afterOut = get(oleg2, "/v1/me");
         expectStatus(afterOut,
@@ -1276,7 +1301,61 @@ int main()
         check(!headerOf(blocked.get(), "Retry-After").empty(),
               "429 несёт заголовок Retry-After (AuthCtrl)");
 
-        // Контроль изоляции лимитера: другой логин не затронут.
+        // Зеркало лимитера в users (Э8 шаг 7 — находка Э1 «неполное
+        // зеркало»: раньше писался только failed_attempts, locked_until
+        // не писал никто, успешный вход не сбрасывал). Зеркальный UPDATE —
+        // асинхронный, поэтому значения читаются из БД опросом с дедлайном
+        // (до 2 с) — не «ожидание конкретного тайминга», а ожидание факта
+        // записи. dean.demo: одна неудача → failed_attempts=1 (блок ещё
+        // не включён — locked_until NULL), затем успех → сброс.
+        RawDb mirrorDb(dbPath);
+        check(mirrorDb.ok(), "зеркало: raw-соединение к тестовой БД открыто");
+        const auto pollMirror = [&](const char* sql,
+                                    int64_t expected,
+                                    const char* what) {
+            for (int i = 0; i < 40; ++i)
+            {
+                int64_t v = -1;
+                if (mirrorDb.scalarInt64(sql, v) && v == expected)
+                {
+                    check(true, what);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            check(false, what);
+        };
+
+        // 1 неудача dean.demo (блокировки ещё нет: 1 < 3).
+        Json::Value deanBad;
+        deanBad["login"] = "dean.demo";
+        deanBad["password"] = wrongPassword;
+        auto deanFail = post(anon, "/v1/auth/login", deanBad);
+        expectStatus(deanFail,
+                     drogon::k401Unauthorized,
+                     "неудача dean.demo (1/3) → 401 (для проверки зеркала)",
+                     "POST /v1/auth/login неверный пароль");
+        pollMirror("SELECT failed_attempts FROM users WHERE login = "
+                   "'dean.demo'",
+                   1,
+                   "зеркало: неудача dean.demo пишет users.failed_attempts=1 "
+                   "(UserService::mirrorLimiterState)");
+        pollMirror("SELECT COUNT(*) FROM users WHERE login = 'dean.demo' "
+                   "AND locked_until IS NOT NULL",
+                   0,
+                   "зеркало: без блокировки (1<3) locked_until остаётся NULL");
+
+        // Цель-призрак (лимитер-тест выше): строки в users нет — зеркало
+        // UPDATE-only, для несуществующего логина ничего не пишет
+        // (ограничение зеркала, зафиксировано в UserService.h).
+        pollMirror("SELECT COUNT(*) FROM users WHERE login = "
+                   "'limiter-check.demo'",
+                   0,
+                   "зеркало: у логина-призрака (limiter-check.demo) строки "
+                   "в users нет — UPDATE-only, честное ограничение");
+
+        // Контроль изоляции лимитера: другой логин не затронут; успешный
+        // вход dean.demo заодно проверяет СБРОС зеркала.
         auto other = post(anon,
                           "/v1/auth/login",
                           [&] {
@@ -1290,6 +1369,15 @@ int main()
                      "контроль изоляции: другой логин (dean.demo) НЕ "
                      "заблокирован → 200",
                      "POST /v1/auth/login dean.demo");
+        pollMirror("SELECT failed_attempts FROM users WHERE login = "
+                   "'dean.demo'",
+                   0,
+                   "зеркало: успешный вход сбрасывает users.failed_attempts "
+                   "→ 0 (UserService::resetLimiterMirror)");
+        pollMirror("SELECT COUNT(*) FROM users WHERE login = 'dean.demo' "
+                   "AND locked_until IS NOT NULL",
+                   0,
+                   "зеркало: после успеха locked_until NULL");
     }
 
     // ====================================================================
@@ -1414,17 +1502,35 @@ int main()
                      para::SecurityHeaders::kCspValue,
                      "303 /schedule: CSP");
 
-        // 6) 404-заглушка роутера (Э1-находка: неизвестные пути отвечают
-        //    HTML-404 Drogon) — заголовки обязаны быть и на ней.
-        auto lost = get(anon, "/v1/no-such-" + randomHex(6));
-        expectStatus(lost,
+        // 6) Неизвестные пути, два класса (Э8 шаг 7 — находка Э1-404-HTML
+        //    закрыта кодом): под /v1 — JSON 02 §5.1 (registerHandlerViaRegex
+        //    в main.cpp/тесте), вне /v1 — HTML-заглушка Drogon. Заголовки
+        //    обязаны быть на обоих; JSON-проверка заодно доказывает, что
+        //    regex-роут НЕ заслоняет статические: /v1/me выше → 401
+        //    контролируемым путём, /v1/applications шага 2–3 → 403/404
+        //    контроллеров.
+        auto lostApi = get(anon, "/v1/no-such-" + randomHex(6));
+        expectStatus(lostApi,
                      drogon::k404NotFound,
-                     "GET /v1/no-such-<hex> → 404 — заглушка роутера",
-                     "GET несуществующий путь");
-        expectHeader(lost,
+                     "GET /v1/no-such-<hex> → 404 — JSON-формат API",
+                     "GET несуществующий /v1-путь");
+        expectErrorCode(lostApi.get(),
+                        "not_found",
+                        "тело 404 /v1 — error.code=not_found (формат "
+                        "02 §5.1, Э8 шаг 7)");
+        expectHeader(lostApi,
                      "X-Content-Type-Options",
                      "nosniff",
-                     "404 роутера: nosniff");
+                     "JSON-404 /v1: nosniff");
+        auto lostPage = get(anon, "/no-such-" + randomHex(6));
+        expectStatus(lostPage,
+                     drogon::k404NotFound,
+                     "GET /no-such-<hex> → 404 — HTML-заглушка (SSR-сторона)",
+                     "GET несуществующий SSR-путь");
+        expectHeader(lostPage,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "HTML-404 роутера: nosniff");
 
         // 7) Авторизованные страницы (живая сессия Ани): главная и
         //    /schedule — заголовки на месте после входа.

@@ -90,9 +90,15 @@ void AuthCtrl::login(const HttpRequestPtr& req,
                 // именно неверно; неудача учитывается и для несуществующего
                 // логина.
                 limiter_.onFailure(login, nowSec());
-                UserService::mirrorFailedAttempts(
+                // Полное зеркало лимитера (02 §4.1/§6.4; Э8 шаг 7 — находка
+                // Э1 «неполное зеркало»): failed_attempts И locked_until
+                // одной строкой; для несуществующего логина UPDATE не
+                // меняет строк (зеркало — только для реальных учёток,
+                // UserService.h). Часы берутся здесь, в момент неудачи.
+                UserService::mirrorLimiterState(
                     app().getDbClient("para"), login,
-                    limiter_.failures(login));
+                    limiter_.failures(login),
+                    limiter_.lockUntilSec(login, nowSec()));
                 // Единый message для неверного логина и неверного пароля —
                 // без деталей, что именно не подошло (02 §5.2).
                 cb(api::errorResponse("invalid_credentials",
@@ -101,6 +107,11 @@ void AuthCtrl::login(const HttpRequestPtr& req,
                 return;
             }
             limiter_.onSuccess(login);
+            // Сброс зеркала в users (Э8 шаг 7 — вторая половина находки
+            // Э1 «неполное зеркало»: раньше успешный вход не трогал
+            // users.failed_attempts/locked_until, и в БД застревали
+            // старые значения). best-effort — ошибки в лог (UserService).
+            UserService::resetLimiterMirror(app().getDbClient("para"), login);
             const int64_t userId = user->id;
             const std::string role = user->role;
             const int64_t ttl = SessionService::currentTtlSec();
@@ -141,9 +152,15 @@ void AuthCtrl::logout(const HttpRequestPtr& req,
     const std::string token = req->getCookie(SessionService::kCookieName);
     SessionService::remove(app().getDbClient("para"), token,
                            [cb = std::move(cb)]() {
-                               Json::Value body;
-                               body["ok"] = true;
-                               cb(jsonResponse(std::move(body), k200OK));
+                               // 204 No Content — канон 02 §5.2:547
+                               // («Выход … | 204»); находка Э1-logout-200
+                               // («код к 204 либо Р-N») закрыта кодом в
+                               // шаге 7 Э8: тело ответа не возвращается.
+                               // FE не ломается: app.js проверяет resp.ok
+                               // (true для всего 2xx), тело не читает.
+                               auto resp = HttpResponse::newHttpResponse();
+                               resp->setStatusCode(k204NoContent);
+                               cb(resp);
                            });
 }
 

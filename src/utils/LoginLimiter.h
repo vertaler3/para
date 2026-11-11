@@ -33,6 +33,13 @@ class LoginLimiter
     // Текущее число подряд идущих неудач (для зеркалирования в users).
     int failures(const std::string& login) const;
 
+    // Действующий блок как unix-сек (для зеркала users.locked_until —
+    // Э8 шаг 7, находка Э1 «неполное зеркало»); 0 — блокировки нет или
+    // она уже истекла. Читатель зеркала — оператор/другой код, а не
+    // рестарт: чтение users.locked_until при старте (полное сохранение
+    // блокировок между рестартами) — Р-26, сознательно не здесь.
+    int64_t lockUntilSec(const std::string& login, int64_t nowSec) const;
+
   private:
     struct Entry
     {

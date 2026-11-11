@@ -324,120 +324,142 @@ void RoomsService::create(DbClientPtr db,
                 cb(CreateResult{CreateStatus::NotFound, Json::Value()});
                 return;
             }
-            // Серверная проверка пересечений — только активные брони
-            // (status='booked', idx_bookings_active, см. шапку slots);
-            // параметры в тексте по порядку $1→$3 (урок Э5 шаг 2).
-            *db << "SELECT starts_at FROM room_bookings WHERE room_id = $1 "
-                   "AND status = 'booked' AND starts_at < $2 AND ends_at > $3"
-                << roomId << endsAt << startsAt >>
+            // ГОНКА БРОНЕЙ (находка Э5а «create: SELECT и INSERT не в одной
+            // транзакции», закрыта кодом в шаге 7 Э8): раньше проверка
+            // пересечения и вставка были РАЗДЕЛЬНЫМИ командами — параллельные
+            // POST с РАЗНЫМИ starts_at, пересекающимися по времени, оба
+            // проходили (оба SELECT ничего не видели; UNIQUE
+            // idx_bookings_active ловит только одинаковый starts_at). Теперь
+            // проверка и вставка — ОДИН атомарный guarded INSERT..SELECT:
+            // предикат NOT EXISTS исполняется движком под тем же блоком
+            // записи, что вставка (SQLite: инструкция атомарна, писатели
+            // сериализуются, busy_timeout ждёт), поэтому второй параллельный
+            // POST видит вставленную строку и не вставляет
+            // (affectedRows = 0 → классификация ниже).
+            // Порядок $N в тексте = порядку биндинга (урок Э5 шаг 2): первые
+            // вхождения $1→$4 в SELECT-списке, дальше переиспользование.
+            // Проверка covers обе линии прежних SELECT'ов: активные брони
+            // ('booked', idx_bookings_active) и блокировки деканата
+            // ('blocked' — единственная линия проверки, UNIQUE её не
+            // закрывает).
+            *db << "INSERT INTO room_bookings (room_id, user_id, starts_at, "
+                   "ends_at, status) SELECT $1, $2, $3, $4, 'booked' WHERE "
+                   "NOT EXISTS (SELECT 1 FROM room_bookings WHERE room_id = "
+                   "$1 AND status IN ('booked', 'blocked') AND starts_at < "
+                   "$4 AND ends_at > $3)"
+                << roomId << userId << startsAt << endsAt >>
                 // Урок Э2 шаг 1 (двойной move в цепочке >>): каждая ветка
                 // копирует cb — move в success-ветке оставил бы error-ветке
-                // пустой std::function → bad_function_call на error-пути
-                // (поймано тестом «исключение БД на INSERT» этого шага).
-                [db, roomId, userId, startsAt, endsAt, cb](
-                    const drogon::orm::Result& rows) {
-                    // «Тот же слот» — пересекающаяся бронь с тем же starts_at
-                    // (уникальный ключ idx_bookings_active): двойная бронь —
-                    // 400 (гайд BE §8). Частичное перекрытие — 409 «только
-                    // что заняли» (случай FE-сетки, 03 §4.9.5).
-                    for (const auto& row : rows)
+                // пустой std::function → bad_function_call на error-пути.
+                [db, roomId, startsAt, endsAt, cb](
+                    const drogon::orm::Result& inserted) {
+                    if (inserted.affectedRows() == 0)
                     {
-                        if (row["starts_at"].as<std::string>() == startsAt)
-                        {
-                            cb(CreateResult{CreateStatus::SlotTaken,
-                                            Json::Value()});
-                            return;
-                        }
-                    }
-                    if (rows.size() > 0)
-                    {
-                        cb(CreateResult{CreateStatus::Conflict, Json::Value()});
+                        // Слот занят (пересечение с 'booked' или 'blocked').
+                        // Классификация ПОСЛЕ факта — прежними двумя
+                        // SELECT'ами: «тот же starts_at» (UNIQUE
+                        // idx_bookings_active) → SlotTaken/400 «двойная
+                        // бронь» (гайд BE §8); частичное перекрытие →
+                        // Conflict/409 «только что заняли» (03 §4.9.5);
+                        // блокировка деканата → Blocked. Если классификация
+                        // ничего не находит (гонка с отменой брони между
+                        // INSERT и классификацией) — консервативный
+                        // Conflict: слот в момент попытки был занят.
+                        classifyTaken(db,
+                                      roomId,
+                                      startsAt,
+                                      endsAt,
+                                      std::move(cb));
                         return;
                     }
-                    // Шаг 3: блокировки деканата ('blocked') тоже закрывают
-                    // слоты — бронирование поверх блокировки исключено.
-                    // Отдельный запрос (не IN): 'booked' ветка выше держит
-                    // idx_bookings_active; blocked-строки единичны.
-                    // UNIQUE частичный индекс blocked НЕ защищает — это
-                    // единственная линия проверки.
-                    *db << "SELECT 1 FROM room_bookings WHERE room_id = $1 "
-                           "AND status = 'blocked' AND starts_at < $2 AND "
-                           "ends_at > $3"
-                        << roomId << endsAt << startsAt >>
-                        [db, roomId, userId, startsAt, endsAt,
-                         cb](const drogon::orm::Result& rows) {
-                            if (rows.size() > 0)
-                            {
-                                cb(CreateResult{CreateStatus::Blocked,
-                                                Json::Value()});
-                                return;
-                            }
-                            // INSERT: статус — литерал CHECK 0005; порядок
-                            // $1→$4 = порядку биндинга. Исключение БД здесь
-                            // — нарушение ограничения в гонке (UNIQUE
-                            // idx_bookings_active: серверная проверка обеих
-                            // параллельных POST прошла до INSERT'ов; прочие
-                            // предусловия проверены выше) — маппится в
-                            // SlotTaken/400, НЕ в 500 (постановка шага 2).
-                            *db << "INSERT INTO room_bookings (room_id, "
-                                   "user_id, starts_at, ends_at, status) "
-                                   "VALUES ($1, $2, $3, $4, 'booked')"
-                                << roomId << userId << startsAt << endsAt >>
-                                [db, roomId, startsAt, endsAt, cb](
-                                    const drogon::orm::Result&) {
-                                    // id вставленной строки: активная бронь
-                                    // (room_id, starts_at) единственна по
-                                    // idx_bookings_active — детерминированный
-                                    // SELECT по ключу вместо
-                                    // last_insert_rowid (пул соединений).
-                                    *db << "SELECT id FROM room_bookings "
-                                           "WHERE room_id = $1 AND starts_at "
-                                           "= $2 AND status = 'booked'"
-                                        << roomId << startsAt >>
-                                        [roomId, startsAt, endsAt, cb](
-                                            const drogon::orm::Result& rows) {
-                                            Json::Value body(Json::objectValue);
-                                            if (!rows.empty())
-                                                body["id"] =
-                                                    rows[0]["id"]
-                                                        .as<int64_t>();
-                                            body["room_id"] = roomId;
-                                            body["starts_at"] = startsAt;
-                                            body["ends_at"] = endsAt;
-                                            body["status"] = "booked";
-                                            cb(CreateResult{
-                                                CreateStatus::Created,
-                                                std::move(body)});
-                                        } >>
-                                        [cb](const DrogonDbException& e) {
-                                            LOG_ERROR << "RoomsService::create"
-                                                         "(select id): "
-                                                      << e.base().what();
-                                            cb(CreateResult{
-                                                CreateStatus::Error,
-                                                Json::Value()});
-                                        };
-                                } >>
-                                [cb](const DrogonDbException& e) {
-                                    LOG_ERROR << "RoomsService::create(insert): "
-                                              << e.base().what();
-                                    cb(CreateResult{CreateStatus::SlotTaken,
-                                                    Json::Value()});
-                                };
+                    // id вставленной строки: активная бронь
+                    // (room_id, starts_at) единственна по
+                    // idx_bookings_active — детерминированный
+                    // SELECT по ключу вместо last_insert_rowid
+                    // (пул соединений).
+                    *db << "SELECT id FROM room_bookings WHERE room_id = $1 "
+                           "AND starts_at = $2 AND status = 'booked'"
+                        << roomId << startsAt >>
+                        [roomId, startsAt, endsAt, cb](
+                            const drogon::orm::Result& rows) {
+                            Json::Value body(Json::objectValue);
+                            if (!rows.empty())
+                                body["id"] = rows[0]["id"].as<int64_t>();
+                            body["room_id"] = roomId;
+                            body["starts_at"] = startsAt;
+                            body["ends_at"] = endsAt;
+                            body["status"] = "booked";
+                            cb(CreateResult{CreateStatus::Created,
+                                            std::move(body)});
                         } >>
                         [cb](const DrogonDbException& e) {
-                            LOG_ERROR << "RoomsService::create(blocked check): "
+                            LOG_ERROR << "RoomsService::create(select id): "
                                       << e.base().what();
                             cb(CreateResult{CreateStatus::Error,
                                             Json::Value()});
                         };
                 } >>
                 [cb](const DrogonDbException& e) {
-                    LOG_ERROR << "RoomsService::create(overlap check): "
+                    // Исключение БД здесь — нарушение ограничения в гонке
+                    // (UNIQUE idx_bookings_active) — маппится в
+                    // SlotTaken/400, НЕ в 500 (постановка Э5а шага 2).
+                    LOG_ERROR << "RoomsService::create(insert): "
+                              << e.base().what();
+                    cb(CreateResult{CreateStatus::SlotTaken, Json::Value()});
+                };
+        });
+}
+
+void RoomsService::classifyTaken(DbClientPtr db,
+                                 int64_t roomId,
+                                 const std::string& startsAt,
+                                 const std::string& endsAt,
+                                 std::function<void(CreateResult)> cb)
+{
+    // Классификация занятого слота для ветки affectedRows = 0 (см. create):
+    // те же предикаты, что раньше стояли ДО вставки. cb копируется в каждую
+    // ветку (урок Э2).
+    *db << "SELECT starts_at FROM room_bookings WHERE room_id = $1 "
+           "AND status = 'booked' AND starts_at < $2 AND ends_at > $3"
+        << roomId << endsAt << startsAt >>
+        [db, roomId, startsAt, endsAt, cb](const drogon::orm::Result& rows) {
+            // «Тот же слот» — пересекающаяся бронь с тем же starts_at
+            // (уникальный ключ idx_bookings_active): двойная бронь —
+            // 400. Частичное перекрытие — 409.
+            for (const auto& row : rows)
+            {
+                if (row["starts_at"].as<std::string>() == startsAt)
+                {
+                    cb(CreateResult{CreateStatus::SlotTaken, Json::Value()});
+                    return;
+                }
+            }
+            if (rows.size() > 0)
+            {
+                cb(CreateResult{CreateStatus::Conflict, Json::Value()});
+                return;
+            }
+            *db << "SELECT 1 FROM room_bookings WHERE room_id = $1 "
+                   "AND status = 'blocked' AND starts_at < $2 AND "
+                   "ends_at > $3"
+                << roomId << endsAt << startsAt >>
+                [cb](const drogon::orm::Result& blockedRows) {
+                    cb(CreateResult{blockedRows.size() > 0
+                                        ? CreateStatus::Blocked
+                                        : CreateStatus::Conflict,
+                                    Json::Value()});
+                } >>
+                [cb](const DrogonDbException& e) {
+                    LOG_ERROR << "RoomsService::classifyTaken(blocked): "
                               << e.base().what();
                     cb(CreateResult{CreateStatus::Error, Json::Value()});
                 };
-        });
+        } >>
+        [cb](const DrogonDbException& e) {
+            LOG_ERROR << "RoomsService::classifyTaken(booked): "
+                      << e.base().what();
+            cb(CreateResult{CreateStatus::Error, Json::Value()});
+        };
 }
 
 void RoomsService::myBookings(DbClientPtr db,

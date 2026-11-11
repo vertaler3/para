@@ -100,10 +100,13 @@ TEST_CASE("LoginLimiter: успех сбрасывает счётчик; лог�
 // SELECT/DELETE падают DrogonDbException → колбэк обязан выстрелить ровно
 // один раз с fail-значением.
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <future>
+#include <thread>
 
 #include <drogon/drogon.h>
+#include <sqlite3.h>
 
 #include "services/SessionService.h"
 #include "services/UserService.h"
@@ -184,4 +187,154 @@ TEST_CASE("UserService/SessionService: ошибка БД → cb стреляет
                                [&fired]() { fired.set_value(true); });
         CHECK(fired.get_future().get());
     }
+}
+
+// Э8 шаг 7 (находка Э1 «неполное зеркало лимитера»): доступ к действующей
+// блокировке для зеркала users.locked_until — unix-сек, истёкший блок и
+// неизвестный логин дают 0.
+TEST_CASE("LoginLimiter: lockUntilSec — блок, истечение, неизвестный логин")
+{
+    LoginLimiter limiter;
+    const std::string login = "mirror-lim.demo";
+    CHECK(limiter.lockUntilSec(login, 1000) == 0);  // логина нет в карте
+    for (int i = 0; i < 3; ++i)
+        limiter.onFailure(login, 1000);
+    CHECK(limiter.blockedFor(login, 1005) == 10);  // блок 15 с включён
+    CHECK(limiter.lockUntilSec(login, 1005) == 1015);  // 1000 + kInitialLockSec
+    CHECK(limiter.lockUntilSec(login, 1015) == 0);     // истёк (<= now)
+    CHECK(limiter.lockUntilSec("other.demo", 1005) == 0);  // чужой логин
+}
+
+// Полное зеркало лимитера (02 §4.1/§6.4; Э8 шаг 7): неудача пишет
+// failed_attempts И locked_until (ISO-UTC, 0 → NULL), успех сбрасывает оба;
+// для несуществующего логина строки не создаёт (UPDATE-only). Зеркальный
+// UPDATE асинхронный — значения читаются опросом с дедлайном (~2 с),
+// busy_timeout на raw-соединении гасит коллизии с пулом.
+TEST_CASE("UserService: зеркало лимитера — запись, ISO-формат, сброс, ghost-логин")
+{
+    TempDir tmp;
+    const std::string dbPath = (tmp.path / "para.db").string();
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open_v2(dbPath.c_str(),
+                            &raw,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                            nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+                raw, "PRAGMA busy_timeout=2000;", nullptr, nullptr,
+                nullptr) == SQLITE_OK);
+    char* err = nullptr;
+    REQUIRE(sqlite3_exec(
+                raw,
+                "CREATE TABLE users ("
+                " id INTEGER PRIMARY KEY,"
+                " login TEXT NOT NULL UNIQUE,"
+                " role TEXT NOT NULL,"
+                " password_hash TEXT NOT NULL,"
+                " failed_attempts INTEGER NOT NULL DEFAULT 0,"
+                " locked_until TEXT);"
+                "INSERT INTO users (login, role, password_hash) VALUES"
+                " ('mirror.demo','student','x');",
+                nullptr, nullptr, &err) == SQLITE_OK);
+    if (err != nullptr)
+        sqlite3_free(err);
+
+    auto db = drogon::orm::DbClient::newSqlite3Client(
+        "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
+
+    const auto pollInt = [&](const char* sql, int64_t want) {
+        for (int i = 0; i < 40; ++i)
+        {
+            sqlite3_stmt* st = nullptr;
+            bool got = false;
+            if (sqlite3_prepare_v2(raw, sql, -1, &st, nullptr) == SQLITE_OK &&
+                sqlite3_step(st) == SQLITE_ROW)
+            {
+                got = sqlite3_column_int64(st, 0) == want;
+            }
+            sqlite3_finalize(st);
+            if (got)
+                return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        FAIL("зеркало: опрос не дождался значения: ", sql);
+    };
+    const auto pollNull = [&](const char* sql, bool wantNull) {
+        for (int i = 0; i < 40; ++i)
+        {
+            sqlite3_stmt* st = nullptr;
+            bool got = false;
+            if (sqlite3_prepare_v2(raw, sql, -1, &st, nullptr) == SQLITE_OK &&
+                sqlite3_step(st) == SQLITE_ROW)
+            {
+                const bool isNull = sqlite3_column_type(st, 0) == SQLITE_NULL;
+                got = isNull == wantNull;
+            }
+            sqlite3_finalize(st);
+            if (got)
+                return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        FAIL("зеркало: опрос не дождался NULL-состояния: ", sql);
+    };
+
+    // 1) Неудача без блокировки (1 < 3, lockedUntilSec = 0) → счётчик 1,
+    //    locked_until NULL.
+    para::UserService::mirrorLimiterState(db, "mirror.demo", 1, 0);
+    pollInt("SELECT failed_attempts FROM users WHERE login = 'mirror.demo'",
+            1);
+    pollNull("SELECT locked_until FROM users WHERE login = 'mirror.demo'",
+             true);
+
+    // 2) Неудача с блокировкой → locked_until записан в ISO-UTC «…Z»
+    //    (тот же формат строк времени, что starts_at/ends_at).
+    const int64_t lockSec = 1797096000;  // фиксированная метка, не wall-clock
+    para::UserService::mirrorLimiterState(db, "mirror.demo", 3, lockSec);
+    std::tm tm{};
+    const std::time_t tt = static_cast<std::time_t>(lockSec);
+    gmtime_r(&tt, &tm);
+    char expected[24];
+    std::strftime(expected, sizeof(expected), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    {
+        std::string got;
+        for (int i = 0; i < 40; ++i)
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(
+                    raw,
+                    "SELECT locked_until FROM users WHERE login = "
+                    "'mirror.demo'",
+                    -1, &st, nullptr) == SQLITE_OK &&
+                sqlite3_step(st) == SQLITE_ROW &&
+                sqlite3_column_type(st, 0) != SQLITE_NULL)
+            {
+                got = sqlite3_column_text(st, 0) != nullptr
+                          ? reinterpret_cast<const char*>(
+                                sqlite3_column_text(st, 0))
+                          : "";
+            }
+            sqlite3_finalize(st);
+            if (got.size() == 20 && got[10] == 'T' && got[19] == 'Z')
+            {
+                CHECK(got == expected);  // формат и значение
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (i == 39)
+                FAIL("зеркало: locked_until не записан в ISO-UTC «…Z»");
+        }
+    }
+
+    // 3) Успешный вход → сброс обоих полей.
+    para::UserService::resetLimiterMirror(db, "mirror.demo");
+    pollInt("SELECT failed_attempts FROM users WHERE login = 'mirror.demo'",
+            0);
+    pollNull("SELECT locked_until FROM users WHERE login = 'mirror.demo'",
+             true);
+
+    // 4) Ghost-логин: строки в users НЕТ и не появляется (UPDATE-only —
+    //    честное ограничение зеркала, UserService.h).
+    para::UserService::mirrorLimiterState(db, "ghost.demo", 1, 0);
+    pollInt("SELECT COUNT(*) FROM users WHERE login = 'ghost.demo'", 0);
+
+    sqlite3_close(raw);
 }

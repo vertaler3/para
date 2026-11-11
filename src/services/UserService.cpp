@@ -1,5 +1,7 @@
 #include "services/UserService.h"
 
+#include <ctime>
+
 #include <drogon/drogon.h>
 
 using namespace drogon;
@@ -70,15 +72,44 @@ void UserService::loadProfile(
         };
 }
 
-void UserService::mirrorFailedAttempts(drogon::orm::DbClientPtr db,
-                                       const std::string& login,
-                                       int failures)
+void UserService::mirrorLimiterState(drogon::orm::DbClientPtr db,
+                                     const std::string& login,
+                                     int failures,
+                                     int64_t lockedUntilSec)
 {
-    *db << "UPDATE users SET failed_attempts = $1 WHERE login = $2"
-        << failures << login >>
+    // locked_until — колонка TEXT (0001_identity.sql): unix-сек → ISO-UTC,
+    // тот же формат строк времени, что у starts_at/ends_at (сравнения и
+    // сортировки лексикографически корректны); 0 → NULL — блокировки нет.
+    // Порядок $N в тексте = порядку биндинга (урок Э5 шаг 2).
+    std::string lockedIso;
+    if (lockedUntilSec > 0)
+    {
+        const std::time_t tt = static_cast<std::time_t>(lockedUntilSec);
+        std::tm tm{};
+        gmtime_r(&tt, &tm);
+        char buf[24];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        lockedIso = buf;
+    }
+    *db << "UPDATE users SET failed_attempts = $1, locked_until = "
+           "CASE WHEN $2 = '' THEN NULL ELSE $2 END WHERE login = $3"
+        << failures << lockedIso << login >>
         [](const Result&) {} >>
         [](const DrogonDbException& e) {
-            LOG_ERROR << "UserService::mirrorFailedAttempts: "
+            LOG_ERROR << "UserService::mirrorLimiterState: "
+                      << e.base().what();
+        };
+}
+
+void UserService::resetLimiterMirror(drogon::orm::DbClientPtr db,
+                                     const std::string& login)
+{
+    *db << "UPDATE users SET failed_attempts = 0, locked_until = NULL "
+           "WHERE login = $1"
+        << login >>
+        [](const Result&) {} >>
+        [](const DrogonDbException& e) {
+            LOG_ERROR << "UserService::resetLimiterMirror: "
                       << e.base().what();
         };
 }
