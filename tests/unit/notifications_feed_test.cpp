@@ -118,6 +118,11 @@ struct Fixture
         // СОВПАДАЮТ) + помеченные дополнения: дедлайн и прочитанное
         // application у Ани; «время против id» и NULL-поля у user 9;
         // 25 односекундных строк user 10 — постраничность.
+        // Фикстуры v2 (10.11.2026) ids 1–6 не тронули и добавили свои
+        // дедлайн-уведомления ids 7–8 (Аня/Марк, deep_link '/deadlines') —
+        // они в тестовую БД НЕ копируются; номера 7/8 заняты дополнениями
+        // теста только в её собственной временной БД (в fixtures.sql это
+        // другие строки: другой title/created_at/deep_link).
         exec(raw,
              "INSERT INTO notifications(id, user_id, type, title, body, "
              "deep_link, read_at, created_at) VALUES"
