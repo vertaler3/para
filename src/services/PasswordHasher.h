@@ -19,6 +19,14 @@ class PasswordHasher
     // constant-time сравнение внутри библиотеки, 02 §6.2).
     static bool verify(const std::string& encodedHash,
                        const std::string& password);
+
+    // Фиктивная проверка той же стоимости (Э8 шаг 4, находка
+    // Э1-timing-оракул): тот же код пути, что и verify() — argon2id_verify
+    // против PHC-строки с ТЕМИ ЖЕ параметрами (t=2, m=19456, p=1) и
+    // солью-заглушкой. Результат заведомо false: вызывается контроллером
+    // входа на ветке «логин не найден», чтобы время ответа не различало
+    // «нет логина» и «неверный пароль» (02 §6.2/§6.4).
+    static bool verifyDummy(const std::string& password);
 };
 
 }  // namespace para

@@ -72,9 +72,18 @@ void AuthCtrl::login(const HttpRequestPtr& req,
         app().getDbClient("para"), login,
         [this, login, password,
          cb = std::move(cb)](std::optional<UserRecord> user) mutable {
+            // Э8 шаг 4 (находка Э1-timing-оракул): обе ветки неудачи стоят
+            // одинаково. У несуществующего логина нет хэша для verify() —
+            // раньше короткое замыкание && пропускало argon2 и ответ «нет
+            // логина» был в разы быстрее («неверный пароль»): время
+            // перечисляло логины. Теперь без пользователя — фиктивный прогон
+            // argon2 (та же функция и параметры, соль-заглушка —
+            // PasswordHasher::verifyDummy), у обеих неудач одинаковая
+            // стоимость и тот же единый 401 без деталей.
             const bool passwordOk =
-                user.has_value() &&
-                PasswordHasher::verify(user->passwordHash, password);
+                user.has_value()
+                    ? PasswordHasher::verify(user->passwordHash, password)
+                    : PasswordHasher::verifyDummy(password);
             if (!passwordOk)
             {
                 // 401 без деталей (01, экран «Вход»): не раскрываем, что

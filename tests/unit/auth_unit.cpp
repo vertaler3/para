@@ -23,6 +23,17 @@ TEST_CASE("PasswordHasher: round-trip argon2id, параметры OWASP в enco
     CHECK(PasswordHasher::hash("unit-test-password-2026") != hash);
 }
 
+TEST_CASE("PasswordHasher: verifyDummy — фиктивный прогон той же стоимости "
+          "(Э8 шаг 4, timing-оракул Э1)")
+{
+    // Результат заведомо false при любом пароле (хэш паддинга), сам прогон
+    // не бросает; равенство ВРЕМЕНИ с verify() не проверяем порогом —
+    // хрупко в CI, факт замера обеих веток фиксирует журнал Э8 шаг 4
+    // (реальный HTTP: 6.6 мс против 27.1 мс до правки → выровнено).
+    CHECK_FALSE(PasswordHasher::verifyDummy("unit-test-password-2026"));
+    CHECK_FALSE(PasswordHasher::verifyDummy(""));
+}
+
 TEST_CASE("LoginLimiter: 3 неудачи → блок 15 с, удвоение до потолка 15 мин")
 {
     LoginLimiter limiter;

@@ -7,6 +7,20 @@
 #include <argon2.h>
 #include <openssl/rand.h>
 
+namespace {
+
+// PHC-строка для verifyDummy: те же параметры, что у hash() (02 §6.2:
+// Argon2id, t=2, m=19456 КБ, p=1), соль-заглушка «para-dummy-salt0»
+// (16 байт, base64 cGFyYS1kdW1teS1zYWx0MA). Не секрет и не чей-то пароль:
+// это хэш непроверяемого паддинга «para-timing-pad», единственная задача
+// которого — «сжечь» то же время, что и реальная проверка (Э8 шаг 4,
+// находка Э1-timing-оракул; приём OWASP «dummy verify»).
+constexpr char kDummyEncoded[] =
+    "$argon2id$v=19$m=19456,t=2,p=1$cGFyYS1kdW1teS1zYWx0MA$"
+    "PvLBWTa1ezGmo3ucQF7Fs1nrCNQ6ccFxvli9H5/GntM";
+
+}  // namespace
+
 namespace para {
 
 std::string PasswordHasher::hash(const std::string& password)
@@ -44,6 +58,15 @@ bool PasswordHasher::verify(const std::string& encodedHash,
                             const std::string& password)
 {
     return argon2id_verify(encodedHash.c_str(), password.data(),
+                           password.size()) == ARGON2_OK;
+}
+
+bool PasswordHasher::verifyDummy(const std::string& password)
+{
+    // Тот же путь кода, что и verify(): парсинг PHC-строки, argon2id с теми
+    // же параметрами, constant-time сравнение. Вернёт false — пароль не
+    // совпадает с паддингом; важна не истинность, а равная стоимость.
+    return argon2id_verify(kDummyEncoded, password.data(),
                            password.size()) == ARGON2_OK;
 }
 
