@@ -19,9 +19,12 @@
 //     вручную (curl с двумя сессиями).
 //
 // Две сессии — постановка Э4 шаг 3 (в §9.3 базовой редакции пары Аня/Олег;
-// оценки в фикстурах есть только у Марка): user 1 = Аня (успеваемость
-// ПУСТАЯ — 0 строк grades, средний null), user 3 = Марк (10 оценок, ids
-// 1–10, включая чужой для Ани id 1). «Сессия» на этом уровне — user_id,
+// фикстуры v2: оценки добавлены ВСЕМ студентам, кроме Ани — ids 11–224,
+// строки Марка не расширялись): user 1 = Аня (успеваемость ПУСТАЯ — 0 строк
+// grades, средний null; предусловие С5.6/security-шага 4 держится и в v2),
+// user 3 = Марк (как были ровно 10 оценок ids 1–10 — именно их дословно
+// копирует мини-фикстура ниже, включая чужой для Ани id 1). «Сессия» на
+// этом уровне — user_id,
 // который контроллер берёт из атрибута LoginFilter (02 §6.3). Для шага 8 —
 // та же пара §9.3: user 1 = Аня, user 2 = Олег (общая группа 1-ФМО —
 // различие проверяем на ЛИЧНЫХ объектах).
@@ -63,7 +66,8 @@ void check(bool ok, const std::string& what)
 
 // Временная SQLite — как в tests/unit/grades_service_test.cpp (Э4 шаги 1–2):
 // схема disciplines/grades без FK + строки оценок sql/fixtures.sql дословно
-// (все 10 — user_id=3); у Ани (user 1) оценок нет, session_plan не нужен
+// (все 10 — user_id=3; фикстуры v2 их не расширяли, сверено sqlite);
+// у Ани (user 1) оценок нет и в v2, session_plan не нужен
 // (шаг 4 §9.3 — про grades/{id}).
 struct TempDir
 {
@@ -128,7 +132,9 @@ void createSchema(const std::string& dbPath)
          "  comment TEXT,"
          "  graded_at TEXT NOT NULL);"
          "CREATE INDEX idx_grades_user ON grades(user_id, discipline_id);"
-         // Оценки sql/fixtures.sql дословно — все user_id=3 (Марк).
+         // Оценки sql/fixtures.sql дословно — все user_id=3 (Марк); v2
+         // эти 10 строк не меняла (новые оценки v2 — ids 11–224, другие
+         // пользователи — в мини-фикстуру не копируются).
          "INSERT INTO grades(id, user_id, discipline_id, control_type,"
          " component, score, max_score, attempt, comment, graded_at)"
          " VALUES"
@@ -395,7 +401,8 @@ int main()
                 "(Аня user 1 / Олег user 2).\n");
 
     // Аня бронирует слот 13.11 (гейт-дата Э5а) через реальный сервис —
-    // как POST /v1/rooms/1/bookings под контроллером.
+    // как POST /v1/rooms/1/bookings под контроллером. Фикстуры v2 дату
+    // 13.11 по-прежнему не занимают (контроль: 0 броней на 2026-11-13).
     const auto anyaBooking =
         createBookingOf(db, 1, 1, "2026-11-13T10:00:00Z", "2026-11-13T11:00:00Z");
     check(anyaBooking.status == RoomsService::CreateStatus::Created &&
