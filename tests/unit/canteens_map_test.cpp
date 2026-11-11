@@ -149,7 +149,11 @@ struct Fixture
                  " (4,2,'Капучино','drink',0,130,140,8.0,5.0,12.0);");
         }
         sqlite3_close(raw);
-        db = drogon::orm::DbClient::newSqlite3Client("filename=" + dbPath, 1);
+        // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
+        // initialization_queries, что в проде (config.json); Drogon
+        // 1.9.14 исполняет их на каждом новом соединении пула.
+        db = drogon::orm::DbClient::newSqlite3Client(
+            "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
     }
 };
 

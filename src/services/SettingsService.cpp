@@ -40,7 +40,10 @@ void SettingsService::load(drogon::orm::DbClientPtr db,
            "quiet_hours_json, theme, onboarding_json "
            "FROM settings WHERE user_id = $1"
         << userId >>
-        [cb = std::move(cb), userId](const Result& rows) {
+        // cb копируется в обе ветки (result/exception) — урок Э2 (move в
+        // первой лямбде оставил бы error-ветке пустой std::function);
+        // найдено и исправлено Э8 шаг 5.
+        [cb, userId](const Result& rows) {
             if (rows.empty())
             {
                 // Строки нет — дефолты по 02 §5.2; запись создаёт первый PUT.
@@ -91,7 +94,8 @@ void SettingsService::save(drogon::orm::DbClientPtr db,
         << rec.userId << (rec.notifySchedule ? 1 : 0)
         << (rec.notifyDeadlines ? 1 : 0) << (rec.notifyApplications ? 1 : 0)
         << rec.quietHoursJson << rec.theme << rec.onboardingJson >>
-        [cb = std::move(cb)](const Result&) { cb(true); } >>
+        // Копия cb в обе ветки — урок Э2 (см. load выше).
+        [cb](const Result&) { cb(true); } >>
         [cb](const DrogonDbException& e) {
             LOG_ERROR << "SettingsService::save: " << e.base().what();
             cb(false);  // 500 без деталей (02 §5.1)

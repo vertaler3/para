@@ -105,7 +105,10 @@ void AnnouncementsService::list(DbClientPtr db,
     // Профиль сессии: группа/курс (staff — профиля нет, Р-6 → видит все).
     *db << "SELECT group_id, course FROM profiles WHERE user_id = $1"
         << session.userId >>
-        [db, cursor, cb = std::move(cb)](
+        // cb КОПИРУЕТСЯ во все ветки обеих цепочек (стреляет ровно одна);
+        // move в success-ветке оставил бы error-ветке пустой
+        // std::function → bad_function_call (урок Э2, Э8 шаг 5).
+        [db, cursor, cb](
             const drogon::orm::Result& rows) mutable {
             bool has = false;
             int64_t groupId = 0, course = 0;
@@ -153,7 +156,7 @@ void AnnouncementsService::list(DbClientPtr db,
                 binder << *cursor;
             binder << static_cast<int>(kPageSize + 1);
             binder >>
-                [cb = std::move(cb)](const drogon::orm::Result& rows) mutable {
+                [cb](const drogon::orm::Result& rows) mutable {
                     Json::Value arr(Json::arrayValue);
                     std::optional<int64_t> next;
                     const std::size_t cnt = rows.size();
@@ -201,13 +204,13 @@ void AnnouncementsService::publish(DbClientPtr db,
     *db << "INSERT INTO announcements (author_id, title, body, audience) "
            "VALUES ($1, $2, $3, $4)"
         << staffId << title << body << audienceText >>
-        [db, staffId, title, body, cb = std::move(cb)](
+        [db, staffId, title, body, cb](
             const drogon::orm::Result&) mutable {
             *db << kSelectBase +
                        "WHERE a.author_id = $1 AND a.title = $2 AND "
                        "a.body = $3 ORDER BY a.id DESC LIMIT 1"
                 << staffId << title << body >>
-                [cb = std::move(cb)](const drogon::orm::Result& rows) mutable {
+                [cb](const drogon::orm::Result& rows) mutable {
                     if (rows.empty())
                     {
                         cb(Result{});

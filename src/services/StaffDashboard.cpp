@@ -68,7 +68,10 @@ void StaffDashboard::build(DbClientPtr db, ResultCb cb)
         return;
     }
     *db << kQueueSql >>
-        [db, cb = std::move(cb)](const drogon::orm::Result& rows) mutable {
+        // cb КОПИРУЕТСЯ во все ветки обеих цепочек (стреляет ровно одна);
+        // move во внутренней лямбде оставил бы error-ветке пустой
+        // std::function → bad_function_call (урок Э2, Э8 шаг 5).
+        [db, cb](const drogon::orm::Result& rows) mutable {
             Json::Value queue(Json::objectValue);
             for (const char* s : {"submitted", "accepted", "in_progress",
                                   "need_info", "ready"})
@@ -79,7 +82,7 @@ void StaffDashboard::build(DbClientPtr db, ResultCb cb)
 
             // Свежие изменения расписания — вторая фаза.
             *db << kRecentSql >>
-                [cb = std::move(cb), queue = std::move(queue)](
+                [cb, queue = std::move(queue)](
                     const drogon::orm::Result& recent) mutable {
                     Json::Value changes(Json::arrayValue);
                     for (const auto& r : recent)

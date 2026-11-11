@@ -194,7 +194,11 @@ struct Fixture
                  " (4,1,1,1,'3024','seminar','2026-11-03T10:00:00Z',"
                  "  '2026-11-03T11:30:00Z','normal');");
         sqlite3_close(raw);
-        db = drogon::orm::DbClient::newSqlite3Client("filename=" + dbPath, 1);
+        // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
+        // initialization_queries, что в проде (config.json); Drogon
+        // 1.9.14 исполняет их на каждом новом соединении пула.
+        db = drogon::orm::DbClient::newSqlite3Client(
+            "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
     }
 };
 

@@ -91,3 +91,97 @@ TEST_CASE("LoginLimiter: успех сбрасывает счётчик; лог�
     CHECK(limiter.failures("a.demo") == 0);
     CHECK(limiter.failures("b.demo") == 1);
 }
+
+// Э8 шаг 5 (урок Э2, латентные аналоги из находки Э2/Э5а): error-ветки
+// цепочек UserService/SessionService обязаны получить ЖИВОЙ колбэк. До
+// фикса `cb = std::move(cb)` в success-ветке оставлял error-ветке пустой
+// std::function → std::bad_function_call (SIGABRT) на первом же сбое БД —
+// тот же крах, что поймала Э2 шаг 1 в OwnershipGuard. БД БЕЗ таблиц →
+// SELECT/DELETE падают DrogonDbException → колбэк обязан выстрелить ровно
+// один раз с fail-значением.
+#include <chrono>
+#include <filesystem>
+#include <future>
+
+#include <drogon/drogon.h>
+
+#include "services/SessionService.h"
+#include "services/UserService.h"
+
+namespace {
+
+// Временный каталог с уникальным именем; удаляется в конце теста
+// (тот же приём, что в ownership_guard_test.cpp).
+struct TempDir
+{
+    std::filesystem::path path;
+    TempDir()
+        : path(std::filesystem::temp_directory_path() /
+               ("para-auth-unit-" +
+                std::to_string(std::chrono::steady_clock::now()
+                                   .time_since_epoch()
+                                   .count())))
+    {
+        std::filesystem::create_directories(path);
+    }
+    ~TempDir()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("UserService/SessionService: ошибка БД → cb стреляет ровно один "
+          "раз с fail-значением (Э8 шаг 5, double-move Э2)")
+{
+    TempDir tmp;
+    // FK=ON — тот же initialization_queries, что в проде (Э8 шаг 5).
+    auto db = drogon::orm::DbClient::newSqlite3Client(
+        "filename=" + (tmp.path / "para.db").string(), 1,
+        {"PRAGMA foreign_keys=ON;"});
+
+    SUBCASE("UserService::findByLogin → cb(nullopt), не bad_function_call")
+    {
+        std::promise<bool> fired;
+        para::UserService::findByLogin(db,
+                                 "nobody.demo",
+                                 [&fired](std::optional<para::UserRecord> r) {
+                                     fired.set_value(!r.has_value());
+                                 });
+        CHECK(fired.get_future().get());
+    }
+
+    SUBCASE("SessionService::findValid → cb(nullopt)")
+    {
+        std::promise<bool> fired;
+        para::SessionService::findValid(db,
+                                  "token-no-such-table",
+                                  [&fired](std::optional<para::SessionInfo> s) {
+                                      fired.set_value(!s.has_value());
+                                  });
+        CHECK(fired.get_future().get());
+    }
+
+    SUBCASE("SessionService::create → cb(false, \"\")")
+    {
+        std::promise<bool> fired;
+        para::SessionService::create(db,
+                               1,
+                               3600,
+                               [&fired](bool ok, const std::string& token) {
+                                   fired.set_value(!ok && token.empty());
+                               });
+        CHECK(fired.get_future().get());
+    }
+
+    SUBCASE("SessionService::remove → cb() выстрелил")
+    {
+        std::promise<bool> fired;
+        para::SessionService::remove(db,
+                               "token-no-such-table",
+                               [&fired]() { fired.set_value(true); });
+        CHECK(fired.get_future().get());
+    }
+}

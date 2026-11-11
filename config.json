@@ -54,7 +54,15 @@
                 // из commit-callback переноса не должен терять «database
                 // is locked» при внешних sqlite-читателях (CLI оператора,
                 // проверки гейта) — писатель ждёт лок до 5 с.
-                "PRAGMA busy_timeout=5000;"
+                "PRAGMA busy_timeout=5000;",
+                // Э8 шаг 5 (находка Э1): enforcement внешних ключей ВКЛЮЧАЕТСЯ
+                // на КАЖДОМ соединении пула — initialization_queries Drogon
+                // 1.9.14 исполняет на каждом новом соединении (sqlite3_exec
+                // сразу после sqlite3_open, Sqlite3Connection.cc); без этого
+                // FK в рантайме выключен по умолчанию SQLite. Схема согласована
+                // (PRAGMA foreign_key_check — пусто; валидируется раннером при
+                // каждом старте, Р-24).
+                "PRAGMA foreign_keys=ON;"
             ]
         }
     ],

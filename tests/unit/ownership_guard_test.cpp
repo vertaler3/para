@@ -89,7 +89,11 @@ struct Fixture
                 "INSERT INTO notifications(id, user_id) VALUES (20, 202);");
         }
         sqlite3_close(raw);
-        db = drogon::orm::DbClient::newSqlite3Client("filename=" + dbPath, 1);
+        // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
+        // initialization_queries, что в проде (config.json); Drogon
+        // 1.9.14 исполняет их на каждом новом соединении пула.
+        db = drogon::orm::DbClient::newSqlite3Client(
+            "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
     }
 };
 

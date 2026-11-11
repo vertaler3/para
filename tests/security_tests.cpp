@@ -93,6 +93,13 @@
 // в para-tests: tests/unit/ownership_guard_test.cpp, TEST_CASE «ошибка БД
 // → Error, fail-closed (не Own)».
 //
+// FK (Э8 шаг 5, находка Э1): на КАЖДОМ соединении этого файла включён
+// «PRAGMA foreign_keys=ON» — и в тест-конфиге пула (initialization_queries,
+// дословно как в config.json), и в raw-соединении сидера (RawDb); сид-данные
+// FK-согласованы. В MigrationRunner enforcement НЕ включается — Р-24
+// (no-op внутри его транзакций; schema-фаза — с FK OFF по руководству
+// SQLite), согласованность валидирует гейт foreign_key_check в run().
+//
 // Любой FAIL → exit 1; при полном успехе печатается ровно строка
 // «шаги 1–8 ПРОЙДЕН».
 
@@ -410,6 +417,16 @@ class RawDb
                               &db_,
                               SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
                               nullptr) == SQLITE_OK;
+        if (ok_)
+        {
+            // FK на каждом создаваемом соединении (Э8 шаг 5, находка Э1):
+            // сид-данные обязаны быть FK-согласованы так же, как прод-пул
+            // (config.json initialization_queries; SQLite по умолчанию
+            // foreign_keys=OFF на каждом соединении — включается явно).
+            ok_ = sqlite3_exec(
+                      db_, "PRAGMA foreign_keys=ON;", nullptr, nullptr,
+                      nullptr) == SQLITE_OK;
+        }
     }
     ~RawDb()
     {
@@ -601,6 +618,10 @@ bool writeTestConfig(const std::string& configPath,
     initQueries.append("PRAGMA journal_mode=WAL;");
     initQueries.append("PRAGMA synchronous=NORMAL;");
     initQueries.append("PRAGMA busy_timeout=5000;");
+    // FK=ON на каждом соединении пула — тот же initialization_queries,
+    // что в проде (config.json; Э8 шаг 5, находка Э1). Drogon 1.9.14
+    // исполняет их на каждом новом соединении (Sqlite3Connection.cc).
+    initQueries.append("PRAGMA foreign_keys=ON;");
     dbClient["initialization_queries"] = initQueries;
     Json::Value root;
     root["listeners"].append(listener);

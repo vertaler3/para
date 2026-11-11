@@ -238,7 +238,11 @@ void ScheduleChangeService::applyChange(DbClientPtr db,
 
     // 1. Событие (404 — нет) и его группа.
     *db << kEventSql << in.eventId >>
-        [db, staff, in, invalidate, cb = std::move(cb)](
+        // cb КОПИРУЕТСЯ во все ветки всех вложенных цепочек (стреляет
+        // ровно одна); move в success-ветке оставлял бы error-ветке
+        // пустой std::function → bad_function_call (урок Э2; латентные
+        // аналоги в трёх цепочках найдены и исправлены Э8 шаг 5).
+        [db, staff, in, invalidate, cb](
             const drogon::orm::Result& rows) mutable {
             if (rows.empty())
             {
@@ -315,7 +319,7 @@ void ScheduleChangeService::applyChange(DbClientPtr db,
             auto onTeacherChecked =
                 [db, staff, in, ev, invalidate, newStarts, newRoom, newEnds,
                  newTeacher, newStatus, nowIso, notice,
-                 cb = std::move(cb)](bool teacherOk) mutable {
+                 cb](bool teacherOk) mutable {
                     if (!teacherOk)
                     {
                         cb(Result{Outcome::BadRequest, {}});
@@ -327,7 +331,7 @@ void ScheduleChangeService::applyChange(DbClientPtr db,
                     *db << kRecipientsSql << ev.groupId >>
                         [db, staff, in, ev, invalidate, newStarts, newRoom,
                          newEnds, newTeacher, newStatus, nowIso, notice,
-                         cb = std::move(cb)](const drogon::orm::Result& recipients) mutable {
+                         cb](const drogon::orm::Result& recipients) mutable {
                             std::vector<int64_t> userIds;
                             userIds.reserve(recipients.size());
                             for (const auto& r : recipients)

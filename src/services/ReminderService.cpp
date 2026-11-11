@@ -164,7 +164,9 @@ void ReminderService::basicDeadlineRound(DbClientPtr db,
     const std::string horizonIso =
         NotifyDispatcher::toIsoUtc(now + std::chrono::hours(24));
     *db << kDueWindowSql << nowIso << horizonIso >>
-        [db, cb = std::move(cb)](const Result& rows) {
+        // cb копируется в обе ветки цепочки (урок Э2; найдено/исправлено
+        // Э8 шаг 5) и далее — в per-row продолжения ниже.
+        [db, cb](const Result& rows) {
             if (rows.empty())
             {
                 cb(0);
@@ -192,7 +194,8 @@ void ReminderService::personalReminderRound(DbClientPtr db,
 {
     const std::string nowIso = NotifyDispatcher::nowIsoUtc();
     *db << kPendingRemindersSql << nowIso >>
-        [db, cb = std::move(cb)](const Result& rows) {
+        // Копия cb в обе ветки — урок Э2 (см. basicDeadlineRound выше).
+        [db, cb](const Result& rows) {
             if (rows.empty())
             {
                 cb(0);

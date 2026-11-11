@@ -349,9 +349,61 @@ MigrationRunner::Result MigrationRunner::run(const std::string& dbPath,
         }
     }
 
+    // Компенсирующий контроль Р-24 (Э8 шаг 5, находка Э1): enforcement FK
+    // на соединении раннера НЕ включается — PRAGMA foreign_keys является
+    // no-op внутри его транзакций (applyInTransaction; см. также Р-13),
+    // schema-фаза по руководству SQLite выполняется с выключенным FK
+    // (пересоздания таблиц/DROP с сылками), а порядок вставок в
+    // fixtures.sql не обязан быть FK-упорядоченным. Вместо этого
+    // согласованность данных валидируется ГАТЕМ на каждом старте:
+    // foreign_key_check работает и при выключенном enforcement и
+    // перечисляет ВСЕ висячие ссылки; нарушение — фатально (MigrationError),
+    // т.е. несогласованную БД приложение не поднимет. Рантайм-enforcement
+    // включён на соединениях пула приложения (config.json
+    // initialization_queries, «PRAGMA foreign_keys=ON»).
+    {
+        sqlite3_stmt* fkStmt = nullptr;
+        if (sqlite3_prepare_v2(handle,
+                               "PRAGMA foreign_key_check;",
+                               -1,
+                               &fkStmt,
+                               nullptr) != SQLITE_OK)
+        {
+            const std::string msg = sqlite3_errmsg(handle);
+            sqlite3_finalize(fkStmt);
+            throw MigrationError("PRAGMA foreign_key_check (" + dbPath +
+                                 "): " + msg);
+        }
+        bool violated = false;
+        int rc = SQLITE_OK;
+        while ((rc = sqlite3_step(fkStmt)) == SQLITE_ROW)
+        {
+            const unsigned char* table = sqlite3_column_text(fkStmt, 0);
+            const sqlite3_int64 rowid = sqlite3_column_int64(fkStmt, 1);
+            LOG_ERROR << "миграционный раннер: висячая ссылка: таблица '"
+                      << (table != nullptr
+                              ? reinterpret_cast<const char*>(table)
+                              : "?")
+                      << "', rowid " << rowid;
+            violated = true;
+            break;  // первой достаточно для отказа старта
+        }
+        sqlite3_finalize(fkStmt);
+        if (violated || rc != SQLITE_DONE)
+        {
+            throw MigrationError(
+                violated
+                    ? "PRAGMA foreign_key_check: данные нарушают внешние "
+                      "ключи (" + dbPath + ") — см. лог; старт прерван (Р-24)"
+                    : "PRAGMA foreign_key_check (" + dbPath + "): " +
+                          sqlite3_errmsg(handle));
+        }
+    }
+
     LOG_INFO << "миграционный раннер: применено файлов — "
              << result.appliedMigrations << ", user_version — "
              << scalar(handle, "PRAGMA user_version;", "PRAGMA user_version")
+             << ", foreign_key_check — ok"
              << (seedMode
                      ? (result.fixturesApplied
                             ? ", фикстуры применены"

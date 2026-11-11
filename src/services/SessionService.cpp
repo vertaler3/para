@@ -80,21 +80,26 @@ void SessionService::create(
     std::strftime(expiresBuf, sizeof(expiresBuf), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
     // Чистка истёкших сессий заодно с созданием (idx_sessions_expiry).
+    // cb КОПИРУЕТСЯ в каждую ветку обеих цепочек (result/exception) —
+    // стреляет ровно одна; move в первой лямбде оставил бы второй
+    // замыканию пустой std::function → std::bad_function_call на
+    // error-пути (урок Э2 шаг 1; латентные аналоги найдены и
+    // исправлены Э8 шаг 5). token — в одну ветку, move корректен.
     *db << "DELETE FROM sessions WHERE expires_at <= $1" << now >>
         [db, userId, token = std::move(token), now, expiresBuf,
-         cb = std::move(cb)](const Result&) mutable {
+         cb](const Result&) mutable {
             *db << "INSERT INTO sessions(id, user_id, created_at, expires_at) "
                    "VALUES($1, $2, $3, $4)"
                 << token << userId << now << std::string(expiresBuf) >>
-                [cb = std::move(cb), token](const Result&) {
+                [cb, token](const Result&) {
                     cb(true, token);
                 } >>
-                [cb = std::move(cb)](const DrogonDbException& e) {
+                [cb](const DrogonDbException& e) {
                     LOG_ERROR << "SessionService::create: " << e.base().what();
                     cb(false, "");
                 };
         } >>
-        [cb = std::move(cb)](const DrogonDbException& e) {
+        [cb](const DrogonDbException& e) {
             LOG_ERROR << "SessionService::create (cleanup): "
                       << e.base().what();
             cb(false, "");
@@ -110,7 +115,8 @@ void SessionService::findValid(
            "JOIN users u ON u.id = s.user_id "
            "WHERE s.id = $1 AND s.expires_at > $2"
         << token << utcNow() >>
-        [cb = std::move(cb)](const Result& rows) {
+        // Копия cb в обе ветки — урок Э2 (см. create выше).
+        [cb](const Result& rows) {
             if (rows.empty())
             {
                 cb(std::nullopt);
@@ -122,7 +128,7 @@ void SessionService::findValid(
             info.role = rows[0]["role"].as<std::string>();
             cb(std::move(info));
         } >>
-        [cb = std::move(cb)](const DrogonDbException& e) {
+        [cb](const DrogonDbException& e) {
             LOG_ERROR << "SessionService::findValid: " << e.base().what();
             cb(std::nullopt);
         };
@@ -133,8 +139,9 @@ void SessionService::remove(drogon::orm::DbClientPtr db,
                             std::function<void()> cb)
 {
     *db << "DELETE FROM sessions WHERE id = $1" << token >>
-        [cb = std::move(cb)](const Result&) { cb(); } >>
-        [cb = std::move(cb)](const DrogonDbException& e) {
+        // Копия cb в обе ветки — урок Э2 (см. create выше).
+        [cb](const Result&) { cb(); } >>
+        [cb](const DrogonDbException& e) {
             LOG_ERROR << "SessionService::remove: " << e.base().what();
             cb();
         };

@@ -14,7 +14,11 @@ void UserService::findByLogin(
 {
     *db << "SELECT id, login, role, password_hash FROM users WHERE login = $1"
         << login >>
-        [cb = std::move(cb)](const Result& rows) {
+        // cb КОПИРУЕТСЯ в обе ветки цепочки (result/exception) — стреляет
+        // ровно одна; move в первой лямбде оставил бы второй замыканию
+        // пустой std::function → std::bad_function_call на error-пути
+        // (урок Э2 шаг 1; латентный аналог, найден и исправлен Э8 шаг 5).
+        [cb](const Result& rows) {
             if (rows.empty())
             {
                 cb(std::nullopt);
@@ -27,7 +31,7 @@ void UserService::findByLogin(
             record.passwordHash = rows[0]["password_hash"].as<std::string>();
             cb(std::move(record));
         } >>
-        [cb = std::move(cb)](const DrogonDbException& e) {
+        [cb](const DrogonDbException& e) {
             LOG_ERROR << "UserService::findByLogin: " << e.base().what();
             cb(std::nullopt);
         };
@@ -43,7 +47,8 @@ void UserService::loadProfile(
            "FROM profiles p JOIN groups g ON g.id = p.group_id "
            "WHERE p.user_id = $1"
         << userId >>
-        [cb = std::move(cb)](const Result& rows) {
+        // Копия cb в обе ветки — урок Э2 (см. findByLogin выше).
+        [cb](const Result& rows) {
             if (rows.empty())
             {
                 cb(std::nullopt);  // staff без профиля (02 §4.1)
@@ -59,7 +64,7 @@ void UserService::loadProfile(
             profile["student_card_no"] = row["student_card_no"].as<std::string>();
             cb(std::move(profile));
         } >>
-        [cb = std::move(cb)](const DrogonDbException& e) {
+        [cb](const DrogonDbException& e) {
             LOG_ERROR << "UserService::loadProfile: " << e.base().what();
             cb(std::nullopt);
         };

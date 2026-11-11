@@ -207,6 +207,7 @@ add_executable(para-tests
                src/services/CanteensService.cpp
                src/services/MapService.cpp
                src/filters/StaffFilter.cpp
+               src/services/UserService.cpp
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
 

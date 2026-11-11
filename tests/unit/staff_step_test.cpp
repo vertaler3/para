@@ -156,7 +156,11 @@ struct Fixture
         // раунд 1); WAL разделяет читателей и писателя.
         exec(raw, "PRAGMA journal_mode=WAL;");
         sqlite3_close(raw);
-        db = drogon::orm::DbClient::newSqlite3Client("filename=" + dbPath, 1);
+        // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
+        // initialization_queries, что в проде (config.json); Drogon
+        // 1.9.14 исполняет их на каждом новом соединении пула.
+        db = drogon::orm::DbClient::newSqlite3Client(
+            "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
     }
 
     void insertRows(const std::string& sql)
