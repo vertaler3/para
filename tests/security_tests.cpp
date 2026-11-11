@@ -52,7 +52,12 @@
 //   +429 лимитера входа (02 §6.4): 3 неверных пароля под одним логином →
 //           4-я попытка → 429 too_many_attempts + Retry-After (штатный
 //           LoginLimiter: блок 15 с — тест НЕ ждёт разблокировку);
-//           +контроль изоляции: другой логин тем же паролем → 200.
+//           +контроль изоляции: другой логин тем же паролем → 200;
+//   +Заголовки безопасности (02 §6.4, шаг 3 Э8): nosniff / X-Frame-Options:
+//           DENY / CSP / Referrer-Policy — точные значения на каждом
+//           классе ответов (SSR, статика, JSON-401 фильтра, 303,
+//           404-заглушка роутера, авторизованная страница); в CSP нет
+//           unsafe-eval.
 //
 // СЕССИИ/ПАРОЛЬ (AGENTS.md §5.2): логины — anya.demo (id 1), oleg.demo
 // (id 2), dean.demo (id 5) из фикстур. Демо-пароль жюри тесту НЕ известен:
@@ -66,8 +71,20 @@
 // LoginFilter на всех приватных POST/PUT/DELETE. ВСЕ state-changing запросы
 // этого файла ходят с cookie csrf + заголовком X-CSRF-Token (как браузер из
 // app.js); отдельный блок ниже проверяет нет/расхождение/подделку → 403.
-// Заголовки CSP/nosniff/frame-ancestors сервером ещё НЕ реализованы —
-// шаг 3 Э8; ни один шаг §9.3 от них не зависит.
+//
+// Заголовки безопасности — с шага 3 Э8 реализованы: SecurityHeaders
+// (advice на СОЗДАНИЕ ответа, registerHttpResponseCreationAdvice — самая
+// ранняя точка, вызывается во всех фабриках drogon v1.9.14) ставит на ВСЕ
+// ответы nosniff; X-Frame-Options: DENY; CSP default-src 'self' +
+// style-src 'self' 'unsafe-inline' (единственный inline в проекте — два
+// style-атрибута --value:N% в grades/grades_discipline; inline <script>
+// и on*/hx-on в views/ нет; 'unsafe-eval' НЕ ставится) + frame-ancestors
+// 'none'; Referrer-Policy: strict-origin-when-cross-origin (02 §6.4
+// задаёт default-src 'self' / nosniff / frame-ancestors 'none' — всё на
+// месте). Регистрация в тесте — тот же вызов, что в main.cpp (сервер
+// конфигурационно идентичен продовому); блок ниже проверяет заголовки на
+// каждом классе ответов: SSR-страница, статика, JSON-401 фильтра, 303,
+// 404-заглушка роутера, авторизованная страница.
 //
 // Service-level проверки шагов 4/8 (Э4 шаг 3, Э5а шаг 2) ЗАМЕНЕНЫ этим
 // HTTP-вариантом (сильнее: та же логика под настоящими LoginFilter/
@@ -101,6 +118,7 @@
 #include <vector>
 
 #include "filters/CsrfCheck.h"
+#include "filters/SecurityHeaders.h"
 #include "services/MigrationRunner.h"
 #include "services/PasswordHasher.h"
 #include "services/SessionService.h"
@@ -568,6 +586,11 @@ bool writeTestConfig(const std::string& configPath,
     Json::Value appCfg;
     appCfg["number_of_threads"] = 2;
     appCfg["enable_session"] = false;
+    // document_root — абсолютный путь к корню репо (прод задаёт тот же
+    // ключ, config.json:29 «./»): ctest стартует в build/, ручной запуск —
+    // из корня, статика для проверок заголовков обязана отдаваться в обоих
+    // случаях (шаг 3 Э8).
+    appCfg["document_root"] = std::string(PARA_SOURCE_DIR);
     appCfg["log"] = log;
     Json::Value dbClient;
     dbClient["name"] = "para";
@@ -662,7 +685,7 @@ int main()
 {
     std::printf(
         "security_tests — ПОЛНЫЙ HTTP-вариант автотеста безопасности "
-        "02 §9.3 (Э8 шаги 1–2; DoD №2).\n");
+        "02 §9.3 (Э8 шаги 1–3; DoD №2).\n");
     std::printf("Встроенный сервер Drogon на 127.0.0.1:<свободный порт>; "
                 "две живые cookie-сессии; схема+фикстуры прод-типа.\n");
     std::printf("Пароль тестовых сессий генерируется в памяти процесса и "
@@ -728,6 +751,10 @@ int main()
     // сервер в тесте обязан быть конфигурационно идентичен продовому
     // (CsrfCheck::registerPageIssuanceAdvice — post-handling advice).
     para::CsrfCheck::registerPageIssuanceAdvice();
+    // Заголовки безопасности на всех ответах (Э8 шаг 3) — тот же вызов,
+    // что в main.cpp (SecurityHeaders::registerAdvice — advice на
+    // создание ответа, самая ранняя точка).
+    para::SecurityHeaders::registerAdvice();
     ServerGuard server;  // app().run() в отдельном потоке
 
     // HTTP-клиент — на собственном event loop (не loop приложения).
@@ -1242,6 +1269,170 @@ int main()
                      "контроль изоляции: другой логин (dean.demo) НЕ "
                      "заблокирован → 200",
                      "POST /v1/auth/login dean.demo");
+    }
+
+    // ====================================================================
+    // Заголовки безопасности (02 §6.4, Э8 шаг 3): nosniff, X-Frame-Options:
+    // DENY, CSP, Referrer-Policy — общий advice на СОЗДАНИЕ ответа
+    // (SecurityHeaders::registerAdvice, тот же вызов, что в main.cpp),
+    // не по-роутерно. Проверяются все классы ответов: публичная SSR-
+    // страница, статика, JSON-401 фильтра, 303-редирект, 404-заглушка
+    // роутера, авторизованные страницы.
+    {
+        StepScope s("Заголовки безопасности (02 §6.4, Э8 шаг 3): nosniff/"
+                    "DENY/CSP/Referrer-Policy на всех ответах");
+
+        // Проверка заголовка с честным FAIL и на транспортном сбое
+        // (headerOf от nullptr вернул бы пустую строку — путаное сообщение).
+        const auto expectHeader =
+            [&](const drogon::HttpResponsePtr& r,
+                const char* name,
+                const std::string& want,
+                const std::string& what) {
+                const std::string got = r ? headerOf(r.get(), name)
+                                          : std::string("<нет ответа>");
+                check(got == want,
+                      what +
+                          (got == want ? "" : " — получено \"" + got + "\""));
+            };
+
+        // 1) Публичная SSR-страница (аноним): полный набор, ТОЧНЫЕ значения.
+        auto login = get(anon, "/login");
+        expectStatus(login,
+                     drogon::k200OK,
+                     "GET /login (аноним) → 200 — страница отдаётся",
+                     "GET /login");
+        expectHeader(login,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "GET /login: X-Content-Type-Options: nosniff");
+        expectHeader(login,
+                     "X-Frame-Options",
+                     "DENY",
+                     "GET /login: X-Frame-Options: DENY (плюс к "
+                     "frame-ancestors 'none' — для браузеров без CSP)");
+        expectHeader(login,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "GET /login: CSP == default-src 'self'; style-src "
+                     "'self' 'unsafe-inline'; frame-ancestors 'none'");
+        check(login == nullptr ||
+                  headerOf(login.get(), "Content-Security-Policy")
+                      .find("unsafe-eval") == std::string::npos,
+              "GET /login: в CSP нет unsafe-eval (htmx-атрибуты его не "
+              "требуют; inline <script> и on*/hx-on в views/ нет)");
+        expectHeader(login,
+                     "Referrer-Policy",
+                     para::SecurityHeaders::kReferrerPolicyValue,
+                     "GET /login: Referrer-Policy: strict-origin-when-"
+                     "cross-origin");
+        check(login != nullptr &&
+                  std::string(login->body()).find("<!DOCTYPE html") !=
+                      std::string::npos,
+              "GET /login: тело — HTML-документ (страница отдаётся телом)");
+
+        // 2) Главная анонимом — контракт 02 §6.3 (303 /login); заголовки
+        //    обязательны и на редиректе.
+        auto home = get(anon, "/");
+        expectStatus(home,
+                     drogon::k303SeeOther,
+                     "GET / (аноним) → 303 /login — контракт SSR 02 §6.3",
+                     "GET / аноним");
+        expectHeader(home,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "GET /: nosniff стоит и на 303-редиректе");
+
+        // 3) Статический файл — StaticFileRouter → newFileResponse.
+        auto css = get(anon, "/static/css/app.css");
+        expectStatus(css,
+                     drogon::k200OK,
+                     "GET /static/css/app.css → 200 — статика отдаётся",
+                     "GET /static/css/app.css");
+        expectHeader(css,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "GET /static/css/app.css: nosniff (MIME-защита статики)");
+        expectHeader(css,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "GET /static/css/app.css: CSP на статике (ВСЕ ответы)");
+
+        // 4) JSON-401 от LoginFilter — ответ ФИЛЬТРА, не контроллера.
+        auto unauth = get(anon, "/v1/me");
+        expectStatus(unauth,
+                     drogon::k401Unauthorized,
+                     "GET /v1/me (аноним) → 401 — ответ фильтра",
+                     "GET /v1/me аноним");
+        expectHeader(unauth,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "401 фильтра: nosniff");
+        expectHeader(unauth, "X-Frame-Options", "DENY", "401 фильтра: DENY");
+        expectHeader(unauth,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "401 фильтра: CSP");
+        expectHeader(unauth,
+                     "Referrer-Policy",
+                     para::SecurityHeaders::kReferrerPolicyValue,
+                     "401 фильтра: Referrer-Policy");
+
+        // 5) 303-редирект LoginFilter на приватной SSR-странице.
+        auto redirect = get(anon, "/schedule");
+        expectStatus(redirect,
+                     drogon::k303SeeOther,
+                     "GET /schedule (аноним) → 303 /login",
+                     "GET /schedule аноним");
+        expectHeader(redirect,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "303 /schedule: nosniff");
+        expectHeader(redirect,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "303 /schedule: CSP");
+
+        // 6) 404-заглушка роутера (Э1-находка: неизвестные пути отвечают
+        //    HTML-404 Drogon) — заголовки обязаны быть и на ней.
+        auto lost = get(anon, "/v1/no-such-" + randomHex(6));
+        expectStatus(lost,
+                     drogon::k404NotFound,
+                     "GET /v1/no-such-<hex> → 404 — заглушка роутера",
+                     "GET несуществующий путь");
+        expectHeader(lost,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "404 роутера: nosniff");
+
+        // 7) Авторизованные страницы (живая сессия Ани): главная и
+        //    /schedule — заголовки на месте после входа.
+        auto homeAuth = get(anya, "/");
+        expectStatus(homeAuth,
+                     drogon::k200OK,
+                     "GET / (Аня) → 200 — главная отдаётся",
+                     "GET / с cookie");
+        expectHeader(homeAuth,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "GET / (Аня): nosniff");
+        expectHeader(homeAuth,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "GET / (Аня): CSP");
+        auto sched = get(anya, "/schedule");
+        expectStatus(sched,
+                     drogon::k200OK,
+                     "GET /schedule (Аня) → 200 — страница отдаётся",
+                     "GET /schedule с cookie");
+        expectHeader(sched,
+                     "X-Content-Type-Options",
+                     "nosniff",
+                     "GET /schedule (Аня): nosniff");
+        expectHeader(sched,
+                     "Content-Security-Policy",
+                     para::SecurityHeaders::kCspValue,
+                     "GET /schedule (Аня): CSP (пост-логин страница)");
     }
 
     // --- Вердикт ------------------------------------------------------------

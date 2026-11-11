@@ -2,6 +2,7 @@
 #include <string>
 
 #include "filters/CsrfCheck.h"
+#include "filters/SecurityHeaders.h"
 #include "services/MigrationRunner.h"
 #include "services/NotifyDispatcher.h"
 #include "services/ReminderService.h"
@@ -63,6 +64,13 @@ int main(int argc, char* argv[]) {
     // вызов делает security_tests — сервер в тесте конфигурационно
     // идентичен продовому.
     para::CsrfCheck::registerPageIssuanceAdvice();
+
+    // Заголовки безопасности на ВСЕХ ответах (02 §6.4, Э8 шаг 3):
+    // nosniff, X-Frame-Options: DENY, CSP (default-src 'self' + inline
+    // ровно для фактически inline style-атрибутов, без unsafe-eval),
+    // Referrer-Policy. Advice на СОЗДАНИЕ ответа — единственная точка
+    // на процесс, контроллеры не трогаются (SecurityHeaders.h).
+    para::SecurityHeaders::registerAdvice();
 
     // Таймер Э6 (гайд BE §9; 02 §4 поток 4): раз в минуту — базовое
     // напоминание «за 1 день» (deadlines.reminded), персональные

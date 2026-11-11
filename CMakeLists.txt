@@ -125,6 +125,7 @@ set(PARA_APP_SOURCES
                src/services/DashboardService.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
+               src/filters/SecurityHeaders.cpp
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
