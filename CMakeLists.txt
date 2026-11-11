@@ -68,8 +68,11 @@ else()
     message(STATUS "para: linking Drogon::Drogon (STATIC IMPORTED in drogonframework/drogon:v1.9.14; verify runtime binary with ldd — no libdrogon.so)")
 endif()
 
-add_executable(para
-               src/main.cpp
+# ##############################################################################
+# Исходники приложения БЕЗ main.cpp — общий список целей para и security_tests
+# (Э8 шаг 1: security_tests поднимает НАСТОЯЩИЙ сервер в тестовом процессе
+# и ходит по нему реальным HTTP — полный вариант автотеста 02 §9.3).
+set(PARA_APP_SOURCES
                src/controllers/HealthCtrl.cpp
                src/controllers/AuthCtrl.cpp
                src/controllers/SettingsCtrl.cpp
@@ -124,6 +127,10 @@ add_executable(para
                src/filters/StaffFilter.cpp
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
+
+add_executable(para
+               src/main.cpp
+               ${PARA_APP_SOURCES})
 
 target_include_directories(para PRIVATE
                            ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -217,24 +224,28 @@ enable_testing()
 add_test(NAME para-tests COMMAND para-tests)
 
 # ##############################################################################
-# security_tests — автотест безопасности 02 §9.3 (DoD №2). С Э4 шага 3 здесь
-# реально выполняется шаг 4 (grades/{id}: чужой → 403, свой → 200,
-# несуществующий → 404) на уровне OwnershipGuard::check(Table::Grades) +
-# GradesService::gradeById поверх временной SQLite — тот же код, что под
-# GradesCtrl::getGrade; полный HTTP-вариант с двумя живыми сессиями — Э8
-# (шаги 1–3, 5–8 — тоже Э8: сущности Э5–Э6а). Вывод теста прикладывается
-# к отчёту жюри.
+# security_tests — ПОЛНЫЙ HTTP-вариант автотеста безопасности 02 §9.3
+# (Э8 шаг 1, DoD №2): поднимает ВЕСЬ сервер (весь PARA_APP_SOURCES — те же
+# контроллеры/фильтры/сервисы, что в para, кроме main.cpp) в тестовом
+# процессе на 127.0.0.1:<свободный порт> и ходит по нему реальным HTTP
+# (drogon::HttpClient) с двумя живыми cookie-сессиями. Вывод теста
+# прикладывается к отчёту жюри.
 add_executable(security_tests
                tests/security_tests.cpp
-               src/services/GradesService.cpp
-               src/services/RoomsService.cpp
-               src/services/OwnershipGuard.cpp)
+               ${PARA_APP_SOURCES})
 
 target_include_directories(security_tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                    ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+# Корень исходников в тесте: MigrationRunner::run(sql/migrations,
+# sql/fixtures.sql) — пути резолвятся от источника независимо от cwd
+# (ctest стартует в build/, ручной запуск — из корня проекта).
+target_compile_definitions(security_tests PRIVATE
+                           PARA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(security_tests PRIVATE
                       ${PARA_DROGON_TARGETS}
                       ${PARA_SQLITE3_TARGET}
-                      ${ARGON2_LIBRARY})
+                      ${ARGON2_LIBRARY}
+                      ${HPDF_LIBRARY}
+                      ZLIB::ZLIB)
 add_test(NAME security_tests COMMAND security_tests)
