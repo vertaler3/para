@@ -172,7 +172,7 @@ void ApplicationsCtrl::updateDraft(
     // проверена фильтром, тело читается после Own).
     OwnershipGuard::check(
         db, OwnershipGuard::Table::Applications, session.userId, applicationId,
-        [db, applicationId, req,
+        [db, applicationId, req, userId = session.userId,
          cb](OwnershipGuard::Verdict v) mutable {
             if (sendVerdict(cb, v))
                 return;
@@ -183,7 +183,7 @@ void ApplicationsCtrl::updateDraft(
                                       k400BadRequest));
                 return;
             }
-            const auto spec = ApplicationsService::parsePayloadJson(*json);
+            const auto spec = ApplicationsService::parseUpdate(*json);
             if (!spec.ok)
             {
                 cb(api::errorResponse("bad_request", spec.errorMessage,
@@ -191,8 +191,9 @@ void ApplicationsCtrl::updateDraft(
                 return;
             }
             ApplicationsService::updateDraft(
-                db, applicationId, spec.text,
-                [cb = std::move(cb)](
+                db, applicationId, spec.payloadJson, spec.submit, userId,
+                [cb = std::move(cb),
+                 submit = spec.submit](
                     ApplicationsService::UpdateResult r) mutable {
                     switch (r.status)
                     {
@@ -201,10 +202,14 @@ void ApplicationsCtrl::updateDraft(
                                 std::move(r.body)));
                             return;
                         case ApplicationsService::Update::NotDraft:
-                            // 02 §5.2: «409 (статус ≠ draft)».
+                            // 02 §5.2: «409 (статус ≠ draft)» — и для
+                            // правки, и для submit (Р-29/8.i: не-draft не
+                            // подаётся, payload не тронут).
                             cb(api::errorResponse(
                                 "invalid_status_transition",
-                                "Править можно только черновик заявки",
+                                submit
+                                    ? "Подать можно только черновик заявки"
+                                    : "Править можно только черновик заявки",
                                 k409Conflict));
                             return;
                         case ApplicationsService::Update::NotFound:

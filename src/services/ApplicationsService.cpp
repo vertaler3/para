@@ -131,6 +131,14 @@ const std::string kUpdateDraftSql =
     " updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
     " WHERE id = $2 AND status = 'draft'";
 
+// Р-29 (8.i): payload подаваемого черновика — в транзакции перехода, хуком
+// afterEvent ПОСЛЕ условного UPDATE статуса автомата (apply гарантирует:
+// строка была draft и стала submitted; статусное условие уже отработано —
+// здесь только PK). updated_at ставит kUpdateSql автомата; сбой хука —
+// fail() → откат статуса, события и payload (атомарность apply).
+const std::string kUpdateSubmitPayloadSql =
+    "UPDATE applications SET payload_json = $1 WHERE id = $2";
+
 // Событие таймлайна по PK — для тела 201 messages (после Applied apply()
 // eventId известен точно; «последнее событие» на гонках не используется).
 void fetchEventById(const drogon::orm::DbClientPtr& db,
@@ -516,10 +524,10 @@ ApplicationsService::CreateSpec ApplicationsService::parseCreate(
     return spec;
 }
 
-ApplicationsService::TextSpec ApplicationsService::parsePayloadJson(
+ApplicationsService::UpdateSpec ApplicationsService::parseUpdate(
     const Json::Value& body)
 {
-    TextSpec spec;
+    UpdateSpec spec;
     if (!body.isMember("payload_json") || !body["payload_json"].isString() ||
         !isValidJsonString(body["payload_json"].asString()))
     {
@@ -527,7 +535,19 @@ ApplicationsService::TextSpec ApplicationsService::parsePayloadJson(
         spec.errorMessage = "payload_json — ожидается валидный JSON";
         return spec;
     }
-    spec.text = body["payload_json"].asString();
+    spec.payloadJson = body["payload_json"].asString();
+    // Р-29 (8.i): опциональный submit — подача существующего черновика;
+    // отсутствие/false — прежнее поведение автосохранения (байт-в-байт).
+    if (body.isMember("submit"))
+    {
+        if (!body["submit"].isBool())
+        {
+            spec.errorCode = "bad_request";
+            spec.errorMessage = "submit — ожидается true/false";
+            return spec;
+        }
+        spec.submit = body["submit"].asBool();
+    }
     spec.ok = true;
     return spec;
 }
@@ -713,8 +733,78 @@ void ApplicationsService::one(drogon::orm::DbClientPtr db,
 void ApplicationsService::updateDraft(drogon::orm::DbClientPtr db,
                                       int64_t applicationId,
                                       const std::string& payloadJson,
+                                      bool submit,
+                                      int64_t authorId,
                                       UpdateCb cb)
 {
+    if (submit)
+    {
+        // Р-29 (8.i): подача СУЩЕСТВУЮЩЕГО черновика — переход
+        // draft→submitted ЧЕРЕЗ АВТОМАТ (событие таймлайна с датой,
+        // автор — владелец-студент); payload — в той же транзакции
+        // хуком afterEvent (после условного UPDATE статуса: apply
+        // гарантирует, что строка была draft). Не-draft → матрица не
+        // пропустит → InvalidTransition → NotDraft (409), хук не
+        // выполнялся — payload не тронут.
+        AppWorkflow::apply(
+            db, applicationId, "submitted", std::nullopt, authorId,
+            [db, applicationId,
+             cb](AppWorkflow::ApplyResult r) {
+                switch (r.outcome)
+                {
+                    case AppWorkflow::Outcome::Applied:
+                        // Карточка в новом статусе (по PK — после apply,
+                        // паттерн staffChangeStatus).
+                        *db << kSelectAppSql << applicationId >>
+                            [cb](const drogon::orm::Result& rows) {
+                                if (rows.empty())
+                                {
+                                    cb(UpdateResult{Update::NotFound,
+                                                    Json::Value()});
+                                    return;
+                                }
+                                cb(UpdateResult{Update::Ok, appJson(rows[0])});
+                            } >>
+                            [cb, applicationId](const DrogonDbException& e) {
+                                LOG_ERROR << "ApplicationsService::"
+                                             "updateDraft(submit, "
+                                          << applicationId << "): select: "
+                                          << e.base().what();
+                                cb(UpdateResult{Update::Error, Json::Value()});
+                            };
+                        return;
+                    case AppWorkflow::Outcome::InvalidTransition:
+                        // Статус ≠ draft (или гонка) — 409 как у правки
+                        // не-draft; ничего не изменено.
+                        cb(UpdateResult{Update::NotDraft, Json::Value()});
+                        return;
+                    case AppWorkflow::Outcome::NotFound:
+                        cb(UpdateResult{Update::NotFound, Json::Value()});
+                        return;
+                    case AppWorkflow::Outcome::Error:
+                        cb(UpdateResult{Update::Error, Json::Value()});
+                        return;
+                }
+            },
+            // Хук: payload подаваемой формы — в транзакции перехода
+            // (kUpdateSubmitPayloadSql); сбой → fail() = откат всего.
+            [applicationId, payloadJson](
+                const std::shared_ptr<Transaction>& tx,
+                const std::function<void()>& fail) {
+                *tx << kUpdateSubmitPayloadSql << payloadJson << applicationId >>
+                    [](const drogon::orm::Result&) {
+                        // commit — при уничтожении tx (последний держатель).
+                    } >>
+                    [fail](const DrogonDbException& e) {
+                        LOG_ERROR << "ApplicationsService::updateDraft"
+                                     "(submit): update payload: "
+                                  << e.base().what();
+                        fail();
+                    };
+            });
+        return;
+    }
+
     // Условный UPDATE: только draft (02 §5.2 «409 (статус ≠ draft)»);
     // guard владения уже отработал в контроллере (до проверки статуса).
     *db << kUpdateDraftSql << payloadJson << applicationId >>

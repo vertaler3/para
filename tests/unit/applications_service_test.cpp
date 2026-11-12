@@ -4,6 +4,10 @@
 //    автор — студент);
 //  - PUT payload_json: draft → Ok (payload/updated_at обновлены);
 //    не-draft → NotDraft (409 по 02 §5.2 «статус ≠ draft»), payload не тронут;
+//  - PUT submit:true (Р-29, 8.i): подача СУЩЕСТВУЮЩЕГО черновика — draft →
+//    submitted через автомат (событие draft→submitted с датой, автор —
+//    владелец), payload обновлён в той же транзакции; submit на не-draft →
+//    NotDraft (409), ничего не изменено; submit не-bool → 400 (parseUpdate);
 //  - GET {id}: карточка + таймлайн (после submit — событие подачи);
 //  - GET список: только свои (изоляция), фильтр по статусу;
 //  - messages: текст в таймлайн событием с комментарием, автор — текущий
@@ -231,12 +235,14 @@ ApplicationsService::OneResult oneOf(const drogon::orm::DbClientPtr& db,
 
 ApplicationsService::UpdateResult putOf(const drogon::orm::DbClientPtr& db,
                                         int64_t appId,
-                                        const std::string& payloadJson)
+                                        const std::string& payloadJson,
+                                        bool submit = false,
+                                        int64_t author = 4)
 {
     std::promise<ApplicationsService::UpdateResult> p;
     auto f = p.get_future();
     ApplicationsService::updateDraft(
-        db, appId, payloadJson,
+        db, appId, payloadJson, submit, author,
         [&p](ApplicationsService::UpdateResult r) { p.set_value(std::move(r)); });
     REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
     return f.get();
@@ -404,6 +410,89 @@ TEST_CASE("ApplicationsService: PUT не-draft → NotDraft (409), payload не 
           ApplicationsService::Update::Ok);
 }
 
+TEST_CASE("ApplicationsService: PUT submit:true — подача существующего черновика (8.i, Р-29)")
+{
+    Fixture f;
+    // Черновик Дины с частично заполненной формой (автосохранение).
+    const int64_t draft = f.seedApp(4, "draft", "{\"copies\":1}");
+
+    // Подача: payload обновлён И статус submitted — один PUT (обходной
+    // FE-костыль «PUT-синк + POST новой заявки» больше не нужен).
+    const auto put = putOf(f.db, draft, "{\"copies\":2,\"delivery\":\"office\"}",
+                           true, 4);
+    REQUIRE(put.status == ApplicationsService::Update::Ok);
+    CHECK(put.body["status"].asString() == "submitted");
+    CHECK(put.body["payload"]["copies"].asInt64() == 2);
+    CHECK(put.body["payload"]["delivery"].asString() == "office");
+
+    // Автомат: событие draft→submitted С ДАТОЙ (at), автор — владелец.
+    const auto card = oneOf(f.db, draft);
+    REQUIRE(card.status == ApplicationsService::One::Found);
+    REQUIRE(card.body["timeline"].size() == 1);
+    const auto& ev = card.body["timeline"][0];
+    CHECK(ev["application_id"].asInt64() == draft);
+    CHECK(ev["from_status"].asString() == "draft");
+    CHECK(ev["to_status"].asString() == "submitted");
+    CHECK(ev["comment"].isNull());
+    CHECK(ev["author_id"].asInt64() == 4);
+    CHECK(ev["at"].asString().size() == 20);  // strftime DDL «%Y-%m-%dT%H:%M:%SZ»
+
+    // Повторная подача (submit на submitted) → NotDraft (409), событие
+    // одно, payload не перезаписан.
+    CHECK(putOf(f.db, draft, "{\"copies\":9}", true, 4).status ==
+          ApplicationsService::Update::NotDraft);
+    const auto after = oneOf(f.db, draft);
+    REQUIRE(after.status == ApplicationsService::One::Found);
+    CHECK(after.body["status"].asString() == "submitted");
+    CHECK(after.body["payload"]["copies"].asInt64() == 2);
+    CHECK(after.body["timeline"].size() == 1);
+
+    // submit:false — прежнее поведение: у submitted-заявки правка тоже
+    // 409 (не-draft), payload не тронут.
+    CHECK(putOf(f.db, draft, "{\"copies\":7}", false, 4).status ==
+          ApplicationsService::Update::NotDraft);
+}
+
+TEST_CASE("ApplicationsService: PUT submit:true на терминальной — NotDraft, ничего не тронуто")
+{
+    Fixture f;
+    const int64_t issued = f.seedApp(4, "issued", "{\"copies\":1}");
+    const int64_t cancelled = f.seedApp(4, "cancelled");
+
+    CHECK(putOf(f.db, issued, "{\"copies\":9}", true, 4).status ==
+          ApplicationsService::Update::NotDraft);
+    CHECK(putOf(f.db, cancelled, "{\"copies\":9}", true, 4).status ==
+          ApplicationsService::Update::NotDraft);
+    const auto card = oneOf(f.db, issued);
+    REQUIRE(card.status == ApplicationsService::One::Found);
+    CHECK(card.body["payload"]["copies"].asInt64() == 1);  // не перезаписан
+    CHECK(card.body["timeline"].size() == 0);  // автомат событий не писал
+}
+
+TEST_CASE("ApplicationsService: parseUpdate — payload_json обязателен, submit опционален (8.i)")
+{
+    Json::Value body;
+    // Нет payload_json → 400 (и при submit:true — форма обязана прийти).
+    CHECK_FALSE(ApplicationsService::parseUpdate(body).ok);
+    body["payload_json"] = "{\"copies\":2}";
+    const auto save = ApplicationsService::parseUpdate(body);
+    CHECK(save.ok);
+    CHECK(save.payloadJson == "{\"copies\":2}");
+    CHECK_FALSE(save.submit);  // отсутствие — прежнее автосохранение
+    body["submit"] = "yes";
+    CHECK_FALSE(ApplicationsService::parseUpdate(body).ok);  // не-bool → 400
+    body["submit"] = false;
+    const auto saveFalse = ApplicationsService::parseUpdate(body);
+    CHECK(saveFalse.ok);
+    CHECK_FALSE(saveFalse.submit);
+    body["submit"] = true;
+    const auto submitSpec = ApplicationsService::parseUpdate(body);
+    CHECK(submitSpec.ok);
+    CHECK(submitSpec.submit);
+    body["payload_json"] = "{\"copies\": не-json";
+    CHECK_FALSE(ApplicationsService::parseUpdate(body).ok);  // не JSON → 400
+}
+
 TEST_CASE("ApplicationsService: POST submit:true — submitted + событие подачи")
 {
     Fixture f;
@@ -485,10 +574,6 @@ TEST_CASE("ApplicationsService: messages — событие с коммента�
     CHECK_FALSE(ApplicationsService::parseMessageText(bad).ok);
     bad["text"] = 42;
     CHECK_FALSE(ApplicationsService::parseMessageText(bad).ok);
-    CHECK_FALSE(ApplicationsService::parsePayloadJson(Json::Value()).ok);
-    Json::Value nonJson;
-    nonJson["payload_json"] = "не-json";
-    CHECK_FALSE(ApplicationsService::parsePayloadJson(nonJson).ok);
 }
 
 TEST_CASE("ApplicationsService: С7.6 — ответ на need_info возвращает «В работе»")

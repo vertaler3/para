@@ -26,7 +26,9 @@ namespace para
 //
 // Событие подачи (NULL → submitted, автор — студент) пишется при POST с
 // submit:true — как в fixtures.sql (у черновика событий нет); смена статуса
-// и прочие переходы — через AppWorkflow::apply (матрица шага 1).
+// и прочие переходы — через AppWorkflow::apply (матрица шага 1). Р-29 (8.i):
+// PUT c submit:true подаёт СУЩЕСТВУЮЩИЙ черновик — тот же автомат
+// (draft→submitted, событие с датой), payload — в той же транзакции.
 class ApplicationsService
 {
   public:
@@ -101,22 +103,32 @@ class ApplicationsService
                     int64_t applicationId,
                     OneCb cb);
 
-    // Валидация тела PUT (02 §5.2: body payload_json — автосохранение):
-    // строка с валидным JSON (пустая строка — не JSON → 400).
-    struct TextSpec
+    // Валидация тела PUT (02 §5.2: body payload_json — автосохранение;
+    // Р-29: опциональный submit — подача СУЩЕСТВУЮЩЕГО черновика, 8.i):
+    // payload_json — строка с валидным JSON (иначе 400); submit —
+    // опциональный bool (иначе 400): false/отсутствие → только сохранение
+    // черновика (прежнее поведение), true → draft → submitted (автомат).
+    struct UpdateSpec
     {
         bool ok = false;
         std::string errorCode;
         std::string errorMessage;
-        std::string text;
+        std::string payloadJson;
+        bool submit = false;
     };
-    static TextSpec parsePayloadJson(const Json::Value& body);
+    static UpdateSpec parseUpdate(const Json::Value& body);
 
     // PUT /v1/applications/{id} — ПОСЛЕ Own guard'а (guard ДО проверки
-    // статуса: чужая не-draft заявка → 403, а не 409). ТОЛЬКО draft
-    // (02 §5.2: «409 (статус ≠ draft)»): условный UPDATE … WHERE id AND
-    // status='draft' — 0 строк → NotFound (заявки нет) или NotDraft (409).
-    // Ok → body — обновлённая карточка (payload/status/updated_at).
+    // статуса: чужая не-draft заявка → 403, а не 409). Без submit —
+    // ТОЛЬКО draft (02 §5.2: «409 (статус ≠ draft)»): условный UPDATE …
+    // WHERE id AND status='draft' — 0 строк → NotFound (заявки нет) или
+    // NotDraft (409). С submit:true (Р-29, 8.i) — подача существующего
+    // черновика: переход draft→submitted ЧЕРЕЗ АВТОМАТ AppWorkflow (событие
+    // таймлайна с датой, автор — authorId-владелец), payload обновляется
+    // в ТОЙ ЖЕ транзакции хуком afterEvent; не-draft → InvalidTransition
+    // автомата → NotDraft (409 invalid_status_transition), payload не
+    // тронут. Ok → body — карточка заявки (payload/status/updated_at;
+    // при submit — статус submitted).
     enum class Update
     {
         Ok,
@@ -134,9 +146,18 @@ class ApplicationsService
     static void updateDraft(drogon::orm::DbClientPtr db,
                             int64_t applicationId,
                             const std::string& payloadJson,
+                            bool submit,
+                            int64_t authorId,
                             UpdateCb cb);
 
     // Валидация тела POST messages (02 §5.2: body text): непустая строка.
+    struct TextSpec
+    {
+        bool ok = false;
+        std::string errorCode;
+        std::string errorMessage;
+        std::string text;
+    };
     static TextSpec parseMessageText(const Json::Value& body);
 
     // POST /v1/applications/{id}/messages (201) — ПОСЛЕ Own guard'а.
