@@ -125,6 +125,10 @@ set(PARA_APP_SOURCES
                src/services/MapService.cpp
                src/services/DashboardService.cpp
                src/services/NewsService.cpp
+               # 5.18 шаг 1: словарь интерфейса ru/en/zh + резолв языка —
+               # в PARA_APP_SOURCES (прецедент NewsService): доступен para,
+               # security_tests, а с шага 7 — и списку para-tests.
+               src/models/i18n.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
                src/filters/SecurityHeaders.cpp

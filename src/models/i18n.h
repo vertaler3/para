@@ -1,0 +1,1036 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <optional>
+#include <string_view>
+
+// ============================================================================
+// Словарь интерфейса «Пара» — фича 5.18 «Мультиязычный UI: ru/en/中文», шаг 1.
+//
+// Три constexpr-таблицы «ключ → строка» (ru/en/zh; 中文 — упрощённый
+// китайский) — ПОЛНЫЙ keyset всех потребительских экранов (шаг 3 подставит
+// строки в HttpViewData ДО рендера): таб-бар и заголовки экранов, кнопки,
+// подписи и aria-метки, состояния скелетон/пусто/ошибка/офлайн, тосты
+// (инвентарь строк — views/*.csp и static/js/app.js, значения ru —
+// дословно из разметки, чтобы подстановка не меняла вид экранов).
+//
+// ВНЕ объёма словаря (осознанно, постановка 5.18): «Стол сотрудника»
+// (staff.csp — рабочий кабинет сотрудника), серверные message API-ошибок
+// (02 §5.1 — по-русски), контент БД (ФИО/дисциплины/новости фикстур),
+// PDF-справка (PdfBuilder) и бейдж «концепт для хакатона, данные
+// вымышленные» (требование задания, AGENTS §5.1) — остаются по-русски.
+// Вордрмарк «пара» не переводится (как логотип); сегмент выбора языка —
+// автонимы «Рус | EN | 中文», одинаковые во всех языках (lang.*).
+//
+// Доступ — t(key, lang): ключи — стабильные идентификаторы вида
+// nav.schedule; отсутствующий ключ в таблице языка → значение ru
+// (фолбэк); ключа нет и в ru → пустая string_view (вызывающий показывает
+// ключ/сырой текст — но такого быть не должно: полнота keyset и
+// отсортированность проверены static_assert ниже). Неизвестный Lang —
+// тоже ru (язык по умолчанию — русский, инвариант фичи).
+//
+// Русский — источник истины: kRu задаёт состав ключей, kEn/kZh обязаны
+// покрывать его целиком (static_assert sameKeys); фолбэк на ru оставлен
+// для будущих расширений (новый ключ сначала заведён в ru).
+//
+// Р-16 (docs/decisions.md): в CSP v1.9.14 нет {{ }} и автоэкранирования —
+// строки словаря кладутся в HttpViewData ДО рендера; значения словаря —
+// серверные константы, экранировать на выходе нечего (htmlTranslate — для
+// пользовательских данных). UTF-8 в строках — без \x-последовательностей,
+// «сырыми» литералами (как русские строки всего проекта); байт-арифметика
+// по строкам словаря не выполняется.
+//
+// Резолв языка ЗАПРОСА (шаг 3 подключит к контроллерам): cookie
+// para_lang (ru|en|zh) → иначе заголовок Accept-Language (парсинг
+// q-значений RFC 7231, зоны zh-CN/en-US → zh/en) → иначе ru. Функции
+// принимают ЗНАЧЕНИЯ (строки), без зависимости от drogon — словарь
+// доступен и юнит-тестам (тесты t()/резолва — шаг 7); реализации —
+// models/i18n.cpp.
+// ============================================================================
+
+namespace para::i18n
+{
+
+// ----------------------------------------------------------------------------
+// Язык интерфейса. Коды — канонические строчные BCP 47 (те же значения,
+// что CHECK (lang IN ('ru','en','zh')) миграции 0008 и settings.lang).
+// ----------------------------------------------------------------------------
+enum class Lang : std::uint8_t
+{
+    Ru,
+    En,
+    Zh,
+};
+
+// Порядок сегмента выбора языка в профиле: Рус | EN | 中文.
+inline constexpr std::array<Lang, 3> kSegmentOrder{{Lang::Ru, Lang::En, Lang::Zh}};
+
+// Код языка («ru»/«en»/«zh») — для cookie para_lang и settings.lang.
+constexpr std::string_view langCode(Lang lang)
+{
+    switch (lang)
+    {
+    case Lang::En: return "en";
+    case Lang::Zh: return "zh";
+    case Lang::Ru: break;
+    }
+    return "ru";
+}
+
+// Язык по умолчанию — русский (инвариант фичи 5.18).
+constexpr Lang defaultLang()
+{
+    return Lang::Ru;
+}
+
+// Код → Lang. Только точные коды ru|en|zh; прочее (в т.ч. зоны «en-US» —
+// cookie задаёт наш сегмент, зоны в нём не ожидаются) → nullopt.
+constexpr std::optional<Lang> langFromCode(std::string_view code)
+{
+    if (code == "ru") return Lang::Ru;
+    if (code == "en") return Lang::En;
+    if (code == "zh") return Lang::Zh;
+    return std::nullopt;
+}
+
+// ----------------------------------------------------------------------------
+// Таблицы. Пары отсортированы по ключу (лексикографически, по байтам) —
+// поиск двоичный; отсортированность и полнота keyset проверены
+// static_assert ниже (ошибка порядка — ошибка компиляции).
+// ----------------------------------------------------------------------------
+
+struct Entry
+{
+    std::string_view key;
+    std::string_view value;
+};
+
+// --- ru — источник истины keyset (массив неизвестной границы — размер
+// выводится инициализатором; полнота keyset проверяется static_assert) ------
+inline constexpr Entry kRu[]{
+    // a11y.* — aria-метки каркаса и экранов
+    {"a11y.brandHome", "Пара, на главную"},
+    {"a11y.feedFilter", "Фильтр уведомлений"},
+    {"a11y.feedSegment", "Раздел ленты"},
+    {"a11y.langGroup", "Язык интерфейса"},
+    {"a11y.nextWeek", "Следующая неделя"},
+    {"a11y.notifications", "Уведомления"},
+    {"a11y.obProgress", "Прогресс чеклиста"},
+    {"a11y.prevWeek", "Предыдущая неделя"},
+    {"a11y.primaryNav", "Основные разделы"},
+    {"a11y.quietFrom", "Тихие часы, начало"},
+    {"a11y.quietTo", "Тихие часы, конец"},
+    {"a11y.schedulePeriod", "Период расписания"},
+    {"a11y.showPassword", "Показать пароль"},
+    {"a11y.skipToContent", "К содержимому"},
+    {"a11y.staffNav", "Разделы сотрудника"},
+    {"a11y.themeGroup", "Тема"},
+    // app.* — приложение целиком
+    {"app.title", "Пара"},
+    // apps.* — заявки (список, каталог, чипы статусов)
+    {"apps.emptyText", "Нужна справка или заявление? Начните с каталога — типовая справка занимает три касания."},
+    {"apps.filterA11y", "Фильтр заявок по статусу"},
+    {"apps.formSubtitle", "Выберите документ — форма подставит данные профиля"},
+    {"apps.formTitle", "Новая заявка"},
+    {"apps.new", "+ Новая заявка"},
+    {"apps.openCatalog", "Открыть каталог"},
+    {"apps.statusAccepted", "Принята"},
+    {"apps.statusCancelled", "Отменена"},
+    {"apps.statusDraft", "Черновик"},
+    {"apps.statusInProgress", "В работе"},
+    {"apps.statusIssued", "Выдана"},
+    {"apps.statusNeedInfo", "Требуется уточнение"},
+    {"apps.statusReady", "Готова"},
+    {"apps.statusRejected", "Отклонена"},
+    {"apps.statusSubmitted", "Подана"},
+    {"apps.subtitle", "Каждый шаг — от подачи до получения"},
+    {"apps.title", "Мои заявки"},
+    // campus.* — блок «В кампусе» дашборда
+    {"campus.canteen", "Столовая"},
+    {"campus.canteenHint", "Посмотреть меню"},
+    {"campus.library", "Библиотека"},
+    {"campus.libraryHint", "Найти нужную книгу"},
+    {"campus.map", "Карта кампуса"},
+    {"campus.mapHint", "Найти кабинет"},
+    {"campus.people", "Найти человека"},
+    {"campus.peopleHint", "Преподаватели и студенты"},
+    {"campus.title", "В кампусе"},
+    // common.* — межэкранные кнопки/строки
+    {"common.all", "Все"},
+    {"common.allNeut", "Всё"},
+    {"common.close", "Закрыть"},
+    {"common.emptyFilter", "По этой теме пока ничего не было"},
+    {"common.more", "Ещё"},
+    {"common.retry", "Повторить"},
+    // control.* — тип контроля дисциплины (словарь CHECK 0002)
+    {"control.credit", "Зачёт"},
+    {"control.exam", "Экзамен"},
+    {"control.gradedCredit", "Дифзачёт"},
+    // dash.* — «Сегодня»: приветствие, виджеты, пустые состояния
+    {"dash.deadlines", "Дедлайны"},
+    {"dash.emptyApplications", "Заявок пока нет"},
+    {"dash.emptyClasses", "Пар нет — день твой"},
+    {"dash.emptyDeadlines", "Дедлайнов на горизонте нет"},
+    {"dash.emptyNews", "Пока ничего нового"},
+    {"dash.greetingAfternoon", "Добрый день"},
+    {"dash.greetingEvening", "Добрый вечер"},
+    {"dash.greetingMorning", "Доброе утро"},
+    {"dash.heading", "Всё важное — на один экран."},
+    {"dash.newRequest", "Подать заявку"},
+    {"dash.nextClass", "Следующая пара"},
+    {"dash.nextSoon", "скоро"},
+    {"dash.overnight", "За ночь"},
+    {"dash.roomLabel", "аудитория"},
+    {"dash.staffDesc", "Очередь заявок, переносы пар и объявления — рабочий кабинет учебного офиса."},
+    {"dash.staffOpen", "Открыть"},
+    {"dash.tomorrowTitle", "Что сдать завтра"},
+    {"dash.whatsNew", "Что нового"},
+    // error.* — состояния «ошибка» (03 §5.3): «Не получилось загрузить …»
+    {"error.checkInternet", "Проверьте интернет — и попробуем ещё раз."},
+    {"error.loadApplications", "Не получилось загрузить заявки"},
+    {"error.loadDeadlines", "Не получилось загрузить дедлайны"},
+    {"error.loadEvents", "Не получилось загрузить события"},
+    {"error.loadFeed", "Не получилось загрузить ленту"},
+    {"error.loadGrades", "Не получилось загрузить успеваемость"},
+    {"error.loadNews", "Не получилось загрузить новости"},
+    {"error.loadNotifications", "Не получилось загрузить уведомления"},
+    {"error.loadProfile", "Не получилось загрузить профиль"},
+    {"error.loadSchedule", "Не получилось загрузить расписание"},
+    {"error.loadSection", "Не получилось загрузить раздел"},
+    {"error.loadSettings", "Не получилось загрузить настройки"},
+    {"error.loadToday", "Не получилось загрузить „Сегодня“"},
+    // exam.* — вид события сессии (словарь CHECK 0004)
+    {"exam.consultation", "Консультация"},
+    {"exam.credit", "Зачёт"},
+    {"exam.exam", "Экзамен"},
+    {"exam.retake", "Пересдача"},
+    // grades.* — «Успеваемость»
+    {"grades.average", "Средний балл"},
+    {"grades.emptyText", "Как только преподаватели закроют ведомости, здесь появится средний балл и прогресс по дисциплинам. Пока можно проверить расписание и включить уведомления о дедлайнах."},
+    {"grades.emptyTitle", "Оценки появятся после первой аттестации"},
+    {"grades.missingPrefix", "До допуска не хватает"},
+    {"grades.noExamDates", "Даты сессии ещё не объявлены"},
+    {"grades.openSchedule", "Открыть расписание"},
+    {"grades.roomShort", "ауд."},
+    {"grades.session", "Сессия"},
+    {"grades.subjects", "Дисциплины"},
+    {"grades.subtitle", "Средний балл, дисциплины и сессия"},
+    {"grades.toCalendar", "В календарь"},
+    {"grades.withScores", "с баллами"},
+    // lang.* — автонимы сегмента языка (не переводятся)
+    {"lang.en", "EN"},
+    {"lang.ru", "Рус"},
+    {"lang.zh", "中文"},
+    // lesson.* — статусы пары (лента/расписание)
+    {"lesson.cancelled", "Отменена"},
+    {"lesson.moved", "Перенесена"},
+    {"lesson.substituted", "Замена"},
+    // login.* — экран входа
+    {"login.busy", "Входим…"},
+    {"login.demoCaption", "Тап по строке подставляет логин в форму. Единый демо-пароль публикуется в комментарии к работе."},
+    {"login.demoTitle", "Демо-доступы для жюри"},
+    {"login.formTitle", "Войти в кабинет"},
+    {"login.heading", "Хороший день начинается с ясности."},
+    {"login.lead", "Расписание, учёба и дела в кампусе — в одном месте."},
+    {"login.loginLabel", "Логин"},
+    {"login.offlineHint", "Нужна сеть для входа"},
+    {"login.passwordLabel", "Пароль"},
+    {"login.roleStaff", "сотрудник деканата"},
+    {"login.roleStudentF1", "студентка 1 курса"},
+    {"login.roleStudentF4", "студентка 4 курса"},
+    {"login.roleStudentM1", "студент 1 курса"},
+    {"login.roleStudentM4", "студент 4 курса"},
+    {"login.submit", "Войти"},
+    {"login.subtitle", "Ваш студенческий кабинет"},
+    {"login.tagline", "деканат в кармане"},
+    // month.* — месяцы датой «18 ноября» (ru — родительный падеж)
+    {"month.01", "января"},
+    {"month.02", "февраля"},
+    {"month.03", "марта"},
+    {"month.04", "апреля"},
+    {"month.05", "мая"},
+    {"month.06", "июня"},
+    {"month.07", "июля"},
+    {"month.08", "августа"},
+    {"month.09", "сентября"},
+    {"month.10", "октября"},
+    {"month.11", "ноября"},
+    {"month.12", "декабря"},
+    // nav.* — пять табов
+    {"nav.applications", "Заявки"},
+    {"nav.grades", "Успеваемость"},
+    {"nav.profile", "Профиль"},
+    {"nav.schedule", "Расписание"},
+    {"nav.today", "Сегодня"},
+    // notif.* — «Уведомления»: сегменты, чипы, пустые состояния
+    {"notif.announcements", "Объявления"},
+    {"notif.emptyText", "Новые переносы, дедлайны и статусы заявок появятся здесь — и придут push-ем, если вы включите уведомления"},
+    {"notif.emptyTitle", "Тихо. Всё под контролем"},
+    {"notif.enable", "Включить уведомления"},
+    {"notif.events", "События"},
+    {"notif.eventsEmptyText", "Конференции, турниры и встречи появятся здесь, как только их анонсируют"},
+    {"notif.eventsEmptyTitle", "Событий пока нет"},
+    {"notif.loadingEvents", "Загрузка событий"},
+    {"notif.loadingFeed", "Загрузка уведомлений"},
+    {"notif.loadingNews", "Загрузка новостей"},
+    {"notif.news", "Новости"},
+    {"notif.newsEmptyText", "Официальные новости и анонсы появятся здесь, как только их опубликуют"},
+    {"notif.newsEmptyTitle", "Новостей пока нет"},
+    {"notif.readAll", "Прочитать всё"},
+    {"notif.subtitle", "Изменения и задачи, которые важно заметить"},
+    {"notif.title", "Уведомления"},
+    {"notif.unread", "Непрочитанные"},
+    // offline.* — офлайн-баннер и блокировки действий (03 §5.4)
+    {"offline.banner", "Нет сети. Проверьте подключение — и попробуйте ещё раз."},
+    {"offline.bannerStale", "Нет сети. Показываем данные на момент"},
+    {"offline.needed", "Нужна сеть для этого действия"},
+    // onboarding.* — чеклист С5 (дашборд и профиль)
+    {"onboarding.done", "Чеклист завершён — кабинет настроен."},
+    {"onboarding.hint", "Продолжить можно в профиле."},
+    {"onboarding.profileTitle", "Настроим кабинет"},
+    {"onboarding.skip", "Пропустить"},
+    {"onboarding.steps", "4 шага"},
+    {"onboarding.title", "Настраиваем кабинет"},
+    // plural.* — формы для счётчиков («N пар», «N событий»…);
+    // en/zh формы множественного не различает — one/few/many совпадают
+    {"plural.classFew", "пары"},
+    {"plural.classMany", "пар"},
+    {"plural.classOne", "пара"},
+    {"plural.eventFew", "события"},
+    {"plural.eventMany", "событий"},
+    {"plural.eventOne", "событие"},
+    {"plural.pointFew", "балла"},
+    {"plural.pointMany", "баллов"},
+    {"plural.pointOne", "балл"},
+    {"plural.subjectFew", "дисциплины"},
+    {"plural.subjectMany", "дисциплин"},
+    {"plural.subjectOne", "дисциплина"},
+    // profile.* — профиль: данные, настройки, тема/язык, календарь, выход
+    {"profile.appearance", "Оформление"},
+    {"profile.calendar", "Календарь"},
+    {"profile.campus", "Кампус"},
+    {"profile.cardNo", "Студ. билет №"},
+    {"profile.gradebook", "Зачётная книжка"},
+    {"profile.gradebookHint", "Итоги по дисциплинам"},
+    {"profile.group", "Группа:"},
+    {"profile.icsAdd", "Добавить в календарь"},
+    {"profile.icsCreate", "Создать подписку"},
+    {"profile.icsHint", "Расписание — в календаре телефона: приватная ссылка обновляется сама."},
+    {"profile.icsNote", "Новая подписка отзывает прежнюю ссылку — старая перестанет обновляться. Ссылка секретная: по ней видно расписание без входа, не делитесь ею."},
+    {"profile.icsRevoke", "Отозвать доступ"},
+    {"profile.language", "Язык"},
+    {"profile.libraryCard", "Читательский билет"},
+    {"profile.logout", "Выйти"},
+    {"profile.logoutText", "Сессия завершится на сервере — вход потребуется заново."},
+    {"profile.logoutTitle", "Выйти из аккаунта?"},
+    {"profile.myBookings", "Мои брони"},
+    {"profile.myBookingsHint", "Место и время для ваших встреч"},
+    {"profile.people", "Люди"},
+    {"profile.program", "Направление:"},
+    {"profile.rating", "Рейтинг факультета"},
+    {"profile.ratingHint", "Место, имя и средний балл"},
+    {"profile.records", "Зачётка и рейтинг"},
+    {"profile.showQr", "Показать QR"},
+    {"profile.showQrCard", "Показать QR-карточку"},
+    {"profile.stay", "Остаться"},
+    {"profile.subtitle", "Личные данные и привычный ритм кабинета"},
+    {"profile.themeDark", "Тёмная"},
+    {"profile.themeLight", "Светлая"},
+    {"profile.themeSystem", "Системная"},
+    // schedule.* — расписание: подзаголовок, sheet «Детали пары»
+    {"schedule.calendarSub", "Подписка на календарь"},
+    {"schedule.sheetChange", "Перенос"},
+    {"schedule.sheetRoom", "Аудитория"},
+    {"schedule.sheetStatus", "Статус"},
+    {"schedule.sheetTeacher", "Преподаватель"},
+    {"schedule.sheetTitle", "Детали пары"},
+    {"schedule.sheetWhen", "Когда"},
+    {"schedule.subtitle", "Пары, переносы «было → стало» и изменения недели"},
+    {"schedule.week", "Неделя"},
+    // settings.* — блок «Уведомления» профиля
+    {"settings.announcementsHint", "Объявления деканата приходят в ленту и дайджест, push-ём их не отправляем."},
+    {"settings.applications", "Статусы заявок"},
+    {"settings.deadlines", "Дедлайны и учёба"},
+    {"settings.quietHint", "В это время приходят только срочные переносы."},
+    {"settings.quietHours", "Тихие часы"},
+    {"settings.schedule", "Переносы и отмены"},
+    // staff.* — вход в стол сотрудника (шапка/дашборд; сам staff.csp — ru)
+    {"staff.desk", "Стол сотрудника"},
+    {"staff.office", "Учебный офис"},
+    // toast.* — тосты app.js (успехи и «Не получилось …»)
+    {"toast.booked", "забронировано"},
+    {"toast.bookingCancelled", "Бронь отменена"},
+    {"toast.draftSaved", "Черновик сохранён"},
+    {"toast.failBooking", "Не получилось забронировать"},
+    {"toast.failBookingCancel", "Не получилось отменить бронь"},
+    {"toast.failBookingCancelNet", "Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз"},
+    {"toast.failBookingNet", "Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз"},
+    {"toast.failIcsCreate", "Не получилось создать подписку"},
+    {"toast.failIcsRevoke", "Не получилось отозвать подписку"},
+    {"toast.failLang", "Не получилось сохранить язык"},
+    {"toast.failLoadMore", "Не получилось загрузить ещё — попробуйте ещё раз"},
+    {"toast.failLogout", "Не получилось выйти — проверьте интернет"},
+    {"toast.failQuiet", "Не получилось сохранить тихие часы"},
+    {"toast.failReadAll", "Не получилось пометить всё прочитанным"},
+    {"toast.failReadAllNet", "Не получилось пометить всё прочитанным. Проверьте интернет — и попробуем ещё раз"},
+    {"toast.failSave", "Не получилось сохранить — проверьте интернет"},
+    {"toast.failSetting", "Не получилось сохранить настройку"},
+    {"toast.failStep", "Не получилось отметить шаг — проверьте интернет"},
+    {"toast.failTheme", "Не получилось сохранить тему"},
+    {"toast.icsCreated", "Подписка создана — прежняя ссылка отозвана"},
+    {"toast.icsRevoked", "Подписка отозвана — календарь больше не обновляется"},
+    {"toast.langSaved", "Язык сохранён"},
+    {"toast.netBack", "Сеть вернулась — данные обновлены"},
+    {"toast.qrModuleFail", "QR-модуль не загрузился — обновите страницу"},
+    {"toast.quietSaved", "Тихие часы сохранены"},
+    {"toast.readAllDone", "Все уведомления прочитаны"},
+    {"toast.sending", "Отправляем…"},
+    {"toast.themeSaved", "Оформление сохранено"},
+};
+
+// --- en — короткие естественные UI-строки -----------------------------------
+inline constexpr Entry kEn[]{
+    {"a11y.brandHome", "Para, go to home page"},
+    {"a11y.feedFilter", "Notification filter"},
+    {"a11y.feedSegment", "Feed section"},
+    {"a11y.langGroup", "Interface language"},
+    {"a11y.nextWeek", "Next week"},
+    {"a11y.notifications", "Notifications"},
+    {"a11y.obProgress", "Checklist progress"},
+    {"a11y.prevWeek", "Previous week"},
+    {"a11y.primaryNav", "Main sections"},
+    {"a11y.quietFrom", "Quiet hours, start"},
+    {"a11y.quietTo", "Quiet hours, end"},
+    {"a11y.schedulePeriod", "Schedule period"},
+    {"a11y.showPassword", "Show password"},
+    {"a11y.skipToContent", "Skip to content"},
+    {"a11y.staffNav", "Staff sections"},
+    {"a11y.themeGroup", "Theme"},
+    {"app.title", "Para"},
+    {"apps.emptyText", "Need a certificate or a statement? Start from the catalog — a standard certificate takes three taps."},
+    {"apps.filterA11y", "Filter requests by status"},
+    {"apps.formSubtitle", "Pick a document — the form fills in your profile data"},
+    {"apps.formTitle", "New request"},
+    {"apps.new", "+ New request"},
+    {"apps.openCatalog", "Open the catalog"},
+    {"apps.statusAccepted", "Accepted"},
+    {"apps.statusCancelled", "Cancelled"},
+    {"apps.statusDraft", "Draft"},
+    {"apps.statusInProgress", "In progress"},
+    {"apps.statusIssued", "Issued"},
+    {"apps.statusNeedInfo", "Needs clarification"},
+    {"apps.statusReady", "Ready"},
+    {"apps.statusRejected", "Rejected"},
+    {"apps.statusSubmitted", "Submitted"},
+    {"apps.subtitle", "Every step, from filing to pickup"},
+    {"apps.title", "My requests"},
+    {"campus.canteen", "Canteen"},
+    {"campus.canteenHint", "See the menu"},
+    {"campus.library", "Library"},
+    {"campus.libraryHint", "Find the book you need"},
+    {"campus.map", "Campus map"},
+    {"campus.mapHint", "Find a room"},
+    {"campus.people", "Find a person"},
+    {"campus.peopleHint", "Teachers and students"},
+    {"campus.title", "On campus"},
+    {"common.all", "All"},
+    {"common.allNeut", "All"},
+    {"common.close", "Close"},
+    {"common.emptyFilter", "Nothing here under this filter yet"},
+    {"common.more", "More"},
+    {"common.retry", "Retry"},
+    {"control.credit", "Pass-fail"},
+    {"control.exam", "Exam"},
+    {"control.gradedCredit", "Graded pass-fail"},
+    {"dash.deadlines", "Deadlines"},
+    {"dash.emptyApplications", "No requests yet"},
+    {"dash.emptyClasses", "No classes — the day is yours"},
+    {"dash.emptyDeadlines", "No deadlines on the horizon"},
+    {"dash.emptyNews", "Nothing new so far"},
+    {"dash.greetingAfternoon", "Good afternoon"},
+    {"dash.greetingEvening", "Good evening"},
+    {"dash.greetingMorning", "Good morning"},
+    {"dash.heading", "Everything that matters, on one screen."},
+    {"dash.newRequest", "New request"},
+    {"dash.nextClass", "Next class"},
+    {"dash.nextSoon", "soon"},
+    {"dash.overnight", "Overnight"},
+    {"dash.roomLabel", "room"},
+    {"dash.staffDesc", "Request queue, class changes and announcements — the academic office workspace."},
+    {"dash.staffOpen", "Open"},
+    {"dash.tomorrowTitle", "Due tomorrow"},
+    {"dash.whatsNew", "What's new"},
+    {"error.checkInternet", "Check your internet and try again."},
+    {"error.loadApplications", "Couldn't load requests"},
+    {"error.loadDeadlines", "Couldn't load deadlines"},
+    {"error.loadEvents", "Couldn't load events"},
+    {"error.loadFeed", "Couldn't load the feed"},
+    {"error.loadGrades", "Couldn't load grades"},
+    {"error.loadNews", "Couldn't load news"},
+    {"error.loadNotifications", "Couldn't load notifications"},
+    {"error.loadProfile", "Couldn't load your profile"},
+    {"error.loadSchedule", "Couldn't load the schedule"},
+    {"error.loadSection", "Couldn't load this section"},
+    {"error.loadSettings", "Couldn't load settings"},
+    {"error.loadToday", "Couldn't load Today"},
+    {"exam.consultation", "Consultation"},
+    {"exam.credit", "Pass-fail"},
+    {"exam.exam", "Exam"},
+    {"exam.retake", "Retake"},
+    {"grades.average", "Average score"},
+    {"grades.emptyText", "Once teachers submit their grade sheets, your average and subject progress will appear here. Meanwhile, check the schedule and turn on deadline alerts."},
+    {"grades.emptyTitle", "Grades appear after the first assessment"},
+    {"grades.missingPrefix", "points short of admission:"},
+    {"grades.noExamDates", "Exam dates are not announced yet"},
+    {"grades.openSchedule", "Open the schedule"},
+    {"grades.roomShort", "room"},
+    {"grades.session", "Exam period"},
+    {"grades.subjects", "Subjects"},
+    {"grades.subtitle", "Average score, subjects and exams"},
+    {"grades.toCalendar", "Add to calendar"},
+    {"grades.withScores", "with scores"},
+    {"lang.en", "EN"},
+    {"lang.ru", "Рус"},
+    {"lang.zh", "中文"},
+    {"lesson.cancelled", "Cancelled"},
+    {"lesson.moved", "Moved"},
+    {"lesson.substituted", "Substitute"},
+    {"login.busy", "Signing in…"},
+    {"login.demoCaption", "Tap a row to fill in the login. The shared demo password is published in the submission comment."},
+    {"login.demoTitle", "Demo access for the jury"},
+    {"login.formTitle", "Sign in to your account"},
+    {"login.heading", "A good day starts with clarity."},
+    {"login.lead", "Timetable, studies and campus errands — all in one place."},
+    {"login.loginLabel", "Login"},
+    {"login.offlineHint", "Go online to sign in"},
+    {"login.passwordLabel", "Password"},
+    {"login.roleStaff", "dean's office staff"},
+    {"login.roleStudentF1", "1st-year student"},
+    {"login.roleStudentF4", "4th-year student"},
+    {"login.roleStudentM1", "1st-year student"},
+    {"login.roleStudentM4", "4th-year student"},
+    {"login.submit", "Sign in"},
+    {"login.subtitle", "Your student account"},
+    {"login.tagline", "the dean's office, in your pocket"},
+    {"month.01", "January"},
+    {"month.02", "February"},
+    {"month.03", "March"},
+    {"month.04", "April"},
+    {"month.05", "May"},
+    {"month.06", "June"},
+    {"month.07", "July"},
+    {"month.08", "August"},
+    {"month.09", "September"},
+    {"month.10", "October"},
+    {"month.11", "November"},
+    {"month.12", "December"},
+    {"nav.applications", "Requests"},
+    {"nav.grades", "Grades"},
+    {"nav.profile", "Profile"},
+    {"nav.schedule", "Schedule"},
+    {"nav.today", "Today"},
+    {"notif.announcements", "Announcements"},
+    {"notif.emptyText", "New schedule changes, deadlines and request statuses will appear here — and as push, if you enable notifications"},
+    {"notif.emptyTitle", "Quiet. All under control"},
+    {"notif.enable", "Enable notifications"},
+    {"notif.events", "Events"},
+    {"notif.eventsEmptyText", "Conferences, tournaments and meetups will appear here once announced"},
+    {"notif.eventsEmptyTitle", "No events yet"},
+    {"notif.loadingEvents", "Loading events"},
+    {"notif.loadingFeed", "Loading notifications"},
+    {"notif.loadingNews", "Loading news"},
+    {"notif.news", "News"},
+    {"notif.newsEmptyText", "Official news and announcements will appear here as soon as they are published"},
+    {"notif.newsEmptyTitle", "No news yet"},
+    {"notif.readAll", "Mark all as read"},
+    {"notif.subtitle", "Changes and tasks worth noticing"},
+    {"notif.title", "Notifications"},
+    {"notif.unread", "Unread"},
+    {"offline.banner", "No network. Check your connection and try again."},
+    {"offline.bannerStale", "No network. Showing data as of"},
+    {"offline.needed", "You need a connection for this action"},
+    {"onboarding.done", "Checklist complete — you're all set."},
+    {"onboarding.hint", "You can continue from your profile."},
+    {"onboarding.profileTitle", "Set up your account"},
+    {"onboarding.skip", "Skip"},
+    {"onboarding.steps", "4 steps"},
+    {"onboarding.title", "Setting up your account"},
+    {"plural.classFew", "classes"},
+    {"plural.classMany", "classes"},
+    {"plural.classOne", "class"},
+    {"plural.eventFew", "events"},
+    {"plural.eventMany", "events"},
+    {"plural.eventOne", "event"},
+    {"plural.pointFew", "points"},
+    {"plural.pointMany", "points"},
+    {"plural.pointOne", "point"},
+    {"plural.subjectFew", "subjects"},
+    {"plural.subjectMany", "subjects"},
+    {"plural.subjectOne", "subject"},
+    {"profile.appearance", "Appearance"},
+    {"profile.calendar", "Calendar"},
+    {"profile.campus", "Campus"},
+    {"profile.cardNo", "Student ID"},
+    {"profile.gradebook", "Record book"},
+    {"profile.gradebookHint", "Subject totals"},
+    {"profile.group", "Group:"},
+    {"profile.icsAdd", "Add to calendar"},
+    {"profile.icsCreate", "Create subscription"},
+    {"profile.icsHint", "The timetable in your phone's calendar: a private link that updates itself."},
+    {"profile.icsNote", "A new subscription revokes the previous link — the old one stops updating. The link is secret: it shows your timetable without signing in, so don't share it."},
+    {"profile.icsRevoke", "Revoke access"},
+    {"profile.language", "Language"},
+    {"profile.libraryCard", "Library card"},
+    {"profile.logout", "Sign out"},
+    {"profile.logoutText", "Your session ends on the server — you'll need to sign in again."},
+    {"profile.logoutTitle", "Sign out?"},
+    {"profile.myBookings", "My bookings"},
+    {"profile.myBookingsHint", "A place and a time for your meetings"},
+    {"profile.people", "People"},
+    {"profile.program", "Program:"},
+    {"profile.rating", "Faculty ranking"},
+    {"profile.ratingHint", "Standing, name and average"},
+    {"profile.records", "Record book and ranking"},
+    {"profile.showQr", "Show QR"},
+    {"profile.showQrCard", "Show QR card"},
+    {"profile.stay", "Stay"},
+    {"profile.subtitle", "Your details and your daily rhythm"},
+    {"profile.themeDark", "Dark"},
+    {"profile.themeLight", "Light"},
+    {"profile.themeSystem", "System"},
+    {"schedule.calendarSub", "Calendar subscription"},
+    {"schedule.sheetChange", "Change"},
+    {"schedule.sheetRoom", "Room"},
+    {"schedule.sheetStatus", "Status"},
+    {"schedule.sheetTeacher", "Teacher"},
+    {"schedule.sheetTitle", "Class details"},
+    {"schedule.sheetWhen", "When"},
+    {"schedule.subtitle", "Classes, room swaps and week changes"},
+    {"schedule.week", "Week"},
+    {"settings.announcementsHint", "Dean's office announcements arrive in the feed and the digest; we don't send them as push."},
+    {"settings.applications", "Request statuses"},
+    {"settings.deadlines", "Deadlines and studies"},
+    {"settings.quietHint", "Only urgent schedule changes arrive during these hours."},
+    {"settings.quietHours", "Quiet hours"},
+    {"settings.schedule", "Changes and cancellations"},
+    {"staff.desk", "Staff desk"},
+    {"staff.office", "Academic office"},
+    {"toast.booked", "booked"},
+    {"toast.bookingCancelled", "Booking cancelled"},
+    {"toast.draftSaved", "Draft saved"},
+    {"toast.failBooking", "Couldn't book"},
+    {"toast.failBookingCancel", "Couldn't cancel the booking"},
+    {"toast.failBookingCancelNet", "Couldn't cancel the booking. Check your internet and try again"},
+    {"toast.failBookingNet", "Couldn't book. Check your internet and try again"},
+    {"toast.failIcsCreate", "Couldn't create the subscription"},
+    {"toast.failIcsRevoke", "Couldn't revoke the subscription"},
+    {"toast.failLang", "Couldn't save the language"},
+    {"toast.failLoadMore", "Couldn't load more — try again"},
+    {"toast.failLogout", "Couldn't sign out — check your internet"},
+    {"toast.failQuiet", "Couldn't save quiet hours"},
+    {"toast.failReadAll", "Couldn't mark all as read"},
+    {"toast.failReadAllNet", "Couldn't mark all as read. Check your internet and try again"},
+    {"toast.failSave", "Couldn't save — check your internet"},
+    {"toast.failSetting", "Couldn't save the setting"},
+    {"toast.failStep", "Couldn't tick the step — check your internet"},
+    {"toast.failTheme", "Couldn't save the theme"},
+    {"toast.icsCreated", "Subscription created — the previous link is revoked"},
+    {"toast.icsRevoked", "Subscription revoked — the calendar no longer updates"},
+    {"toast.langSaved", "Language saved"},
+    {"toast.netBack", "Back online — data updated"},
+    {"toast.qrModuleFail", "The QR module didn't load — refresh the page"},
+    {"toast.quietSaved", "Quiet hours saved"},
+    {"toast.readAllDone", "All notifications read"},
+    {"toast.sending", "Sending…"},
+    {"toast.themeSaved", "Appearance saved"},
+};
+
+// --- zh — упрощённый китайский, короткие UI-строки ---------------------------
+inline constexpr Entry kZh[]{
+    {"a11y.brandHome", "пара，返回主页"},
+    {"a11y.feedFilter", "通知筛选"},
+    {"a11y.feedSegment", "动态栏目"},
+    {"a11y.langGroup", "界面语言"},
+    {"a11y.nextWeek", "下一周"},
+    {"a11y.notifications", "通知"},
+    {"a11y.obProgress", "清单进度"},
+    {"a11y.prevWeek", "上一周"},
+    {"a11y.primaryNav", "主导航"},
+    {"a11y.quietFrom", "免打扰开始"},
+    {"a11y.quietTo", "免打扰结束"},
+    {"a11y.schedulePeriod", "课程表周期"},
+    {"a11y.showPassword", "显示密码"},
+    {"a11y.skipToContent", "跳到主要内容"},
+    {"a11y.staffNav", "员工栏目"},
+    {"a11y.themeGroup", "主题"},
+    {"app.title", "Para"},
+    {"apps.emptyText", "需要证明或申请？从目录开始——常用证明三次点击即可提交。"},
+    {"apps.filterA11y", "按状态筛选申请"},
+    {"apps.formSubtitle", "选择文件类型，表单会自动填入个人信息"},
+    {"apps.formTitle", "新建申请"},
+    {"apps.new", "＋ 新建申请"},
+    {"apps.openCatalog", "打开目录"},
+    {"apps.statusAccepted", "已受理"},
+    {"apps.statusCancelled", "已取消"},
+    {"apps.statusDraft", "草稿"},
+    {"apps.statusInProgress", "办理中"},
+    {"apps.statusIssued", "已发放"},
+    {"apps.statusNeedInfo", "需补充材料"},
+    {"apps.statusReady", "已办结"},
+    {"apps.statusRejected", "已驳回"},
+    {"apps.statusSubmitted", "已提交"},
+    {"apps.subtitle", "从提交到领取，全程可见"},
+    {"apps.title", "我的申请"},
+    {"campus.canteen", "食堂"},
+    {"campus.canteenHint", "查看菜单"},
+    {"campus.library", "图书馆"},
+    {"campus.libraryHint", "查找图书"},
+    {"campus.map", "校园地图"},
+    {"campus.mapHint", "查找教室"},
+    {"campus.people", "找人"},
+    {"campus.peopleHint", "教师与学生"},
+    {"campus.title", "校园服务"},
+    {"common.all", "全部"},
+    {"common.allNeut", "全部"},
+    {"common.close", "关闭"},
+    {"common.emptyFilter", "该筛选下暂无内容"},
+    {"common.more", "更多"},
+    {"common.retry", "重试"},
+    {"control.credit", "考查"},
+    {"control.exam", "考试"},
+    {"control.gradedCredit", "评分考查"},
+    {"dash.deadlines", "截止日期"},
+    {"dash.emptyApplications", "还没有申请"},
+    {"dash.emptyClasses", "今天没课，自由安排"},
+    {"dash.emptyDeadlines", "近期没有截止日期"},
+    {"dash.emptyNews", "暂无新内容"},
+    {"dash.greetingAfternoon", "下午好"},
+    {"dash.greetingEvening", "晚上好"},
+    {"dash.greetingMorning", "早上好"},
+    {"dash.heading", "要事一览，尽在一屏。"},
+    {"dash.newRequest", "提交申请"},
+    {"dash.nextClass", "下一节课"},
+    {"dash.nextSoon", "即将开始"},
+    {"dash.overnight", "昨夜"},
+    {"dash.roomLabel", "教室"},
+    {"dash.staffDesc", "申请队列、调课与公告——教务办公室的工作台。"},
+    {"dash.staffOpen", "打开"},
+    {"dash.tomorrowTitle", "明日待办"},
+    {"dash.whatsNew", "最新动态"},
+    {"error.checkInternet", "请检查网络后重试。"},
+    {"error.loadApplications", "无法加载申请"},
+    {"error.loadDeadlines", "无法加载截止日期"},
+    {"error.loadEvents", "无法加载活动"},
+    {"error.loadFeed", "无法加载动态"},
+    {"error.loadGrades", "无法加载成绩"},
+    {"error.loadNews", "无法加载新闻"},
+    {"error.loadNotifications", "无法加载通知"},
+    {"error.loadProfile", "无法加载个人中心"},
+    {"error.loadSchedule", "无法加载课程表"},
+    {"error.loadSection", "无法加载该栏目"},
+    {"error.loadSettings", "无法加载设置"},
+    {"error.loadToday", "无法加载「今日」"},
+    {"exam.consultation", "考前答疑"},
+    {"exam.credit", "考查"},
+    {"exam.exam", "考试"},
+    {"exam.retake", "补考"},
+    {"grades.average", "平均分"},
+    {"grades.emptyText", "教师提交成绩单后，这里会显示平均分和各科进度。在此之前，可以先查看课程表并开启截止提醒。"},
+    {"grades.emptyTitle", "首次评定后才会显示成绩"},
+    {"grades.missingPrefix", "距准入资格还差"},
+    {"grades.noExamDates", "考试日期尚未公布"},
+    {"grades.openSchedule", "打开课程表"},
+    {"grades.roomShort", "教室"},
+    {"grades.session", "考试周"},
+    {"grades.subjects", "科目"},
+    {"grades.subtitle", "平均分、科目与考试周"},
+    {"grades.toCalendar", "添加到日历"},
+    {"grades.withScores", "已有成绩"},
+    {"lang.en", "EN"},
+    {"lang.ru", "Рус"},
+    {"lang.zh", "中文"},
+    {"lesson.cancelled", "已停课"},
+    {"lesson.moved", "已调课"},
+    {"lesson.substituted", "代课"},
+    {"login.busy", "登录中…"},
+    {"login.demoCaption", "点击行即可填入用户名。统一演示密码见提交说明。"},
+    {"login.demoTitle", "评审演示账号"},
+    {"login.formTitle", "登录个人空间"},
+    {"login.heading", "美好的一天，从清晰开始。"},
+    {"login.lead", "课程、学业与校园事务，尽在一处。"},
+    {"login.loginLabel", "用户名"},
+    {"login.offlineHint", "登录需要网络"},
+    {"login.passwordLabel", "密码"},
+    {"login.roleStaff", "系办公室员工"},
+    {"login.roleStudentF1", "大一学生"},
+    {"login.roleStudentF4", "大四学生"},
+    {"login.roleStudentM1", "大一学生"},
+    {"login.roleStudentM4", "大四学生"},
+    {"login.submit", "登录"},
+    {"login.subtitle", "你的学生空间"},
+    {"login.tagline", "口袋里的系办公室"},
+    {"month.01", "一月"},
+    {"month.02", "二月"},
+    {"month.03", "三月"},
+    {"month.04", "四月"},
+    {"month.05", "五月"},
+    {"month.06", "六月"},
+    {"month.07", "七月"},
+    {"month.08", "八月"},
+    {"month.09", "九月"},
+    {"month.10", "十月"},
+    {"month.11", "十一月"},
+    {"month.12", "十二月"},
+    {"nav.applications", "申请"},
+    {"nav.grades", "成绩"},
+    {"nav.profile", "个人中心"},
+    {"nav.schedule", "课程表"},
+    {"nav.today", "今日"},
+    {"notif.announcements", "公告"},
+    {"notif.emptyText", "新的调课、截止日期与申请进度会显示在这里；开启通知后还会推送提醒"},
+    {"notif.emptyTitle", "一切安静，尽在掌握"},
+    {"notif.enable", "开启通知"},
+    {"notif.events", "活动"},
+    {"notif.eventsEmptyText", "会议、比赛与活动一经公布便会显示在这里"},
+    {"notif.eventsEmptyTitle", "暂无活动"},
+    {"notif.loadingEvents", "正在加载活动"},
+    {"notif.loadingFeed", "正在加载通知"},
+    {"notif.loadingNews", "正在加载新闻"},
+    {"notif.news", "新闻"},
+    {"notif.newsEmptyText", "官方新闻与公告发布后将显示在这里"},
+    {"notif.newsEmptyTitle", "暂无新闻"},
+    {"notif.readAll", "全部标为已读"},
+    {"notif.subtitle", "值得关注的变化与事项"},
+    {"notif.title", "通知"},
+    {"notif.unread", "未读"},
+    {"offline.banner", "无网络。请检查连接后重试。"},
+    {"offline.bannerStale", "无网络。当前显示截至"},
+    {"offline.needed", "此操作需要网络"},
+    {"onboarding.done", "清单已完成，空间已就绪。"},
+    {"onboarding.hint", "之后可在个人中心继续。"},
+    {"onboarding.profileTitle", "设置你的空间"},
+    {"onboarding.skip", "跳过"},
+    {"onboarding.steps", "4 个步骤"},
+    {"onboarding.title", "正在设置你的空间"},
+    {"plural.classFew", "节课"},
+    {"plural.classMany", "节课"},
+    {"plural.classOne", "节课"},
+    {"plural.eventFew", "项动态"},
+    {"plural.eventMany", "项动态"},
+    {"plural.eventOne", "项动态"},
+    {"plural.pointFew", "分"},
+    {"plural.pointMany", "分"},
+    {"plural.pointOne", "分"},
+    {"plural.subjectFew", "门科目"},
+    {"plural.subjectMany", "门科目"},
+    {"plural.subjectOne", "门科目"},
+    {"profile.appearance", "外观"},
+    {"profile.calendar", "日历"},
+    {"profile.campus", "校园"},
+    {"profile.cardNo", "学号"},
+    {"profile.gradebook", "成绩册"},
+    {"profile.gradebookHint", "各科汇总"},
+    {"profile.group", "班级："},
+    {"profile.icsAdd", "添加到日历"},
+    {"profile.icsCreate", "创建订阅"},
+    {"profile.icsHint", "课程表进手机日历：私有链接自动更新。"},
+    {"profile.icsNote", "新订阅会使旧链接失效，旧链接将不再更新。链接为私密信息：凭它无需登录即可查看课程表，请勿外传。"},
+    {"profile.icsRevoke", "撤销访问"},
+    {"profile.language", "语言"},
+    {"profile.libraryCard", "借书证"},
+    {"profile.logout", "退出登录"},
+    {"profile.logoutText", "会话将在服务器端结束，需要重新登录。"},
+    {"profile.logoutTitle", "退出账号？"},
+    {"profile.myBookings", "我的预约"},
+    {"profile.myBookingsHint", "会议的时间与地点"},
+    {"profile.people", "人员"},
+    {"profile.program", "专业："},
+    {"profile.rating", "学院排名"},
+    {"profile.ratingHint", "名次、姓名与平均分"},
+    {"profile.records", "成绩册与排名"},
+    {"profile.showQr", "出示二维码"},
+    {"profile.showQrCard", "出示二维码卡片"},
+    {"profile.stay", "留在此页"},
+    {"profile.subtitle", "个人信息与常用设置"},
+    {"profile.themeDark", "深色"},
+    {"profile.themeLight", "浅色"},
+    {"profile.themeSystem", "跟随系统"},
+    {"schedule.calendarSub", "日历订阅"},
+    {"schedule.sheetChange", "调课"},
+    {"schedule.sheetRoom", "教室"},
+    {"schedule.sheetStatus", "状态"},
+    {"schedule.sheetTeacher", "教师"},
+    {"schedule.sheetTitle", "课程详情"},
+    {"schedule.sheetWhen", "时间"},
+    {"schedule.subtitle", "课程、调课与一周变动"},
+    {"schedule.week", "本周"},
+    {"settings.announcementsHint", "系办公告进入动态和摘要，不以推送发送。"},
+    {"settings.applications", "申请进度"},
+    {"settings.deadlines", "截止与学业"},
+    {"settings.quietHint", "此时段仅接收紧急调课通知。"},
+    {"settings.quietHours", "免打扰时段"},
+    {"settings.schedule", "调课与停课"},
+    {"staff.desk", "员工工作台"},
+    {"staff.office", "教务办公室"},
+    {"toast.booked", "预约成功"},
+    {"toast.bookingCancelled", "预约已取消"},
+    {"toast.draftSaved", "草稿已保存"},
+    {"toast.failBooking", "无法完成预约"},
+    {"toast.failBookingCancel", "无法取消预约"},
+    {"toast.failBookingCancelNet", "无法取消预约，请检查网络后重试"},
+    {"toast.failBookingNet", "无法完成预约，请检查网络后重试"},
+    {"toast.failIcsCreate", "无法创建订阅"},
+    {"toast.failIcsRevoke", "无法撤销订阅"},
+    {"toast.failLang", "无法保存语言"},
+    {"toast.failLoadMore", "加载更多失败，请重试"},
+    {"toast.failLogout", "无法退出登录，请检查网络"},
+    {"toast.failQuiet", "无法保存免打扰时段"},
+    {"toast.failReadAll", "无法全部标为已读"},
+    {"toast.failReadAllNet", "无法全部标为已读，请检查网络后重试"},
+    {"toast.failSave", "无法保存，请检查网络"},
+    {"toast.failSetting", "无法保存设置"},
+    {"toast.failStep", "无法勾选步骤，请检查网络"},
+    {"toast.failTheme", "无法保存主题"},
+    {"toast.icsCreated", "订阅已创建，旧链接已失效"},
+    {"toast.icsRevoked", "订阅已撤销，日历不再更新"},
+    {"toast.langSaved", "语言已保存"},
+    {"toast.netBack", "网络已恢复，数据已更新"},
+    {"toast.qrModuleFail", "二维码模块未加载，请刷新页面"},
+    {"toast.quietSaved", "免打扰时段已保存"},
+    {"toast.readAllDone", "全部通知已读"},
+    {"toast.sending", "提交中…"},
+    {"toast.themeSaved", "外观已保存"},
+};
+
+// ----------------------------------------------------------------------------
+// Гарантии таблиц — проверены НА КОМПИЛЯЦИИ (ошибка ниже = не собралось):
+// отсортированность (двоичный поиск), полнота en/zh относительно ru,
+// непустые значения (пустое значение = «ключа нет» — конфликтует с данными).
+// ----------------------------------------------------------------------------
+namespace detail
+{
+constexpr bool isStrictlySorted(const auto& table)
+{
+    for (std::size_t i = 1; i < std::size(table); ++i)
+        if (!(table[i - 1].key < table[i].key))
+            return false;
+    return true;
+}
+
+constexpr bool sameKeyset(const auto& a, const auto& b)
+{
+    if (std::size(a) != std::size(b))
+        return false;
+    for (std::size_t i = 0; i < std::size(a); ++i)
+        if (a[i].key != b[i].key)
+            return false;
+    return true;
+}
+
+constexpr bool noEmptyValues(const auto& table)
+{
+    for (const auto& e : table)
+        if (e.value.empty())
+            return false;
+    return true;
+}
+}  // namespace detail
+
+static_assert(detail::isStrictlySorted(kRu) && detail::isStrictlySorted(kEn) &&
+                  detail::isStrictlySorted(kZh),
+              "i18n tables must be strictly sorted by key (binary search)");
+static_assert(detail::sameKeyset(kRu, kEn) && detail::sameKeyset(kRu, kZh),
+              "i18n en/zh tables must cover the full ru keyset");
+static_assert(detail::noEmptyValues(kRu) && detail::noEmptyValues(kEn) &&
+                  detail::noEmptyValues(kZh),
+              "i18n values must not be empty (empty means 'key not found')");
+
+// ----------------------------------------------------------------------------
+// Доступ к строке. Двоичный поиск по отсортированной таблице; самописный
+// (без <algorithm>) — constexpr без зависимости от версии libstdc++.
+// ----------------------------------------------------------------------------
+namespace detail
+{
+template <typename Table>
+constexpr std::string_view lookupIn(const Table& table, std::string_view key)
+{
+    std::size_t lo = 0;
+    std::size_t hi = std::size(table);
+    while (lo < hi)
+    {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (table[mid].key < key)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo < std::size(table) && table[lo].key == key)
+        return table[lo].value;
+    return {};
+}
+}  // namespace detail
+
+// Строка интерфейса по ключу: t("nav.schedule", Lang::En) → "Schedule".
+// Отсутствующий ключ в таблице языка → значение ru (фолбэк); нет ключа и в
+// ru → пустая string_view; Lang вне ru/en/zh → ru. constexpr — доступен и
+// в compile-time (примеры ниже), и в рантайме контроллеров/тестов.
+constexpr std::string_view t(std::string_view key, Lang lang)
+{
+    switch (lang)
+    {
+    case Lang::En:
+    {
+        const std::string_view v = detail::lookupIn(kEn, key);
+        if (!v.empty())
+            return v;
+        break;
+    }
+    case Lang::Zh:
+    {
+        const std::string_view v = detail::lookupIn(kZh, key);
+        if (!v.empty())
+            return v;
+        break;
+    }
+    case Lang::Ru:
+        break;
+    }
+    return detail::lookupIn(kRu, key);
+}
+
+// Компиляционная проба словаря (ru — точные строки разметки, en/zh — те,
+// что выше; UTF-8 литералы сравниваются побайтно).
+static_assert(t("nav.schedule", Lang::Ru) == std::string_view("Расписание"));
+static_assert(t("nav.schedule", Lang::En) == std::string_view("Schedule"));
+static_assert(t("nav.schedule", Lang::Zh) == std::string_view("课程表"));
+static_assert(t("offline.banner", Lang::Zh) ==
+              std::string_view("无网络。请检查连接后重试。"));
+static_assert(t("app.title", Lang::Ru) == std::string_view("Пара"));
+static_assert(t("no.such.key", Lang::En).empty());
+
+// ----------------------------------------------------------------------------
+// Резолв языка запроса (реализации — models/i18n.cpp, тесты — шаг 7).
+// Шаг 3 передаст сюда: значение cookie para_lang (HttpRequest::getCookie)
+// и заголовок Accept-Language. Чистые строки — без зависимости от drogon.
+// ----------------------------------------------------------------------------
+
+// Значение cookie para_lang → Lang: только точные коды ru|en|zh (пробелы
+// по краям прощаются); прочее → nullopt (резолв уходит в Accept-Language).
+std::optional<Lang> langFromCookie(std::string_view cookieValue);
+
+// Заголовок Accept-Language → Lang (RFC 7231 §5.3.1): записи через запятую,
+// «диапазон; q=вес»; без q — вес 1. Основной подтег до «-» (зоны zh-CN/
+// en-US → zh/en); «*» язык не называет — пропускается; q=0 — «не приемлем»,
+// не выбирается; мусорный q — как отсутствие q. Из поддерживаемых берётся
+// запись с наибольшим q, при равенстве — первая по порядку. Нет
+// поддерживаемых записей (в т.ч. пустой заголовок) → nullopt → ru.
+std::optional<Lang> langFromAcceptLanguage(std::string_view header);
+
+// Полный резолв: cookie para_lang → Accept-Language → ru (defaultLang).
+Lang resolveLang(std::string_view cookieValue,
+                 std::string_view acceptLanguage);
+
+}  // namespace para::i18n
