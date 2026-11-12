@@ -19,7 +19,11 @@
  --overlay:rgba(18,37,30,.45); --clear:transparent;
  --e1:0 2px 3px rgba(27,54,43,.025); --e2:0 3px 10px rgba(27,54,43,.04); --e3:0 12px 32px rgba(27,54,43,.10);
  --r-sm:.5rem; --r-md:.75rem; --r-lg:1.125rem; --r-xl:1.25rem; --r-full:999px;
- --font-body:Inter,Arial,sans-serif; --font-heading:Inter,Arial,sans-serif; --font-greeting:Georgia,'Times New Roman',serif;
+ /* 5.18: Inter — только latin+cyrillic subsets (static/fonts/, app.css @font-face);
+   CJK-глифов в нём нет — 中文 идёт системным fallback по цепочке PingFang SC (macOS) /
+   Microsoft YaHei (Windows) / Noto Sans CJK SC (Linux). CJK-шрифт НЕ вендорится
+   сознательно (мегабайтные файлы + отдельная лицензия — AGENTS §5.4). */
+ --font-body:Inter,'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif; --font-heading:Inter,'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif; --font-greeting:Georgia,'Times New Roman',serif;
  --space-1:.25rem; --space-2:.5rem; --space-3:.75rem; --space-4:1rem; --space-6:1.5rem; --space-8:2rem;
 }
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){
