@@ -180,6 +180,7 @@ add_executable(para-tests
                tests/unit/gradebook_rating_test.cpp
                tests/unit/library_service_test.cpp
                tests/unit/canteens_map_test.cpp
+               tests/unit/news_service_test.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
@@ -203,6 +204,7 @@ add_executable(para-tests
                src/services/StaffDashboard.cpp
                src/services/AnnouncementsService.cpp
                src/services/NotificationsFeedService.cpp
+               src/services/NewsService.cpp
                src/services/WsRegistry.cpp
                src/services/PeopleService.cpp
                src/services/LibraryService.cpp

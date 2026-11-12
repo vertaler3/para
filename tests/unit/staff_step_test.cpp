@@ -7,7 +7,12 @@
 //  - дашборд (StaffDashboard::build): счётчики очереди по 5 статусам +
 //    recent_changes;
 //  - объявления (AnnouncementsService): аудитория 'all'/массив, видимость по
-//    группе/курсу, staff видит всё, публикация без уведомлений, курсор.
+//    группе/курсу, staff видит всё, публикация без уведомлений, курсор;
+//  - 5.17 kind в POST /v1/staff/announcements: обе ветки публикации на
+//    контрактном уровне — kind='news' пишет строку в news (категория,
+//    event_at/location, published_at=сейчас), kind='announcement' — прежняя
+//    строка в announcements БЕЗ строки в news; невалидная category при
+//    kind=news → BadRequest (400-контракт).
 // Временная SQLite (схемы 0002/0003/0004 без FK), время — шов NotifyDispatcher,
 // колбэки promise/future (паттерн Э2–Э5а).
 #include <chrono>
@@ -27,6 +32,7 @@
 #include <doctest.hpp>
 
 #include "services/AnnouncementsService.h"
+#include "services/NewsService.h"
 #include "services/NotifyDispatcher.h"
 #include "services/ScheduleChangeService.h"
 #include "services/SessionService.h"
@@ -35,6 +41,7 @@
 
 namespace fs = std::filesystem;
 using para::AnnouncementsService;
+using para::NewsService;
 using para::NotifyDispatcher;
 using para::NotifyInput;
 using para::NotifyOutcome;
@@ -149,7 +156,24 @@ struct Fixture
              "INTEGER NOT NULL DEFAULT 1, notify_applications INTEGER NOT "
              "NULL DEFAULT 1, quiet_hours_json TEXT NOT NULL DEFAULT "
              "'{\"from\":\"23:00\",\"to\":\"07:00\"}', theme TEXT NOT NULL "
-             "DEFAULT 'system', onboarding_json TEXT NOT NULL DEFAULT '[]');");
+             "DEFAULT 'system', onboarding_json TEXT NOT NULL DEFAULT '[]');"
+             // 0007_news (5.17 шаг 1) — DDL дословно: ветка kind='news'
+             // POST /v1/staff/announcements пишет в эту таблицу.
+             "CREATE TABLE news ("
+             "  id             INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  category       TEXT NOT NULL CHECK (category IN ('official',"
+             "                    'conference','org','event')),"
+             "  title          TEXT NOT NULL,"
+             "  body           TEXT,"
+             "  event_at       TEXT,"
+             "  location       TEXT,"
+             "  audience       TEXT NOT NULL DEFAULT 'all' CHECK (audience "
+             "                    IN ('all','group','course')),"
+             "  audience_value TEXT,"
+             "  published_at   TEXT NOT NULL"
+             ");"
+             "CREATE INDEX idx_news_published ON news(published_at DESC, "
+             "category);");
         // WAL — как в прод-конфиге (initialization_queries config.json):
         // без WAL плотный поллинг читателя (waitCount) ловит писателя
         // INSERT'а уведомления — "database is locked" (поймано на гейте
@@ -661,4 +685,116 @@ TEST_CASE("AnnouncementsService: аудитория, лента, публика�
     CHECK_FALSE(AnnouncementsService::parseAudience(R"(["group:x"])", parsed));
     CHECK_FALSE(AnnouncementsService::parseAudience("[]", parsed));
     CHECK_FALSE(AnnouncementsService::parseAudience("не-json", parsed));
+}
+
+TEST_CASE("5.17 kind: news — строка в news; announcement — прежняя ветка")
+{
+    // Диспетчеризация kind живёт в контроллере (StaffCtrl::publishAnnouncement:
+    // kind='news' → NewsService::publish, отсутствующий/'announcement' →
+    // AnnouncementsService::publish байт-в-байт) — тонкий слой без своей
+    // логики, юнит-тест фиксирует КОНТРАКТЫ обеих веток; живой прогон
+    // диспетчера (201/400 обеих веток, CSRF) — смок шага 2 в журнале 5.17.
+    Fixture f;
+
+    // --- Ветка kind='news': NewsService::publish ---
+    auto publishNews = [&](NewsService::Draft d) -> NewsService::PublishResult {
+        std::promise<NewsService::PublishResult> p;
+        auto fu = p.get_future();
+        NewsService::publish(f.db, d,
+                             [&p](NewsService::PublishResult r) {
+                                 p.set_value(std::move(r));
+                             });
+        REQUIRE(fu.wait_for(std::chrono::seconds(10)) ==
+                std::future_status::ready);
+        return fu.get();
+    };
+
+    NewsService::Draft news;
+    news.category = "event";
+    news.title = "Открытие выставки «Экономика региона»";
+    news.body = "Вымышленный анонс: экспозиция открыта всю неделю.";
+    news.eventAt = "2026-11-20T18:00:00Z";
+    news.location = "Корпус В, ауд. В-402";
+    news.audienceAll = false;
+    news.audienceKind = "group";
+    news.audienceValue = 1;
+    const auto rn = publishNews(news);
+    REQUIRE(rn.status == NewsService::PublishStatus::Ok);
+
+    // Строка в news со ВСЕМИ полями ветки: category/event_at/location из
+    // тела, published_at — серверное «сейчас» (строка 20 символов
+    // YYYY-MM-DDTHH:MM:SSZ), аудитория — скаляр (audience + audience_value
+    // TEXT, '1' — бинд строкой, как в ленте).
+    CHECK(scalarOf(f.dbPath,
+                   "SELECT count(*) FROM news WHERE category='event' AND "
+                   "title='Открытие выставки «Экономика региона»' AND "
+                   "event_at='2026-11-20T18:00:00Z' AND "
+                   "location='Корпус В, ауд. В-402' AND audience='group' "
+                   "AND audience_value='1' AND length(published_at)=20 AND "
+                   "published_at LIKE '____-__-__T__:__:__Z'") == 1);
+    // Тело 201-ответа (объект новости) — те же значения.
+    CHECK(rn.body["category"].asString() == "event");
+    CHECK(rn.body["event_at"].asString() == "2026-11-20T18:00:00Z");
+    CHECK(rn.body["location"].asString() == "Корпус В, ауд. В-402");
+    CHECK(rn.body["audience"].asString() == "group");
+    CHECK(rn.body["audience_value"].asString() == "1");
+    REQUIRE_FALSE(rn.body["published_at"].asString().empty());
+
+    // Ветка news НЕ трогает announcements и НЕ создаёт уведомлений
+    // (01 §4.5: без push и без ленты-письма — как объявления).
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM announcements") == 0);
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM notifications") == 0);
+
+    // Аудитория 'all' у новости: audience_value NULL → JSON null.
+    NewsService::Draft newsAll = news;
+    newsAll.title = "Всем: обновление справочника корпусов";
+    newsAll.audienceAll = true;
+    newsAll.audienceKind.clear();
+    const auto ra = publishNews(newsAll);
+    REQUIRE(ra.status == NewsService::PublishStatus::Ok);
+    CHECK(ra.body["audience"].asString() == "all");
+    CHECK(ra.body["audience_value"].isNull());
+    CHECK(scalarOf(f.dbPath,
+                   "SELECT count(*) FROM news WHERE audience='all' AND "
+                   "audience_value IS NULL") == 1);
+
+    // --- Невалидная category при kind=news → BadRequest (400-контракт:
+    // StaffCtrl отдаёт r.error дословно с k400BadRequest) ---
+    NewsService::Draft bogus = news;
+    bogus.category = "bogus";
+    CHECK(publishNews(bogus).status == NewsService::PublishStatus::BadRequest);
+
+    // event_at вне строгого ISO (нет T/Z) и мусорный вид аудитории — тоже.
+    NewsService::Draft badDate = news;
+    badDate.eventAt = "2026-11-20 18:00:00Z";
+    CHECK(publishNews(badDate).status ==
+          NewsService::PublishStatus::BadRequest);
+    NewsService::Draft badAudience = news;
+    badAudience.audienceKind = "dept";
+    CHECK(publishNews(badAudience).status ==
+          NewsService::PublishStatus::BadRequest);
+    // Ничего из отвергнутых попыток в таблицу не попало.
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM news") == 2);
+
+    // --- Ветка kind='announcement' (и отсутствующего kind — тот же путь):
+    //     AnnouncementsService::publish, прежнее поведение ---
+    AnnouncementsService::Audience all;
+    all.all = true;
+    std::promise<AnnouncementsService::Result> pa;
+    auto fa = pa.get_future();
+    AnnouncementsService::publish(
+        f.db, 5, "Объявление прежней веткой", "Текст (вымышленный)", all,
+        [&pa](AnnouncementsService::Result r) { pa.set_value(std::move(r)); });
+    REQUIRE(fa.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    REQUIRE(fa.get().ok);
+
+    // Прежнее поведение: строка в announcements, в news НИЧЕГО нового
+    // (счётчик 2 — только две новости ветки kind=news выше), уведомлений
+    // по-прежнему нет.
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM announcements") == 1);
+    CHECK(scalarOf(f.dbPath,
+                   "SELECT count(*) FROM announcements WHERE author_id=5 "
+                   "AND audience='all'") == 1);
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM news") == 2);
+    CHECK(scalarOf(f.dbPath, "SELECT count(*) FROM notifications") == 0);
 }
