@@ -5,6 +5,7 @@
 #include "models/Applications.h"
 #include "services/AnnouncementsService.h"
 #include "services/ApplicationsService.h"
+#include "services/NewsService.h"
 #include "services/ScheduleCache.h"
 #include "services/ScheduleChangeService.h"
 #include "services/StaffDashboard.h"
@@ -326,6 +327,27 @@ void StaffCtrl::publishAnnouncement(
                               k400BadRequest));
         return;
     }
+    // 5.17: kind — НЕОБЯЗАТЕЛЬНОЕ поле: 'announcement' (по умолчанию) —
+    // прежний путь байт-в-байт (совместимость Э6: существующие тесты
+    // объявлений и лента уведомлений не меняются); 'news' — публикация
+    // НОВОСТИ (таблица news 0007) этим же роутом, без нового staff-роута.
+    // Иное значение/тип → 400.
+    bool asNews = false;
+    if (json->isMember("kind"))
+    {
+        const std::string kind = (*json)["kind"].isString()
+                                     ? (*json)["kind"].asString()
+                                     : std::string();
+        if (kind == "news")
+            asNews = true;
+        else if (kind != "announcement")
+        {
+            cb(api::errorResponse("bad_request",
+                                  "kind — ожидается announcement или news",
+                                  k400BadRequest));
+            return;
+        }
+    }
     if (!json->isMember("title") || !(*json)["title"].isString() ||
         (*json)["title"].asString().empty())
     {
@@ -385,6 +407,97 @@ void StaffCtrl::publishAnnouncement(
             "audience — ожидается \"all\" или массив [\"group:<id>\", "
             "\"course:<id>\"]",
             k400BadRequest));
+        return;
+    }
+
+    // 5.17, kind='news': публикация в news — category/event_at/location
+    // (необязательные поля тела; значения проверяет сервис: словарь
+    // CHECK 0007, строгий ISO 8601 UTC), published_at — серверное «сейчас».
+    // Без push и без уведомлений — как объявления (01 §4.5): news —
+    // редакционная лента, не персональные оповещения.
+    if (asNews)
+    {
+        NewsService::Draft draft;
+        draft.title = (*json)["title"].asString();
+        draft.body = (*json)["body"].asString();
+        if (json->isMember("category"))
+        {
+            if (!(*json)["category"].isString())
+            {
+                cb(api::errorResponse(
+                    "bad_request",
+                    "category — ожидается official, conference, org или "
+                    "event",
+                    k400BadRequest));
+                return;
+            }
+            draft.category = (*json)["category"].asString();
+        }
+        if (json->isMember("event_at"))
+        {
+            if (!(*json)["event_at"].isString())
+            {
+                cb(api::errorResponse(
+                    "bad_request",
+                    "event_at — ожидается YYYY-MM-DDTHH:MM:SSZ",
+                    k400BadRequest));
+                return;
+            }
+            draft.eventAt = (*json)["event_at"].asString();
+        }
+        if (json->isMember("location"))
+        {
+            if (!(*json)["location"].isString())
+            {
+                cb(api::errorResponse(
+                    "bad_request", "location — ожидается непустая строка",
+                    k400BadRequest));
+                return;
+            }
+            draft.location = (*json)["location"].asString();
+        }
+        // Аудитория новости — СКАЛЯР (колонки 0007 audience +
+        // audience_value): 'all' или ровно ОДНА цель; список из нескольких
+        // целей — прерогатива объявлений (массив 0003) → 400.
+        if (audience.all)
+        {
+            draft.audienceAll = true;
+        }
+        else if (audience.targets.size() == 1)
+        {
+            draft.audienceAll = false;
+            draft.audienceKind = audience.targets[0].first;
+            draft.audienceValue = audience.targets[0].second;
+        }
+        else
+        {
+            cb(api::errorResponse(
+                "bad_request",
+                "audience — ожидается \"all\" или ровно одна цель "
+                "[\"group:<id>\"] / [\"course:<id>\"]",
+                k400BadRequest));
+            return;
+        }
+
+        NewsService::publish(
+            app().getDbClient("para"), draft,
+            [cb = std::move(cb)](const NewsService::PublishResult& r) mutable {
+                if (r.status == NewsService::PublishStatus::Ok)
+                {
+                    cb(api::jsonResponse(r.body, k201Created));
+                }
+                else if (r.status == NewsService::PublishStatus::BadRequest)
+                {
+                    cb(api::errorResponse("bad_request", r.error,
+                                          k400BadRequest));
+                }
+                else
+                {
+                    cb(api::errorResponse("internal",
+                                          "Внутренняя ошибка сервера",
+                                          k500InternalServerError));
+                }
+            });
         return;
     }
 

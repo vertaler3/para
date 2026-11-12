@@ -94,6 +94,7 @@ set(PARA_APP_SOURCES
                src/controllers/MapCtrl.cpp
                src/controllers/DashboardCtrl.cpp
                src/controllers/ProfileCtrl.cpp
+               src/controllers/NewsCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp
@@ -123,6 +124,7 @@ set(PARA_APP_SOURCES
                src/services/CanteensService.cpp
                src/services/MapService.cpp
                src/services/DashboardService.cpp
+               src/services/NewsService.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
                src/filters/SecurityHeaders.cpp
