@@ -194,6 +194,18 @@ add_executable(para-tests
                # 5.18 шаг 7: юнит-тесты словаря t()/резолва — i18n.cpp из
                # PARA_APP_SOURCES (см. комментарий у списка выше).
                tests/unit/i18n_test.cpp
+               # э7-be шаг 6: контроллерные контракты PUT submit:true /
+               # GET /v1/ics/token — методы Ctrl вызываются напрямую
+               # (паттерн StaffFilter-теста), поэтому линкуются сами
+               # контроллеры (I18nView — зависимость ApplicationsCtrl;
+               # LoginFilter/CsrfCheck — чтобы app().run() в Env теста
+               # находил middleware роутов и не шумел в лог).
+               tests/unit/api_contract_test.cpp
+               src/controllers/ApplicationsCtrl.cpp
+               src/controllers/IcsCtrl.cpp
+               src/utils/I18nView.cpp
+               src/filters/LoginFilter.cpp
+               src/filters/CsrfCheck.cpp
                src/models/i18n.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
