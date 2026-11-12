@@ -15,6 +15,17 @@ bool isValidTheme(const std::string& theme)
     return theme == "light" || theme == "dark" || theme == "system";
 }
 
+// Допустимые языки интерфейса — 5.18: ru (по умолчанию, инвариант) | en |
+// zh. Коды канонические, те же, что CHECK миграции 0008, словарь
+// src/models/i18n.h и cookie para_lang — расхождение значений исключено
+// (сервис не тянет models/i18n.h ради трёх констант: словарь без
+// drogon-зависимостей, а сервис — слой БД; синхронность кодов держит
+// миграция и тесты applyPatch).
+bool isValidLang(const std::string& lang)
+{
+    return lang == "ru" || lang == "en" || lang == "zh";
+}
+
 // Строка-поле тела обязана содержать валидный JSON (02 §5.2).
 bool isValidJsonString(const std::string& s)
 {
@@ -27,8 +38,9 @@ bool isValidJsonString(const std::string& s)
 
 SettingsRecord SettingsService::defaults()
 {
-    // Ровно значения DEFAULT из миграции 0004 (02 §4.1): тумблеры включены,
-    // тихие часы 23:00–07:00, тема системная, чеклист онбординга пуст.
+    // Ровно значения DEFAULT из миграций 0004/0008 (02 §4.1): тумблеры
+    // включены, тихие часы 23:00–07:00, тема системная, чеклист онбординга
+    // пуст, язык интерфейса русский (инвариант 5.18).
     return SettingsRecord{};
 }
 
@@ -37,7 +49,7 @@ void SettingsService::load(drogon::orm::DbClientPtr db,
                            std::function<void(SettingsRecord)> cb)
 {
     *db << "SELECT notify_schedule, notify_deadlines, notify_applications, "
-           "quiet_hours_json, theme, onboarding_json "
+           "quiet_hours_json, theme, onboarding_json, lang "
            "FROM settings WHERE user_id = $1"
         << userId >>
         // cb копируется в обе ветки (result/exception) — урок Э2 (move в
@@ -61,6 +73,7 @@ void SettingsService::load(drogon::orm::DbClientPtr db,
             rec.quietHoursJson = rows[0]["quiet_hours_json"].as<std::string>();
             rec.theme = rows[0]["theme"].as<std::string>();
             rec.onboardingJson = rows[0]["onboarding_json"].as<std::string>();
+            rec.lang = rows[0]["lang"].as<std::string>();
             cb(std::move(rec));
         } >>
         // cb копируется в обе ветки (result/exception): стреляет ровно одна;
@@ -82,18 +95,21 @@ void SettingsService::save(drogon::orm::DbClientPtr db,
     // UPSERT по первичному ключу user_id: строка ровно одного пользователя —
     // того, чья сессия (user_id из тела запроса сюда не доходит).
     *db << "INSERT INTO settings (user_id, notify_schedule, notify_deadlines, "
-           "notify_applications, quiet_hours_json, theme, onboarding_json) "
-           "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+           "notify_applications, quiet_hours_json, theme, onboarding_json, "
+           "lang) "
+           "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
            "ON CONFLICT(user_id) DO UPDATE SET "
            "notify_schedule = excluded.notify_schedule, "
            "notify_deadlines = excluded.notify_deadlines, "
            "notify_applications = excluded.notify_applications, "
            "quiet_hours_json = excluded.quiet_hours_json, "
            "theme = excluded.theme, "
-           "onboarding_json = excluded.onboarding_json"
+           "onboarding_json = excluded.onboarding_json, "
+           "lang = excluded.lang"
         << rec.userId << (rec.notifySchedule ? 1 : 0)
         << (rec.notifyDeadlines ? 1 : 0) << (rec.notifyApplications ? 1 : 0)
-        << rec.quietHoursJson << rec.theme << rec.onboardingJson >>
+        << rec.quietHoursJson << rec.theme << rec.onboardingJson
+        << rec.lang >>
         // Копия cb в обе ветки — урок Э2 (см. load выше).
         [cb](const Result&) { cb(true); } >>
         [cb](const DrogonDbException& e) {
@@ -141,6 +157,15 @@ SettingsService::PatchResult SettingsService::applyPatch(
                     "theme — допустимо light, dark или system"};
         out.theme = body["theme"].asString();
     }
+    if (body.isMember("lang"))
+    {
+        // 5.18: язык интерфейса — те же коды ru|en|zh, что CHECK миграции
+        // 0008, словарь i18n.h и cookie para_lang; иное — 400 (02 §5.1).
+        if (!body["lang"].isString() || !isValidLang(body["lang"].asString()))
+            return {false, "bad_request",
+                    "lang — допустимо ru, en или zh"};
+        out.lang = body["lang"].asString();
+    }
     if (body.isMember("quiet_hours_json"))
     {
         if (!body["quiet_hours_json"].isString() ||
@@ -175,6 +200,7 @@ void SettingsService::toJson(const SettingsRecord& rec, Json::Value& out)
     Json::Reader().parse(rec.onboardingJson, onboarding);
     out["onboarding"] = onboarding;
     out["theme"] = rec.theme;
+    out["lang"] = rec.lang;  // 5.18: язык интерфейса (дефолт ru — 0008)
 }
 
 }  // namespace para

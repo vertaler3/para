@@ -282,3 +282,19 @@ button.chip{font:inherit;cursor:pointer}
    .actions{flex-wrap:wrap} переносит кнопки ЦЕЛИКОМ
    (тап-зона .button ≥48px сохранена) */
 .staff-actions .button{white-space:nowrap;min-width:max-content}
+
+/* ==== 5.18: компактный переключатель языка в подвале
+   (partials/footer.csp; сегмент в профиле — каркасный .segments) =====
+   Три текстовые кнопки-автонима (Рус · EN · 中文) в одну строку под
+   .footer-top — подвал компактный (03 §2.8), без капсулы .segments;
+   активная — aria-pressed (подсветка ставит app.js по cookie para_lang /
+   GET настроек). Новых цветовых пар НЕТ (Р-16): --primary на --bg —
+   базовая пара каркаса (baseline tools/contrast_check.py); тап-зона
+   уменьшена до 32px против каркасных 44 — это второстепенный элемент
+   подвала, а не основной контрол (компромисс компактности 03 §2.8);
+   @media print скрывает .footer целиком — переключатель уходит с ним. */
+.lang-switch{display:flex;gap:.35rem;align-items:center;justify-content:center;flex-wrap:wrap;max-width:1200px;margin:.9rem auto 0;padding:0 1rem}
+.lang-switch button{background:none;border:0;padding:.25rem .4rem;min-height:32px;font:inherit;font-size:.75rem;color:var(--text-2);cursor:pointer;border-radius:var(--r-sm)}
+.lang-switch button:hover{color:var(--text)}
+.lang-switch button[aria-pressed=true]{color:var(--primary);font-weight:600}
+.lang-switch span{color:var(--text-2)}

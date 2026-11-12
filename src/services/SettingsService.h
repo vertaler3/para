@@ -22,14 +22,16 @@ struct SettingsRecord
     std::string quietHoursJson = R"({"from":"23:00","to":"07:00"})";
     std::string theme = "system";  // токены 03 §2: light | dark | system
     std::string onboardingJson = "[]";  // состояние чеклиста онбординга С5
+    std::string lang = "ru";  // язык интерфейса 5.18: ru | en | zh (0008)
 };
 
 class SettingsService
 {
   public:
-    // Дефолты при отсутствии строки — значения DEFAULT из DDL миграции 0004
-    // (все тумблеры включены, тихие часы 23:00–07:00, тема системная,
-    // онбординг-чеклист не начат).
+    // Дефолты при отсутствии строки — значения DEFAULT из DDL миграций
+    // 0004/0008 (все тумблеры включены, тихие часы 23:00–07:00, тема
+    // системная, онбординг-чеклист не начат, язык интерфейса русский —
+    // инвариант 5.18).
     static SettingsRecord defaults();
 
     // Строка настроек по user_id; cb(defaults()) — строки нет (ленивое
@@ -49,8 +51,9 @@ class SettingsService
     // значения в теле не меняется — так закрывается шаг онбординга С5
     // одиночным {"onboarding_json": …}). user_id из тела игнорируется:
     // userId записи приходит только из сессии (изоляция 02 §6.3).
-    // theme — только light/dark/system (токены 03 §2); quiet_hours_json и
-    // onboarding_json — строки с валидным JSON (02 §5.2).
+    // theme — только light/dark/system (токены 03 §2); lang — только
+    // ru/en/zh (5.18: те же коды, что словарь i18n.h и cookie para_lang);
+    // quiet_hours_json и onboarding_json — строки с валидным JSON (02 §5.2).
     // Возвращает true при успехе; иначе errorCode/errorMessage для ответа
     // 400 в формате 02 §5.1 (вложенный error.code/message).
     struct PatchResult
@@ -64,7 +67,7 @@ class SettingsService
                                   SettingsRecord& out);
 
     // JSON-представление записи для ответов GET/PUT (02 §5.2: три тумблера
-    // + тихие часы + тема; *_json отдаются как вложенные JSON-значения).
+    // + тихие часы + тема + язык; *_json отдаются как вложенные JSON-значения).
     static void toJson(const SettingsRecord& rec, Json::Value& out);
 };
 

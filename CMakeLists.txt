@@ -95,6 +95,9 @@ set(PARA_APP_SOURCES
                src/controllers/DashboardCtrl.cpp
                src/controllers/ProfileCtrl.cpp
                src/controllers/NewsCtrl.cpp
+               # 5.18 шаг 2: мини-роут GET /lang — cookie para_lang
+               # (ставит сервер: app.js cookie не пишет — конвенция каркаса).
+               src/controllers/LangCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp
                src/services/PasswordHasher.cpp

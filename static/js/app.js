@@ -223,7 +223,50 @@
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch)
   });
-  loadSettings().then((s) => { if (s && s.theme) applyTheme(s.theme); });
+  /* authedSettings: GET настроек удался → пользователь в сессии (гость
+     получает 401 → null); язык гостя живёт только в cookie para_lang. */
+  let authedSettings = false;
+  loadSettings().then((s) => {
+    if (!s) return;
+    authedSettings = true;
+    if (s.theme) applyTheme(s.theme);
+    markLang(s.lang);
+  });
+
+  /* ---------- язык интерфейса (5.18): сегмент в профиле + компактный
+     переключатель в footer ---------- */
+  /* Переводы рендерит СЕРВЕР (словарь i18n) — смена языка это ПЕРЕХОД,
+     а не локальная правка DOM: клик → (авторизован: PUT {lang} — тот же
+     путь, что тема; гость пропускает) → мини-роут /lang ставит cookie
+     para_lang (app.js cookie НЕ пишет — конвенция каркаса: все cookie
+     выдаёт сервер) и отвечает 302 назад — страница перезагружается на
+     выбранном языке. Активная кнопка — aria-pressed: до ответа сервера
+     её знает cookie para_lang (НЕ HttpOnly — читаем здесь), после входа
+     уточняется GET-ом настроек. */
+  const paraLang = () => {
+    const m = document.cookie.match(/(?:^|;\s*)para_lang=(ru|en|zh)/);
+    return m ? m[1] : '';
+  };
+  const markLang = (lang) => {
+    if (!lang) return;
+    document.querySelectorAll('[data-lang-choice]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.langChoice === lang));
+    });
+  };
+  document.querySelectorAll('[data-lang-choice]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const lang = btn.dataset.langChoice;
+      if (!/^(ru|en|zh)$/.test(lang)) return;
+      if (!navigator.onLine) { applyOffline(true); return; }
+      if (authedSettings) {
+        const saved = await putSettings({ lang });
+        if (!saved) { toast('Не получилось сохранить язык'); return; }
+      }
+      const next = location.pathname + location.search;
+      location.href = '/lang?lang=' + lang + '&next=' + encodeURIComponent(next);
+    });
+  });
+  markLang(paraLang());
 
   /* ---------- онбординг С5 (03 §4.7/§4.9.4) ---------- */
   /* Состояние чеклиста — onboarding_json настроек: массив КЛЮЧЕЙ закрытых
@@ -3126,14 +3169,17 @@
       if (from && typeof q.from === 'string') from.value = q.from;
       if (to && typeof q.to === 'string') to.value = q.to;
       if (s.theme) { applyTheme(s.theme); markTheme(s.theme); }
+      markLang(s.lang);
       show('[data-settings-body]', true);
       show('[data-theme-group]', true);
+      show('[data-lang-group]', true);
     };
     const loadSettingsUI = async () => {
       show('[data-settings-loading]', true);
       show('[data-settings-error]', false);
       show('[data-settings-body]', false);
       show('[data-theme-group]', false);
+      show('[data-lang-group]', false);
       const s = await loadSettings();
       show('[data-settings-loading]', false);
       if (!s) { show('[data-settings-error]', true); return; }

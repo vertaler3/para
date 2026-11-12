@@ -107,13 +107,25 @@
 
     <!-- ==== Оформление: тема — сегмент 03 §4.7; смена применяется сразу
          (data-theme на <html> — токены читают :root[data-theme=dark] /
-         prefers-color-scheme, tokens.css) и сохраняется PUT-ом. ==== -->
+         prefers-color-scheme, tokens.css) и сохраняется PUT-ом. Язык
+         интерфейса (5.18) — второй сегмент секции по тому же прецеденту
+         (03 §4.7 «🌐 Язык (Рус | EN | 中文) ← сегмент 3»): автонимы не
+         переводятся (i18n.h lang.*); выбор ставит cookie para_lang
+         мини-роутом /lang (сервер) и сохраняется PUT {lang}; после смены
+         страница перезагружается — переводы рендерит сервер (шаг 3). ==== -->
     <section class="section" aria-labelledby="theme-title">
       <div class="section-title"><h2 id="theme-title">Оформление</h2></div>
-      <div class="segments" role="group" aria-label="Тема" data-theme-group hidden>
-        <button type="button" data-theme-choice="light">Светлая</button>
-        <button type="button" data-theme-choice="dark">Тёмная</button>
-        <button type="button" data-theme-choice="system">Системная</button>
+      <div class="stack">
+        <div class="segments" role="group" aria-label="Тема" data-theme-group hidden>
+          <button type="button" data-theme-choice="light">Светлая</button>
+          <button type="button" data-theme-choice="dark">Тёмная</button>
+          <button type="button" data-theme-choice="system">Системная</button>
+        </div>
+        <div class="segments" role="group" aria-label="Язык интерфейса" data-lang-group hidden>
+          <button type="button" data-lang-choice="ru">Рус</button>
+          <button type="button" data-lang-choice="en">EN</button>
+          <button type="button" data-lang-choice="zh">中文</button>
+        </div>
       </div>
     </section>
 

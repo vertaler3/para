@@ -1,13 +1,14 @@
-// Юнит-тесты SettingsService (Э2 шаг 3; 02 §5.2, миграция 0004):
+// Юнит-тесты SettingsService (Э2 шаг 3; 02 §5.2, миграции 0004 + 0008):
 //  - дефолты при отсутствии строки (значения DEFAULT из DDL);
 //  - UPSERT перезаписывает существующую строку;
 //  - сохранение настроек одного пользователя не трогает чужую строку;
-//  - applyPatch: theme только light/dark/system, *_json — валидный JSON,
-//    отсутствующие поля не меняются, user_id из тела игнорируется.
+//  - applyPatch: theme только light/dark/system, lang только ru/en/zh
+//    (5.18), *_json — валидный JSON, отсутствующие поля не меняются,
+//    user_id из тела игнорируется.
 // Временная SQLite через настоящий DbClient — как тесты Э1 и guard'а
 // (migration_runner_test.cpp, ownership_guard_test.cpp): схема копирует
-// колонки settings из миграции 0004 БЕЗ FK (FK-ссылку на users тест не
-// проверяет — это работа миграций), каждый вызов синхронизируется
+// колонки settings из миграций 0004+0008 БЕЗ FK (FK-ссылку на users тест
+// не проверяет — это работа миграций), каждый вызов синхронизируется
 // promise/future (колбэки DrogonDbClient — с внутреннего потока).
 #include <chrono>
 #include <filesystem>
@@ -57,7 +58,8 @@ void exec(sqlite3* db, const std::string& sql)
     }
 }
 
-// Схема таблицы settings — колонки из миграции 0004 (без FK на users).
+// Схема таблицы settings — колонки из миграций 0004 + 0008/lang (без FK
+// на users).
 struct Fixture
 {
     TempDir tmp;
@@ -80,7 +82,9 @@ struct Fixture
              "  quiet_hours_json    TEXT    NOT NULL DEFAULT "
              "'{\"from\":\"23:00\",\"to\":\"07:00\"}',"
              "  theme               TEXT    NOT NULL DEFAULT 'system',"
-             "  onboarding_json     TEXT    NOT NULL DEFAULT '[]'"
+             "  onboarding_json     TEXT    NOT NULL DEFAULT '[]',"
+             "  lang                TEXT    NOT NULL DEFAULT 'ru' "
+             "CHECK (lang IN ('ru','en','zh'))"
              ");");
         sqlite3_close(raw);
         // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
@@ -130,6 +134,7 @@ TEST_CASE("SettingsService: дефолты при отсутствии стро�
     CHECK(rec.quietHoursJson == "{\"from\":\"23:00\",\"to\":\"07:00\"}");
     CHECK(rec.theme == "system");
     CHECK(rec.onboardingJson == "[]");
+    CHECK(rec.lang == "ru");  // 5.18: DEFAULT 'ru' из 0008 — русский дефолт
     // строка в БД не создаётся чтением — ленивое создание при первом PUT
     sqlite3* raw = nullptr;
     REQUIRE(sqlite3_open_v2(f.dbPath.c_str(), &raw, SQLITE_OPEN_READONLY,
@@ -150,6 +155,7 @@ TEST_CASE("SettingsService: UPSERT перезаписывает строку (б
     rec.notifyDeadlines = false;
     rec.theme = "dark";
     rec.onboardingJson = R"(["welcome","schedule"])";
+    rec.lang = "zh";  // 5.18: выбор сегмента языка — та же UPSERT-строка
     CHECK(saveNow(f.db, rec));
 
     auto after = loadOf(f.db, 1);
@@ -157,6 +163,7 @@ TEST_CASE("SettingsService: UPSERT перезаписывает строку (б
     CHECK_FALSE(after.notifyDeadlines);
     CHECK(after.theme == "dark");
     CHECK(after.onboardingJson == R"(["welcome","schedule"])");
+    CHECK(after.lang == "zh");
 
     // повторный PUT той же сессии — строка по-прежнему одна
     after.theme = "light";
@@ -214,6 +221,37 @@ TEST_CASE("SettingsService: applyPatch — валидация и игнор user
         // base не испорчен отказом
         CHECK(out.theme == base.theme);
     }
+    SUBCASE("lang — только ru/en/zh (5.18), дефолт не тронут отказом")
+    {
+        SettingsRecord out;
+        Json::Value body;
+        body["lang"] = "de";  // живой смок шага 2: PUT lang=de → 400
+        const auto r = patchOf(base, body, out);
+        CHECK_FALSE(r.ok);
+        CHECK(r.errorCode == "bad_request");
+        CHECK(out.lang == base.lang);  // base.lang == "ru" — не испорчен
+        // каждый допустимый код принимается; недопустимые формы — нет
+        for (const char* ok : {"ru", "en", "zh"})
+        {
+            Json::Value b;
+            b["lang"] = ok;
+            SettingsRecord o;
+            REQUIRE(patchOf(base, b, o).ok);
+            CHECK(o.lang == ok);
+        }
+        for (const char* bad : {"de", "RU", "zh-CN", "", "ru "})
+        {
+            Json::Value b;
+            b["lang"] = bad;
+            SettingsRecord o;
+            CHECK_FALSE(patchOf(base, b, o).ok);
+        }
+        // не-строка тоже отказ
+        Json::Value num;
+        num["lang"] = 1;
+        SettingsRecord o2;
+        CHECK_FALSE(patchOf(base, num, o2).ok);
+    }
     SUBCASE("невалидный JSON в quiet_hours_json / onboarding_json → ошибка")
     {
         SettingsRecord out;
@@ -235,6 +273,7 @@ TEST_CASE("SettingsService: applyPatch — валидация и игнор user
         CHECK(out.notifySchedule == base.notifySchedule);
         CHECK(out.quietHoursJson == base.quietHoursJson);
         CHECK(out.onboardingJson == base.onboardingJson);
+        CHECK(out.lang == base.lang);  // lang без значения в теле не меняется
     }
     SUBCASE("user_id из тела игнорируется — userId приходит из сессии")
     {

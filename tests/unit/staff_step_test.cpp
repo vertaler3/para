@@ -156,7 +156,9 @@ struct Fixture
              "INTEGER NOT NULL DEFAULT 1, notify_applications INTEGER NOT "
              "NULL DEFAULT 1, quiet_hours_json TEXT NOT NULL DEFAULT "
              "'{\"from\":\"23:00\",\"to\":\"07:00\"}', theme TEXT NOT NULL "
-             "DEFAULT 'system', onboarding_json TEXT NOT NULL DEFAULT '[]');"
+             "DEFAULT 'system', onboarding_json TEXT NOT NULL DEFAULT '[]', "
+             "lang TEXT NOT NULL DEFAULT 'ru' "
+             "CHECK (lang IN ('ru','en','zh')));"
              // 0007_news (5.17 шаг 1) — DDL дословно: ветка kind='news'
              // POST /v1/staff/announcements пишет в эту таблицу.
              "CREATE TABLE news ("

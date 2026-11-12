@@ -134,7 +134,9 @@ struct Fixture
              "  quiet_hours_json    TEXT    NOT NULL DEFAULT "
              "'{\"from\":\"23:00\",\"to\":\"07:00\"}',"
              "  theme               TEXT    NOT NULL DEFAULT 'system',"
-             "  onboarding_json     TEXT    NOT NULL DEFAULT '[]'"
+             "  onboarding_json     TEXT    NOT NULL DEFAULT '[]',"
+             "  lang                TEXT    NOT NULL DEFAULT 'ru' "
+             "CHECK (lang IN ('ru','en','zh'))"
              ");");
         sqlite3_close(raw);
         // FK на каждом соединении (Э8 шаг 5, находка Э1) — те же
