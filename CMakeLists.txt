@@ -191,6 +191,10 @@ add_executable(para-tests
                tests/unit/library_service_test.cpp
                tests/unit/canteens_map_test.cpp
                tests/unit/news_service_test.cpp
+               # 5.18 шаг 7: юнит-тесты словаря t()/резолва — i18n.cpp из
+               # PARA_APP_SOURCES (см. комментарий у списка выше).
+               tests/unit/i18n_test.cpp
+               src/models/i18n.cpp
                src/controllers/HealthCtrl.cpp
                src/services/MigrationRunner.cpp
                src/services/OwnershipGuard.cpp

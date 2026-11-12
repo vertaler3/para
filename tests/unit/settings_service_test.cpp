@@ -4,7 +4,9 @@
 //  - сохранение настроек одного пользователя не трогает чужую строку;
 //  - applyPatch: theme только light/dark/system, lang только ru/en/zh
 //    (5.18), *_json — валидный JSON, отсутствующие поля не меняются,
-//    user_id из тела игнорируется.
+//    user_id из тела игнорируется. 5.18 шаг 7: каждая невалидная форма
+//    lang ('de'/пустое/число/зона/регистр/хвостовой пробел) — единый
+//    400-контракт 02 §5.1 (errorCode «bad_request»).
 // Временная SQLite через настоящий DbClient — как тесты Э1 и guard'а
 // (migration_runner_test.cpp, ownership_guard_test.cpp): схема копирует
 // колонки settings из миграций 0004+0008 БЕЗ FK (FK-ссылку на users тест
@@ -244,13 +246,19 @@ TEST_CASE("SettingsService: applyPatch — валидация и игнор user
             Json::Value b;
             b["lang"] = bad;
             SettingsRecord o;
-            CHECK_FALSE(patchOf(base, b, o).ok);
+            const auto r = patchOf(base, b, o);
+            // шаг 7: все невалидные формы — единый 400-контракт 02 §5.1
+            // (errorCode «bad_request», а не просто отказ без кода)
+            CHECK_FALSE(r.ok);
+            CHECK(r.errorCode == "bad_request");
         }
-        // не-строка тоже отказ
+        // не-строка (число) — тот же 400-контракт bad_request
         Json::Value num;
         num["lang"] = 1;
         SettingsRecord o2;
-        CHECK_FALSE(patchOf(base, num, o2).ok);
+        const auto rn = patchOf(base, num, o2);
+        CHECK_FALSE(rn.ok);
+        CHECK(rn.errorCode == "bad_request");
     }
     SUBCASE("невалидный JSON в quiet_hours_json / onboarding_json → ошибка")
     {
