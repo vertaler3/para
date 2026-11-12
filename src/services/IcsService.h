@@ -33,6 +33,23 @@ class IcsService
                             int64_t userId,
                             std::function<void(bool ok)> cb);
 
+    struct ActiveToken
+    {
+        bool ok = false;         // false — ошибка БД → контроллер 500
+        bool found = false;      // false — активного токена нет → 404
+        std::string token;       // активный токен (при found)
+        std::string createdAt;   // created_at строки, ISO UTC (при found)
+    };
+
+    // GET /v1/ics/token → 200 {token, created_at} (8.ii): статус подписки
+    // для блока профиля. Источник тот же, что у фида GET /ics/{token}, —
+    // строка пользователя с revoked = 0; «нет подписки» или отозван —
+    // found = false → контроллер 404. НЕ ротация и не перевыпуск: метод
+    // только читает (Р-25 о POST 201 не затрагивается).
+    static void activeToken(drogon::orm::DbClientPtr db,
+                            int64_t userId,
+                            std::function<void(ActiveToken)> cb);
+
     struct Calendar
     {
         bool ok = false;     // false — ошибка БД → контроллер 500

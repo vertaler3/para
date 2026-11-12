@@ -148,6 +148,36 @@ void IcsService::revokeToken(drogon::orm::DbClientPtr db,
         };
 }
 
+void IcsService::activeToken(drogon::orm::DbClientPtr db,
+                             int64_t userId,
+                             std::function<void(ActiveToken)> cb)
+{
+    // 8.ii: тот же источник, что у фида GET /ics/{token} (строка с
+    // revoked = 0) — один активный токен на пользователя по схеме
+    // (user_id PRIMARY KEY); пустая выборка — «нет подписки» → 404.
+    *db << "SELECT token, created_at FROM ics_tokens "
+           "WHERE user_id = $1 AND revoked = 0"
+        << userId >>
+        [cb](const drogon::orm::Result& rows) mutable {
+            if (rows.empty())
+            {
+                cb(ActiveToken{true, false, std::string(), std::string()});
+                return;
+            }
+            ActiveToken t;
+            t.ok = true;
+            t.found = true;
+            t.token = rows[0]["token"].as<std::string>();
+            t.createdAt = rows[0]["created_at"].as<std::string>();
+            cb(std::move(t));
+        } >>
+        // cb копируется в обе ветки цепочки (урок Э2 шаг 1).
+        [cb](const DrogonDbException& e) {
+            LOG_ERROR << "IcsService::activeToken: " << e.base().what();
+            cb(ActiveToken{});
+        };
+}
+
 std::string IcsService::stampNow()
 {
     std::tm tm{};

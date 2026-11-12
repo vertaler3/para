@@ -111,6 +111,19 @@ bool revokeOf(const drogon::orm::DbClientPtr& db, int64_t userId)
     return f.get();
 }
 
+IcsService::ActiveToken activeOf(const drogon::orm::DbClientPtr& db,
+                                 int64_t userId)
+{
+    std::promise<IcsService::ActiveToken> p;
+    auto f = p.get_future();
+    IcsService::activeToken(
+        db, userId, [&p](IcsService::ActiveToken t) {
+            p.set_value(std::move(t));
+        });
+    REQUIRE(f.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    return f.get();
+}
+
 bool allHex(const std::string& s)
 {
     for (const char c : s)
@@ -190,6 +203,42 @@ TEST_CASE("IcsService: revokeToken — отзыв и идемпотентнос�
     CHECK(createOf(f.db, 3).size() == 64);
     CHECK(scalarOf(f.dbPath,
                    "SELECT revoked FROM ics_tokens WHERE user_id = 3") == 0);
+    (void)token;
+}
+
+TEST_CASE("IcsService: activeToken — статус подписки (8.ii, GET /v1/ics/token)")
+{
+    Fixture f;
+    // Нет строки — not found (контроллер → 404 «нет подписки»).
+    const auto none = activeOf(f.db, 1);
+    CHECK(none.ok);
+    CHECK_FALSE(none.found);
+    // Активный токен — тот же, что отдаёт фид GET /ics/{token}: источник
+    // один (строка с revoked = 0), created_at — ISO UTC (SessionService::
+    // utcNow, 20 символов «YYYY-MM-DDTHH:MM:SSZ»).
+    const std::string token = createOf(f.db, 1);
+    const auto active = activeOf(f.db, 1);
+    CHECK(active.ok);
+    CHECK(active.found);
+    CHECK(active.token == token);
+    CHECK(active.token.size() == 64);
+    CHECK(active.createdAt.size() == 20);
+    CHECK(active.createdAt.back() == 'Z');
+    // Ротация (POST) меняет источник — activeToken отдаёт уже новый.
+    const std::string rotated = createOf(f.db, 1);
+    const auto afterRotate = activeOf(f.db, 1);
+    CHECK(afterRotate.found);
+    CHECK(afterRotate.token == rotated);
+    CHECK(afterRotate.token != token);
+    CHECK(afterRotate.createdAt.size() == 20);
+    // Отзыв (DELETE) → not found; чужая подписка не затронута.
+    CHECK(revokeOf(f.db, 1));
+    const auto revoked = activeOf(f.db, 1);
+    CHECK(revoked.ok);
+    CHECK_FALSE(revoked.found);
+    const std::string other = createOf(f.db, 3);
+    CHECK(activeOf(f.db, 3).token == other);
+    CHECK(activeOf(f.db, 42).found == false);  // никогда не было строки
     (void)token;
 }
 
