@@ -19,12 +19,25 @@ namespace {
 // ответы дополняются teacher_id — FE вешает ссылку на профиль человека
 // (/v1/people/{id}) из «Деталей пары» (5.11); NULL → null (DDL допускает).
 // prev_teacher_id — часть «было → стало» замещения (С3), он в схеме с Э1.
+// Э7-БЕ шаг 3 (8.iv): корпус события building/prev_building — JOIN по
+// TEXT-ссылке rooms.name (колонки room_id в schedule_events нет, миграция
+// 0002) → rooms.building_id → buildings.name. Оба JOIN — LEFT: комната
+// без строки rooms (справочные данные) → building null, событие НЕ
+// пропадает и не даёт 500 — fail-open уместен именно здесь (не аудитория
+// безопасности); prev_room NULL → prev_building null тем же LEFT JOIN.
+// Имена комнат в каталоге не коллизируют (JOIN-сверка фикстур — 0
+// нарушений, AGENTS.md §5) — дублей строк из JOIN нет.
 const std::string kSelect =
     "SELECT e.id, e.room, e.kind, e.starts_at, e.ends_at, e.status, "
     "e.prev_room, e.prev_starts_at, e.prev_teacher_id, e.changed_at, "
     "e.teacher_id, "
-    "d.code AS discipline_code, d.title AS discipline_title "
-    "FROM schedule_events e JOIN disciplines d ON d.id = e.discipline_id ";
+    "d.code AS discipline_code, d.title AS discipline_title, "
+    "rb.name AS building, pb.name AS prev_building "
+    "FROM schedule_events e JOIN disciplines d ON d.id = e.discipline_id "
+    "LEFT JOIN rooms r ON r.name = e.room "
+    "LEFT JOIN buildings rb ON rb.id = r.building_id "
+    "LEFT JOIN rooms pr ON pr.name = e.prev_room "
+    "LEFT JOIN buildings pb ON pb.id = pr.building_id ";
 
 // Статусы «изменений» — фиксированный белый список из CHECK-ограничения
 // 02 §4.1 (не пользовательский ввод): SQL-литералы, idx_schedule_group_status.
@@ -52,11 +65,16 @@ Json::Value eventJson(const Row& r)
     e["code"] = r["discipline_code"].as<std::string>();
     e["kind"] = r["kind"].as<std::string>();
     e["room"] = r["room"].as<std::string>();
+    // Э7-БЕ шаг 3 (8.iv): корпус («Корпус Б») — только ДОБАВЛЕНИЕ поля,
+    // прежние поля не меняются (совместимость FE). Комнаты без строки
+    // rooms → null (fail-open справочных данных, см. kSelect).
+    e["building"] = optString(r, "building");
     e["starts_at"] = r["starts_at"].as<std::string>();
     e["ends_at"] = r["ends_at"].as<std::string>();
     e["status"] = r["status"].as<std::string>();
     // «было → стало» (С1/С3): null, когда переноса не было.
     e["prev_room"] = optString(r, "prev_room");
+    e["prev_building"] = optString(r, "prev_building");
     e["prev_starts_at"] = optString(r, "prev_starts_at");
     e["prev_teacher_id"] = optInt64(r, "prev_teacher_id");
     e["changed_at"] = optString(r, "changed_at");

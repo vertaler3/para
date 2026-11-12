@@ -3,6 +3,9 @@
 //  - week отдаёт неделю группы и смещается по offset (±);
 //  - changes фильтрует по статусам moved/cancelled/substituted и окну days,
 //    отдаёт prev_* («было → стало»);
+//  - building/prev_building (Э7-БЕ шаг 3, 8.iv): корпус события JOIN'ом
+//    rooms→buildings по TEXT-имени; комната без строки rooms → null
+//    (fail-open справочных данных), событие из выборки не исчезает;
 //  - ScheduleCache: put/get, отдача закэшированной недели до инвалидации,
 //    invalidate(group_id) — хук Э6;
 //  - ошибка БД — fail-closed (ok=false → 500 контроллером), не пустой ответ.
@@ -75,7 +78,11 @@ void exec(sqlite3* db, const std::string& sql)
 
 // Схема — колонки таблиц groups/disciplines/profiles/schedule_events из
 // миграций 0001/0002, БЕЗ FK (FK-ссылки тест не проверяет — это работа
-// миграций) и без индексов полноты CHECK.
+// миграций) и без индексов полноты CHECK. Э7-БЕ шаг 3 (8.iv): + срез
+// buildings/rooms из 0006/0005 (rooms с building_id) — все ШЕСТЬ аудиторий
+// демо-недели (1201/2109/2210/3024/3105/4210) с корпусами из фикстур v2;
+// дополнения теста 4205/3201/5102 в rooms ОТСУТСТВУЮТ (и в fixtures.sql их
+// нет) — контроль fail-open: building/prev_building null, событие живо.
 struct Fixture
 {
     TempDir tmp;
@@ -118,6 +125,27 @@ struct Fixture
              "INSERT INTO profiles VALUES (1,1,'Соколова Анна Игоревна'),"
              " (3,2,'Ливанов Марк Сергеевич');"
              // user 5 (dean.demo, staff) — профиля нет, как в фикстурах Р-6.
+             // Корпуса/аудитории — срез фикстур v2 (0005+0006, шаг 3 8.iv):
+             // все шесть аудиторий демо-недели; 4205/3201/5102 НЕ вставлены.
+             "CREATE TABLE buildings (id INTEGER PRIMARY KEY, name TEXT NOT"
+             " NULL, address TEXT NOT NULL);"
+             "INSERT INTO buildings VALUES"
+             " (1,'Корпус А','проспект Научный, д. 10 (адрес вымышленный)'),"
+             " (2,'Корпус Б','улица Парковая, д. 4 (адрес вымышленный)');"
+             "CREATE TABLE rooms (id INTEGER PRIMARY KEY, name TEXT NOT"
+             " NULL, building TEXT NOT NULL, capacity INTEGER NOT NULL,"
+             " features TEXT NOT NULL DEFAULT '', building_id INTEGER,"
+             " floor INTEGER, kind TEXT);"
+             "INSERT INTO rooms(id, name, building, capacity, features,"
+             " building_id, floor, kind) VALUES"
+             " (2,'3105','Корпус А',18,'доска, столы для переговоров',1,3,"
+             "'аудитория'),"
+             " (6,'2210','Корпус А',36,'проектор, доска',1,2,'аудитория'),"
+             " (9,'3024','Корпус А',32,'проектор, доска',1,3,'аудитория'),"
+             " (18,'4210','Корпус А',40,'проектор, микрофон',1,4,"
+             "'аудитория'),"
+             " (22,'1201','Корпус Б',32,'проектор, доска',2,2,'аудитория'),"
+             " (24,'2109','Корпус Б',28,'проектор',2,2,'аудитория');"
              "CREATE TABLE schedule_events ("
              "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
              "  group_id INTEGER NOT NULL,"
@@ -336,6 +364,11 @@ TEST_CASE("ScheduleService: today — свой день, свой порядок
     // Отменённая пара — прямо в today (todayHasCancelled).
     CHECK(events[0]["status"].asString() == "cancelled");
     CHECK(events[0]["prev_room"].asString() == "2109");
+    // Э7-БЕ шаг 3 (8.iv): корпус события — JOIN rooms→buildings. Отмена
+    // id 7: ауд. 2109 — Корпус Б, prev_room тот же 2109 → prev_building
+    // тоже «Корпус Б» («было → стало» той же ссылкой).
+    CHECK(events[0]["building"].asString() == "Корпус Б");
+    CHECK(events[0]["prev_building"].asString() == "Корпус Б");
     // Форма события 02 §5.2: дисциплина JOIN'ом. Э6а (гайд §9а):
     // schedule-ответы дополняются teacher_id — «История России» идёт у
     // Симонова (teachers.id 4), фикстурное значение колонки; FE считает
@@ -345,6 +378,10 @@ TEST_CASE("ScheduleService: today — свой день, свой порядок
     CHECK(events[1].isMember("teacher_id"));
     CHECK(events[1]["teacher_id"].as<int64_t>() == 4);
     CHECK(events[1]["prev_room"].isNull());
+    // 8.iv: ауд. 1201 — Корпус Б (фикстуры v2, серия 12xx — Корпус Б);
+    // переноса не было → prev_building null (как prev_room).
+    CHECK(events[1]["building"].asString() == "Корпус Б");
+    CHECK(events[1]["prev_building"].isNull());
 
     // Другой день — свои две пары понедельника.
     const auto mon = todayOf(f.db, 1, "2026-11-02");
@@ -395,6 +432,12 @@ TEST_CASE("ScheduleService: week — неделя группы и смещени
     CHECK(w0.body["events"][0].isMember("teacher_id"));
     CHECK(w0.body["events"][0]["teacher_id"].as<int64_t>() == 4);
     CHECK(w0.body["events"][9]["teacher_id"].as<int64_t>() == 3);
+    // Э7-БЕ шаг 3 (8.iv): корпус в week-ответе — id 1 (ауд. 1201) —
+    // Корпус Б, id 10 (ауд. 2109) — Корпус Б; переноса не было →
+    // prev_building null.
+    CHECK(w0.body["events"][0]["building"].asString() == "Корпус Б");
+    CHECK(w0.body["events"][0]["prev_building"].isNull());
+    CHECK(w0.body["events"][9]["building"].asString() == "Корпус Б");
 
     // offset=1: следующая неделя — пусто.
     const auto w1 = weekOf(f.db, 1, 1, nullptr, "2026-11-05");
@@ -409,11 +452,19 @@ TEST_CASE("ScheduleService: week — неделя группы и смещени
     CHECK(wm1.body["from"] == "2026-10-26");
     CHECK(wm1.body["to"] == "2026-11-01");
     CHECK(idsOf(wm1.body["events"]) == std::set<int64_t>({11}));
+    // 8.iv, fail-open: ауд. 4205 дополнения теста НЕТ в rooms (и в
+    // fixtures.sql её нет) — событие НЕ исчезло (выше в выборке), корпус
+    // null по обеим ссылкам (prev_room 3201 тоже без строки rooms).
+    CHECK(wm1.body["events"][0]["room"].asString() == "4205");
+    CHECK(wm1.body["events"][0]["building"].isNull());
+    CHECK(wm1.body["events"][0]["prev_building"].isNull());
 
     // Неделя другой группы — изоляция (Марк → 4-МЭО, только id 20).
     const auto mark = weekOf(f.db, 3, 0, nullptr, "2026-11-05");
     REQUIRE(mark.ok);
     CHECK(idsOf(mark.body["events"]) == std::set<int64_t>({20}));
+    // 8.iv: ауд. 5102 (дополнение теста) в rooms нет → building null.
+    CHECK(mark.body["events"][0]["building"].isNull());
 }
 
 TEST_CASE("ScheduleService: changes — статусы, окно days, prev_* «было → стало»")
@@ -442,6 +493,10 @@ TEST_CASE("ScheduleService: changes — статусы, окно days, prev_* «
         CHECK(e["changed_at"].asString() == "2026-11-02T15:40:00Z");
         CHECK(e["discipline"].asString() == "Мировая экономика");
         CHECK(e["prev_teacher_id"].isNull());
+        // Э7-БЕ шаг 3 (8.iv): «было → стало» по корпусу — 3024 и 4210
+        // обе в Корпусе А (фикстуры v2): перенос ВНУТРИ корпуса.
+        CHECK(e["building"].asString() == "Корпус А");
+        CHECK(e["prev_building"].asString() == "Корпус А");
     }
     // Отмена: время не менялось — prev_starts_at == starts_at.
     for (const auto& e : changes)
@@ -451,6 +506,9 @@ TEST_CASE("ScheduleService: changes — статусы, окно days, prev_* «
         CHECK(e["status"].asString() == "cancelled");
         CHECK(e["prev_room"].asString() == "2109");
         CHECK(e["prev_starts_at"] == e["starts_at"]);
+        // 8.iv: ауд. 2109 — Корпус Б, prev_room тот же.
+        CHECK(e["building"].asString() == "Корпус Б");
+        CHECK(e["prev_building"].asString() == "Корпус Б");
     }
     // Замещение преподавателя: prev_teacher_id = 6 («было»); Э6а: текущий
     // teacher_id тоже в ответе (замещающий — «стало»).
@@ -462,6 +520,10 @@ TEST_CASE("ScheduleService: changes — статусы, окно days, prev_* «
         CHECK(e["prev_teacher_id"].as<int64_t>() == 6);
         CHECK(e.isMember("teacher_id"));
         CHECK(e["teacher_id"].as<int64_t>() == 1);  // fixture: замещающий id 1
+        // 8.iv, fail-open: 4205/3201 дополнения теста — в rooms их нет →
+        // building/prev_building null, изменение живо в выборке.
+        CHECK(e["building"].isNull());
+        CHECK(e["prev_building"].isNull());
     }
 
     // Окно days: 1 день → только отменённая пара 05.11; 2 дня → 04–05.11.

@@ -153,6 +153,28 @@ struct Fixture
                  "INSERT INTO disciplines(id, code, title, control_type)"
                  " VALUES (1,'ME-101','Мировая экономика','exam'),"
                  " (4,'HR-101','История России','graded_credit');"
+                 // Корпуса/аудитории — срез фикстур v2 (0005+0006) для
+                 // аудиторий этого теста: 1201 — Корпус Б, 3024 — Корпус А.
+                 // Э7-БЕ шаг 3 (8.iv): kSelect ScheduleService LEFT JOIN'ит
+                 // rooms→buildings — таблицы обязаны существовать в схеме
+                 // теста (иначе Ok-ветки расписания падают «no such table»).
+                 "CREATE TABLE buildings (id INTEGER PRIMARY KEY, name TEXT"
+                 " NOT NULL, address TEXT NOT NULL);"
+                 "INSERT INTO buildings VALUES"
+                 " (1,'Корпус А','проспект Научный, д. 10 (адрес"
+                 " вымышленный)'),"
+                 " (2,'Корпус Б','улица Парковая, д. 4 (адрес"
+                 " вымышленный)');"
+                 "CREATE TABLE rooms (id INTEGER PRIMARY KEY, name TEXT NOT"
+                 " NULL, building TEXT NOT NULL, capacity INTEGER NOT NULL,"
+                 " features TEXT NOT NULL DEFAULT '', building_id INTEGER,"
+                 " floor INTEGER, kind TEXT);"
+                 "INSERT INTO rooms(id, name, building, capacity, features,"
+                 " building_id, floor, kind) VALUES"
+                 " (9,'3024','Корпус А',32,'проектор, доска',1,3,"
+                 "'аудитория'),"
+                 " (22,'1201','Корпус Б',32,'проектор, доска',2,2,"
+                 "'аудитория');"
                  "INSERT INTO schedule_events(id, group_id, discipline_id,"
                  " teacher_id, room, kind, starts_at, ends_at, status) VALUES"
                  " (1,1,4,4,'1201','lecture','2026-11-02T10:00:00Z',"
@@ -467,6 +489,10 @@ TEST_CASE("schedule: занятия преподавателя; группа с�
     CHECK(rt.body["events"][0]["id"].as<int64_t>() == 4);
     CHECK(rt.body["events"][0]["teacher_id"].as<int64_t>() ==
           1);  // Э6а: schedule-ответы дополняются teacher_id
+    // Э7-БЕ шаг 3 (8.iv): форма события schedule-выборок дополнилась
+    // корпусом — ауд. 3024 → «Корпус А» (LEFT JOIN rooms→buildings).
+    CHECK(rt.body["events"][0]["building"].asString() == "Корпус А");
+    CHECK(rt.body["events"][0]["prev_building"].isNull());
 
     // Чужой студент: расписание группы 4-МЭО Марка (событие 3) — публично.
     auto rm = scheduleOf(f, 3);
