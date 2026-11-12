@@ -5,6 +5,7 @@
 
 #include "services/DashboardService.h"
 #include "utils/ApiError.h"
+#include "utils/I18nView.h"
 
 using namespace drogon;
 using namespace para;
@@ -35,7 +36,8 @@ void DashboardCtrl::page(const HttpRequestPtr& req,
     }
     SessionService::findValid(
         app().getDbClient("para"), token,
-        [cb = std::move(cb)](std::optional<SessionInfo> session) mutable {
+        [cb = std::move(cb),
+         lang = i18n::resolveRequestLang(req)](std::optional<SessionInfo> session) mutable {
             if (!session)
             {
                 cb(loginRedirect());
@@ -45,8 +47,11 @@ void DashboardCtrl::page(const HttpRequestPtr& req,
             // контент виджетов грузит static/js/app.js из /v1/dashboard,
             // пользовательских данных в шаблоне нет — экранировать
             // нечего (02 §6.4, как views/login.csp).
+            // 5.18 (шаг 3): строки словаря — ДО рендера (Р-16), язык
+            // резолвится по запросу (para_lang → Accept-Language → ru).
             HttpViewData data;
-            data.insert("pageTitle", std::string("Сегодня · Пара"));
+            i18n::insertUiStrings(data, lang);
+            data.insert("pageTitle", i18n::pageTitleOf("nav.today", lang));
             data.insert("activeTab", std::string("today"));
             // Точка входа сотрудника (фикс ревью экрана «Стол
             // сотрудника» — сотрудник после входа попадает сюда, и без

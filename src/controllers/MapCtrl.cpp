@@ -1,5 +1,6 @@
 #include "controllers/MapCtrl.h"
 
+#include "utils/I18nView.h"
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
 
@@ -67,8 +68,10 @@ void MapCtrl::mapPage(const HttpRequestPtr& req,
     // /v1/map/rooms — 02 §5.2); query ?q= страница читает на клиенте
     // (location.search) и сразу выполняет поиск при загрузке. Состояния
     // 03 §5 — в шаблоне и static/js/app.js.
-    (void)req;
+    // 5.18 (шаг 3): каркас — словарь из view-данных (Р-16); тело экрана —
+    // по-русски (вторичный экран, вне охвата шага 3 — журнал 5.18).
     HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
     data.insert("pageTitle", std::string("Карта корпусов · Пара"));
     // Экран НЕ таб (03 §3.1 — вход из профиля/профиля человека,
     // 03 §4.9.6/5.16): пустой activeTab — ни один пункт таб-бара не

@@ -132,6 +132,9 @@ set(PARA_APP_SOURCES
                # в PARA_APP_SOURCES (прецедент NewsService): доступен para,
                # security_tests, а с шага 7 — и списку para-tests.
                src/models/i18n.cpp
+               # 5.18 шаг 3: мост словаря в HttpViewData (строки в view-данные
+               # ДО рендера, Р-16) + JSON-бандл для app.js.
+               src/utils/I18nView.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
                src/filters/SecurityHeaders.cpp

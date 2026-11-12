@@ -6,14 +6,19 @@
    5.18 (шаг 2): компактный переключатель языка Рус · EN · 中文 — на всех
    экранах, включая вход (гость): активный отмечает app.js по cookie
    para_lang; клик — мини-роут /lang (ставит cookie сервер) + PUT {lang}
-   для авторизованного; подпись-автонимы не переводятся (i18n.h lang.*). */
+   для авторизованного; подпись-автонимы не переводятся (i18n.h lang.*).
+   5.18 (шаг 3): aria переключателя и словарь для app.js (тосты/состояния
+   клиента) — из view-данных: i18nJson (JSON-бандл того же словаря,
+   собран сервером ДО рендера — Р-16) читает app.js через
+   <script id="para-i18n"> ниже. Бейдж-дисклеймер — по-русски на всех
+   языках: требование задания (AGENTS §5.1, вне словаря — шапка i18n.h). */
 %>
 <footer class="footer">
   <div class="footer-top">
     <p class="disclaimer">концепт для хакатона, данные вымышленные<br>Не является официальным сервисом вуза</p>
     <span>пара · деканат в кармане</span>
   </div>
-  <div class="lang-switch" role="group" aria-label="Язык интерфейса">
+  <div class="lang-switch" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.langGroup"); %>">
     <button type="button" data-lang-choice="ru">Рус</button>
     <span aria-hidden="true">·</span>
     <button type="button" data-lang-choice="en">EN</button>
@@ -22,3 +27,4 @@
   </div>
 </footer>
 <div id="toast" class="toast" role="status" hidden></div>
+<script type="application/json" id="para-i18n"><%c++ $$ << @@.get<std::string>("i18nJson"); %></script>

@@ -54,21 +54,27 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1>Успеваемость</h1>
-      <p>Средний балл, дисциплины и сессия</p>
+      <h1><%c++ $$ << @@.get<std::string>("t.nav.grades"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.grades.subtitle"); %></p>
     </div>
   </div>
 <%c++
 const std::string failed = @@.get<std::string>("failed");
+// 5.18 (шаг 3): строки — словарь t.<key> из view-данных (Р-16); lang —
+// ветка локального формата дат (zh: «11月17日»).
+const std::string uiLang = @@.get<std::string>("lang");
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
 if (failed == "1") {
 %>
   <!-- Состояние «Ошибка» (03 §5.3, grades-states.html#error): «Повторить»
        реально перезапрашивает — перезагрузка страницы (app.js). -->
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить успеваемость</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-grades-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.error.loadGrades"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-grades-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -108,20 +114,17 @@ const bool hasExams = !broken && exams.size() > 0;
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
 };
-const auto plural = [](int n, const char* one, const char* few,
-                       const char* many) {
+const auto pluralForm = [&vstr](int n, const std::string& one,
+                                const std::string& few,
+                                const std::string& many) -> const std::string& {
     const int m10 = n % 10, m100 = n % 100;
     if (m10 == 1 && m100 != 11) return one;
     if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
     return many;
 };
-static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
-                                "мая",      "июня",    "июля",     "августа",
-                                "сентября", "октября", "ноября",   "декабря"};
-// «2026-11-18T10:00:00Z» → «18 ноября» / «10:00» (данные фикстур в «…Z»);
-// kMonths — static storage, в захват лямбды не входит (как в партиалах
-// расписания) — используется по имени
-const auto dayMonthOf = [](const std::string& iso) -> std::string {
+// «2026-11-18T10:00:00Z» → «18 ноября»/"18 November"/«11月18日» (имя
+// месяца — словарь t.month.NN из view-данных, Р-16; zh — числовой формат)
+const auto dayMonthOf = [&uiLang, &vstr](const std::string& iso) -> std::string {
     if (iso.size() < 10) return "";
     int d = 0, m = 0;
     try {
@@ -131,26 +134,34 @@ const auto dayMonthOf = [](const std::string& iso) -> std::string {
         return "";
     }
     if (m < 1 || m > 12) return "";
-    return std::to_string(d) + " " + kMonths[m - 1];
+    if (uiLang == "zh")
+        return std::to_string(m) + "月" + std::to_string(d) + "日";
+    return std::to_string(d) + " " +
+           vstr((std::string("month.") + (m < 10 ? "0" : "") +
+                 std::to_string(m)).c_str());
 };
 const auto timeOf = [](const std::string& iso) {
     return iso.size() >= 16 ? iso.substr(11, 5) : std::string("--:--");
 };
 // kind session_plan — словарь CHECK 0004 (02 §5.2 «Сессия»)
-const auto examKindLabel = [](const std::string& k) -> const char* {
-    if (k == "consultation") return "Консультация";
-    if (k == "exam") return "Экзамен";
-    if (k == "credit") return "Зачёт";
-    if (k == "retake") return "Пересдача";
+const auto examKindLabel = [&vstr](const std::string& k) -> std::string {
+    if (k == "consultation") return vstr("exam.consultation");
+    if (k == "exam") return vstr("exam.exam");
+    if (k == "credit") return vstr("exam.credit");
+    if (k == "retake") return vstr("exam.retake");
     return "";
 };
 // Тип контроля дисциплины — словарь CHECK 0002; бейджи 03 §4.4:
 // «экзамен» info, «зачёт» success, «дифзачёт» neutral (без модификатора)
-const auto controlBadge = [&esc](const std::string& ct) -> std::string {
-    if (ct == "exam") return "<span class=\"badge info\">Экзамен</span>";
-    if (ct == "credit") return "<span class=\"badge success\">Зачёт</span>";
+const auto controlBadge = [&esc, &vstr](const std::string& ct) -> std::string {
+    if (ct == "exam")
+        return "<span class=\"badge info\">" + vstr("control.exam") + "</span>";
+    if (ct == "credit")
+        return "<span class=\"badge success\">" + vstr("control.credit") +
+               "</span>";
     if (ct == "graded_credit")
-        return "<span class=\"badge\">Дифзачёт</span>";
+        return "<span class=\"badge\">" + vstr("control.gradedCredit") +
+               "</span>";
     return "<span class=\"badge\">" + esc(ct) + "</span>";
 };
 // Пороговые цвета прогресса (03 §4.4): ≥60 success, 40–59 warning, <40 danger
@@ -178,9 +189,9 @@ if (broken) {
 %>
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить успеваемость</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-grades-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.error.loadGrades"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-grades-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -192,9 +203,9 @@ if (broken) {
     <div class="surface">
       <div class="empty">
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg></div>
-        <h2>Оценки появятся после первой аттестации</h2>
-        <p>Как только преподаватели закроют ведомости, здесь появится средний балл и прогресс по дисциплинам. Пока можно проверить расписание и включить уведомления о дедлайнах.</p>
-        <a class="button" href="/schedule">Открыть расписание</a>
+        <h2><%c++ $$ << @@.get<std::string>("t.grades.emptyTitle"); %></h2>
+        <p><%c++ $$ << @@.get<std::string>("t.grades.emptyText"); %></p>
+        <a class="button" href="/schedule"><%c++ $$ << @@.get<std::string>("t.grades.openSchedule"); %></a>
       </div>
     </div>
   </div>
@@ -214,13 +225,13 @@ if (broken) {
          одногруппниками нет (приватность, 01 §4.3) -->
     <div class="study-summary">
       <div>
-        <p class="overline">Средний балл</p>
+        <p class="overline"><%c++ $$ << @@.get<std::string>("t.grades.average"); %></p>
         <p class="metric"><span class="tnum"><%c++ $$ << average; %></span><span class="caption"> / 100</span></p>
       </div>
-      <p class="small muted"><%c++ $$ << disciplineCount << " " << plural(disciplineCount, "дисциплина", "дисциплины", "дисциплин") << " с баллами"; %></p>
+      <p class="small muted"><%c++ $$ << disciplineCount << " " << pluralForm(disciplineCount, vstr("plural.subjectOne"), vstr("plural.subjectFew"), vstr("plural.subjectMany")) << (uiLang == "zh" ? "" : " ") << @@.get<std::string>("t.grades.withScores"); %></p>
     </div>
     <section class="section">
-      <div class="section-title"><h2>Дисциплины</h2></div>
+      <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.grades.subjects"); %></h2></div>
       <div class="grade-list">
 <%c++
         for (const auto& d : disciplines)
@@ -244,9 +255,12 @@ if (broken) {
             // «до допуска не хватает N» при missing>0 (03 §4.4: body-sm
             // --warning-text; демо-арифметика 05 §3 Э4: 78/82 → 4)
             if (missing > 0)
-                $$ << "<p class=\"small grade-missing\">До допуска не хватает "
-                   << missing << " "
-                   << plural(missing, "балл", "балла", "баллов") << "</p>";
+                $$ << "<p class=\"small grade-missing\">"
+                   << vstr("grades.missingPrefix") << (uiLang == "zh" ? "" : " ")
+                   << missing << (uiLang == "zh" ? "" : " ")
+                   << pluralForm(missing, vstr("plural.pointOne"),
+                                 vstr("plural.pointFew"), vstr("plural.pointMany"))
+                   << "</p>";
             // Пересдача — отдельная строка в карточке с датой и аудиторией
             // (03 §4.4:512, черновик grades.html «Пересдача 18 ноября»):
             // событие kind=retake из session_plan этой дисциплины
@@ -254,11 +268,12 @@ if (broken) {
             if (retakeIt != retakes.end())
             {
                 const Json::Value& r = *retakeIt->second;
-                $$ << "<p class=\"small grade-retake\">Пересдача: "
+                $$ << "<p class=\"small grade-retake\">"
+                   << vstr("exam.retake") << (uiLang == "zh" ? "：" : ": ")
                    << esc(dayMonthOf(r["starts_at"].asString()));
                 const std::string room = r["room"].asString();
                 if (!room.empty())
-                    $$ << ", ауд. " << esc(room);
+                    $$ << ", " << vstr("grades.roomShort") << " " << esc(room);
                 $$ << "</p>";
             }
             $$ << "</a>";
@@ -276,11 +291,11 @@ if (broken) {
          состояние Э7, задокументировано (прецедент ссылок /profile и
          /people/{id} экрана «Расписание»). -->
     <section class="section" id="session">
-      <div class="section-title"><h2>Сессия</h2><span class="caption"><%c++
+      <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.grades.session"); %></h2><span class="caption"><%c++
 if (hasExams)
     $$ << exams.size() << " "
-       << plural(static_cast<int>(exams.size()), "событие", "события",
-                 "событий");
+       << pluralForm(static_cast<int>(exams.size()), vstr("plural.eventOne"),
+                     vstr("plural.eventFew"), vstr("plural.eventMany"));
 %></span></div>
       <div class="grade-list">
 <%c++
@@ -288,7 +303,8 @@ if (hasExams)
         {
             // Даты не объявлены (03 §5.2) — строкой в карточке, без иконки;
             // .day-empty — отступы строки пустого состояния (каркас)
-            $$ << "<p class=\"muted day-empty\">Даты сессии ещё не объявлены</p>";
+            $$ << "<p class=\"muted day-empty\">"
+               << vstr("grades.noExamDates") << "</p>";
         }
         else
         {
@@ -303,7 +319,8 @@ if (hasExams)
                 if (isRetake)
                     $$ << "</span>";
                 $$ << " · " << esc(e["discipline"].asString())
-                   << "</strong><p class=\"caption\">ауд. "
+                   << "</strong><p class=\"caption\">"
+                   << vstr("grades.roomShort") << " "
                    << esc(e["room"].asString()) << "</p></div>";
                 $$ << "<strong class=\"tnum exam-when\">"
                    << esc(dayMonthOf(e["starts_at"].asString()))
@@ -314,9 +331,9 @@ if (hasExams)
 %>
       </div>
       <div class="actions">
-        <a class="button" href="/profile">В календарь</a>
+        <a class="button" href="/profile"><%c++ $$ << @@.get<std::string>("t.grades.toCalendar"); %></a>
       </div>
-      <p class="caption">Подписка на календарь — в профиле</p>
+      <p class="caption"><%c++ $$ << @@.get<std::string>("t.grades.calendarHint"); %></p>
     </section>
     <!-- ==== Зачётная книжка (5.15) — точка входа: в черновике
          grades.html вход стоит внизу экрана (ghost-кнопка «Зачётная
@@ -331,7 +348,7 @@ if (hasExams)
     <section class="section">
       <a class="service-link" href="/gradebook">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg>
-        <div><strong>Зачётная книжка</strong><p>Итоги по дисциплинам</p></div>
+        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.gradebookHint"); %></p></div>
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
       </a>
     </section>

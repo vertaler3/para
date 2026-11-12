@@ -1,5 +1,7 @@
 #include "controllers/PeopleCtrl.h"
 
+#include "utils/I18nView.h"
+
 #include <json/json.h>
 
 #include <string>
@@ -124,9 +126,14 @@ std::string pageJson(const Json::Value& body)
 // activeTab — серверные константы (02 §6.4). «Люди» — вложенный экран
 // (вход из sheet «Детали пары» расписания и поиска), НЕ пункт таб-бара —
 // пустой activeTab, как на /notifications.
-HttpViewData basePageData(const std::string& title)
+// 5.18 (шаг 3): строки словаря каркаса — в view-данные ДО рендера (Р-16);
+// тела secondary-экранов (люди/профиль человека) — по-русски, вне охвата
+// шага 3 (журнал): переведён только общий каркас (head/topbar/tabbar/footer).
+HttpViewData basePageData(const std::string& title,
+                          const HttpRequestPtr& req)
 {
     HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
     data.insert("pageTitle", title);
     data.insert("activeTab", std::string(""));
     return data;
@@ -141,9 +148,10 @@ void sendPersonPage(std::function<void(const HttpResponsePtr&)> cb,
                     std::string mode,
                     HttpStatusCode code,
                     std::string personId,
-                    std::string bodyJson)
+                    std::string bodyJson,
+                    const HttpRequestPtr& req)
 {
-    HttpViewData data = basePageData("Профиль · Пара");
+    HttpViewData data = basePageData("Профиль · Пара", req);
     data.insert("mode", std::move(mode));
     data.insert("personId", std::move(personId));
     if (!bodyJson.empty())
@@ -162,8 +170,7 @@ void PeopleCtrl::searchPage(
     // Страница без данных (паттерн notifications.csp): каталог-поиск грузит
     // клиент — GET /v1/people/search из app.js (тот же JSON-роут выше);
     // сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
-    (void)req;
-    HttpViewData data = basePageData("Люди · Пара");
+    HttpViewData data = basePageData("Люди · Пара", req);
     cb(HttpResponse::newHttpViewResponse("people", std::move(data)));
 }
 
@@ -204,7 +211,8 @@ void PeopleCtrl::personPage(
     }
     if (!numeric)
     {
-        sendPersonPage(std::move(cb), "notfound", k404NotFound, personId, "");
+        sendPersonPage(std::move(cb), "notfound", k404NotFound, personId, "",
+                   req);
         return;
     }
 
@@ -218,26 +226,27 @@ void PeopleCtrl::personPage(
     PeopleService::profile(
         app().getDbClient("para"), session.userId, id,
         [cb = std::move(cb),
-         personId](PeopleService::Result r) mutable {
+         personId,
+         req](PeopleService::Result r) mutable {
             switch (r.status)
             {
                 case PeopleService::Status::Ok:
                     // Разбор/ветвление по полям (роль, кабинет) — шаблон;
                     // сбой разбора шаблон покажет dberror-веткой (03 §5.3).
                     sendPersonPage(std::move(cb), "data", k200OK, personId,
-                                   pageJson(r.body));
+                                   pageJson(r.body), req);
                     return;
                 case PeopleService::Status::NotFound:
                 case PeopleService::Status::BadRequest:
                     // BadRequest в profile не возвращается (только search) —
                     // защитно та же карточка notfound.
                     sendPersonPage(std::move(cb), "notfound", k404NotFound,
-                                   personId, "");
+                                   personId, "", req);
                     return;
                 case PeopleService::Status::Error:
                     // Ошибка БД — fail-closed (03 §5.3), 500 без деталей.
                     sendPersonPage(std::move(cb), "dberror",
-                                   k500InternalServerError, personId, "");
+                                   k500InternalServerError, personId, "", req);
                     return;
             }
         });

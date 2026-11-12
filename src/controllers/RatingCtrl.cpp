@@ -1,5 +1,6 @@
 #include "controllers/RatingCtrl.h"
 
+#include "utils/I18nView.h"
 #include "services/PeopleService.h"
 #include "services/RatingService.h"
 #include "utils/ApiError.h"
@@ -83,12 +84,15 @@ std::string toJson(const Json::Value& body)
 // failed=1, шаблон рендерит состояние ошибки (03 §5.3).
 void renderRatingPage(std::function<void(const HttpResponsePtr&)> cb,
                       const PeopleService::Requester& requester,
-                      const drogon::orm::DbClientPtr& db)
+                      const drogon::orm::DbClientPtr& db,
+                      i18n::Lang lang)
 {
     RatingService::rating(
         db, requester, std::nullopt, 0,
-        [cb = std::move(cb)](RatingService::Result r) mutable {
+        [cb = std::move(cb), lang](RatingService::Result r) mutable {
+            // 5.18 (шаг 3): каркас — словарь (тело рейтинга — ru).
             HttpViewData data;
+            i18n::insertUiStrings(data, lang);
             // Каркасные view-данные (partials head/topbar/tabbar) —
             // серверные константы (02 §6.4).
             data.insert("pageTitle", std::string("Рейтинг · Пара"));
@@ -121,15 +125,19 @@ void RatingCtrl::ratingPage(const HttpRequestPtr& req,
     // сессии (02 §6.3) — как в JSON-роуте выше.
     const auto session = req->attributes()->get<SessionInfo>("session");
     const auto db = app().getDbClient("para");
+    // 5.18 (шаг 3): язык — до асинхронных колбэков (para_lang →
+    // Accept-Language → ru; строки словаря — в view-данные, Р-16).
+    const auto lang = i18n::resolveRequestLang(req);
     PeopleService::loadRequester(
         db, session.userId,
-        [cb, db](PeopleService::Status s,
+        [cb, db, lang](PeopleService::Status s,
                  PeopleService::Requester requester) mutable {
             if (s != PeopleService::Status::Ok)
             {
                 // Ошибка БД при загрузке запрашивающего — состояние
                 // ошибки страницы, не данные (03 §5.3, fail-closed).
                 HttpViewData data;
+                i18n::insertUiStrings(data, lang);
                 data.insert("pageTitle", std::string("Рейтинг · Пара"));
                 data.insert("activeTab", std::string("grades"));
                 data.insert("failed", std::string("1"));
@@ -137,6 +145,6 @@ void RatingCtrl::ratingPage(const HttpRequestPtr& req,
                                                      std::move(data)));
                 return;
             }
-            renderRatingPage(std::move(cb), requester, db);
+            renderRatingPage(std::move(cb), requester, db, lang);
         });
 }

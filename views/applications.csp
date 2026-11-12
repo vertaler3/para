@@ -61,22 +61,28 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1>Мои заявки</h1>
-      <p>Каждый шаг — от подачи до получения</p>
+      <h1><%c++ $$ << @@.get<std::string>("t.apps.title"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.apps.subtitle"); %></p>
     </div>
-    <a class="button primary" href="/applications/new">+ Новая заявка</a>
+    <a class="button primary" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.new"); %></a>
   </div>
 <%c++
 const std::string failed = @@.get<std::string>("failed");
+// 5.18 (шаг 3): строки — словарь t.<key> из view-данных (Р-16); lang —
+// ветка локального формата дат (zh: «11月2日»).
+const std::string uiLang = @@.get<std::string>("lang");
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
 if (failed == "1") {
 %>
   <!-- Состояние «Ошибка» (03 §5.3): «Повторить» реально перезапрашивает —
        перезагрузка страницы (app.js, [data-applications-retry]). -->
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить заявки</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-applications-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.error.loadApplications"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-applications-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -105,12 +111,9 @@ const bool hasApps = !broken && apps.size() > 0;
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
 };
-static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
-                                "мая",      "июня",    "июля",     "августа",
-                                "сентября", "октября", "ноября",   "декабря"};
-// «2026-11-02T09:12:00Z» → «2 ноября» (данные фикстур в «…Z»);
-// kMonths — static storage, в захват лямбды не входит
-const auto dayMonthOf = [](const std::string& iso) -> std::string {
+// «2026-11-02T09:12:00Z» → «2 ноября»/"2 November"/«11月2日» (имя месяца —
+// словарь t.month.NN из view-данных, Р-16; zh — числовой формат)
+const auto dayMonthOf = [&uiLang, &vstr](const std::string& iso) -> std::string {
     if (iso.size() < 10) return "";
     int d = 0, m = 0;
     try {
@@ -120,19 +123,23 @@ const auto dayMonthOf = [](const std::string& iso) -> std::string {
         return "";
     }
     if (m < 1 || m > 12) return "";
-    return std::to_string(d) + " " + kMonths[m - 1];
+    if (uiLang == "zh")
+        return std::to_string(m) + "月" + std::to_string(d) + "日";
+    return std::to_string(d) + " " +
+           vstr((std::string("month.") + (m < 10 ? "0" : "") +
+                 std::to_string(m)).c_str());
 };
 // Метка статуса — слова таймлайна 01 §4.4 (С7.5); словарь CHECK DDL
-const auto statusTitle = [](const std::string& s) -> std::string {
-    if (s == "draft") return "Черновик";
-    if (s == "submitted") return "Подана";
-    if (s == "accepted") return "Принята";
-    if (s == "in_progress") return "В работе";
-    if (s == "need_info") return "Требуется уточнение";
-    if (s == "ready") return "Готова";
-    if (s == "issued") return "Выдана";
-    if (s == "rejected") return "Отклонена";
-    if (s == "cancelled") return "Отменена";
+const auto statusTitle = [&vstr](const std::string& s) -> std::string {
+    if (s == "draft") return vstr("apps.statusDraft");
+    if (s == "submitted") return vstr("apps.statusSubmitted");
+    if (s == "accepted") return vstr("apps.statusAccepted");
+    if (s == "in_progress") return vstr("apps.statusInProgress");
+    if (s == "need_info") return vstr("apps.statusNeedInfo");
+    if (s == "ready") return vstr("apps.statusReady");
+    if (s == "issued") return vstr("apps.statusIssued");
+    if (s == "rejected") return vstr("apps.statusRejected");
+    if (s == "cancelled") return vstr("apps.statusCancelled");
     return s;
 };
 // Класс бейджа (см. шапку шаблона): неизвестный статус — нейтральный
@@ -158,22 +165,24 @@ const auto doneStages = [](const std::string& s) -> int {
   <div class="content-narrow">
     <!-- Чипы-фильтры ?status= (03 §4.6: активный — primary-soft; ссылки —
          SSR-фильтр страницы; aria-current подсвечивает активный) -->
-    <div class="chips section" aria-label="Фильтр заявок по статусу">
+    <div class="chips section" aria-label="<%c++ $$ << @@.get<std::string>("t.apps.filterA11y"); %>">
       <a class="chip" href="/applications"<%c++
 if (statusFilter.empty()) $$ << " aria-current=\"page\"";
-%>>Все</a>
+%>><%c++ $$ << @@.get<std::string>("t.common.all"); %></a>
 <%c++
-// Метки чипов — словарь CHECK DDL в порядке объявления (как в моделях)
+// Метки чипов — словарь CHECK DDL в порядке объявления (как в моделях);
+// подписи — строки словаря из view-данных (5.18, Р-16)
 const std::pair<const char*, const char*> kChips[] = {
-    {"draft", "Черновик"}, {"submitted", "Подана"}, {"accepted", "Принята"},
-    {"in_progress", "В работе"}, {"need_info", "Требуется уточнение"},
-    {"ready", "Готова"}, {"issued", "Выдана"}, {"rejected", "Отклонена"},
-    {"cancelled", "Отменена"}};
+    {"draft", "apps.statusDraft"}, {"submitted", "apps.statusSubmitted"},
+    {"accepted", "apps.statusAccepted"}, {"in_progress", "apps.statusInProgress"},
+    {"need_info", "apps.statusNeedInfo"}, {"ready", "apps.statusReady"},
+    {"issued", "apps.statusIssued"}, {"rejected", "apps.statusRejected"},
+    {"cancelled", "apps.statusCancelled"}};
 for (const auto& c : kChips) {
     const std::string key = c.first;
     $$ << "<a class=\"chip\" href=\"/applications?status=" << c.first << "\"";
     if (statusFilter == key) $$ << " aria-current=\"page\"";
-    $$ << ">" << esc(c.second) << "</a>";
+    $$ << ">" << esc(vstr(c.second)) << "</a>";
 }
 %>
     </div>
@@ -181,9 +190,9 @@ for (const auto& c : kChips) {
 if (broken) {
 %>
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить заявки</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-applications-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.error.loadApplications"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-applications-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
 <%c++
 } else if (!hasApps) {
@@ -201,13 +210,13 @@ if (broken) {
 <%c++
     if (!statusFilter.empty()) {
 %>
-          <p>По этой теме пока ничего не было</p>
+          <p><%c++ $$ << @@.get<std::string>("t.common.emptyFilter"); %></p>
 <%c++
     } else {
 %>
-          <h2>Заявок пока нет</h2>
-          <p>Нужна справка или заявление? Начните с каталога — типовая справка занимает три касания.</p>
-          <a class="button" href="/applications/new">Открыть каталог</a>
+          <h2><%c++ $$ << @@.get<std::string>("t.dash.emptyApplications"); %></h2>
+          <p><%c++ $$ << @@.get<std::string>("t.apps.emptyText"); %></p>
+          <a class="button" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.openCatalog"); %></a>
 <%c++
     }
 %>
@@ -233,13 +242,17 @@ if (broken) {
                << esc(statusTitle(st)) << "</span></div>";
             // 5 стадий канонического пути (01 §4.4); aria-label читается
             // целиком — цвет/заполнение не единственный носитель (03 §6.4)
-            $$ << "<div class=\"mini-progress\" aria-label=\"Пройдено этапов: "
-               << done << " из 5\">";
+            $$ << "<div class=\"mini-progress\" aria-label=\""
+               << vstr("apps.stagesPrefix")
+               << (uiLang == "zh" ? "" : " ") << done
+               << (uiLang == "zh" ? "" : " ") << vstr("apps.stagesTotal")
+               << "\">";
             for (int i = 0; i < 5; ++i)
                 $$ << "<span" << (i < done ? " class=\"done\"" : "")
                    << "></span>";
             $$ << "</div>";
-            $$ << "<p class=\"caption\">от "
+            $$ << "<p class=\"caption\">" << vstr("apps.from")
+               << (uiLang == "zh" ? "" : " ")
                << esc(dayMonthOf(a["created_at"].asString())) << "</p>";
             $$ << "</a>";
         }

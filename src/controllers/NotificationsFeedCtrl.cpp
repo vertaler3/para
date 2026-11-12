@@ -1,5 +1,7 @@
 #include "controllers/NotificationsFeedCtrl.h"
 
+#include "utils/I18nView.h"
+
 #include "services/NotificationsFeedService.h"
 #include "utils/ApiError.h"
 
@@ -202,8 +204,12 @@ void NotificationsFeedCtrl::page(
         cb(badSegment(false));
         return;
     }
+    // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера (Р-16);
+    // язык — para_lang → Accept-Language → ru.
     HttpViewData data;
-    data.insert("pageTitle", std::string("Уведомления · Пара"));
+    const auto lang = i18n::resolveRequestLang(req);
+    i18n::insertUiStrings(data, lang);
+    data.insert("pageTitle", i18n::pageTitleOf("notif.title", lang));
     // Экран НЕ таб (03 §3.2: пять табов, колокольчик — в шапке): пустой
     // activeTab → ни один пункт таб-бара не получает aria-current.
     data.insert("activeTab", std::string(""));
@@ -232,7 +238,10 @@ void NotificationsFeedCtrl::segment(
         cb(badSegment(true));
         return;
     }
+    // 5.18 (шаг 3): htmx-фрагмент — те же словарные строки страницы
+    // (кнопки сегментов/чипы/пустые состояния), бандл ДО рендера (Р-16).
     HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
     data.insert("segment", segment);
     // Партиал-оболочка (разметка состояний — данные грузит клиент из
     // /v1/notifications и /v1/news; имя шаблона — файл без расширения).

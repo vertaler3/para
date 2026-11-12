@@ -40,7 +40,10 @@
    строк-данных в шаблон не вставляется вовсе. htmx (вендоренный
    static/vendor/htmx.min.js, Р-18) — переключение сегментов; данные —
    app.js (defer, локальный путь — AGENTS: без npm/CDN; htmx до app.js —
-   порядок defer). */
+   порядок defer).
+   5.18 (шаг 3): строки экрана — словарь t.<key> из view-данных
+   (NotificationsFeedCtrl::page + i18n::insertUiStrings ДО рендера, Р-16);
+   контент ленты/новостей — язык создания (контент БД, вне охвата 5.18). */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: htmx (сегменты 5.17, Р-18)
@@ -52,8 +55,8 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1>Уведомления</h1>
-      <p>Изменения и задачи, которые важно заметить</p>
+      <h1><%c++ $$ << @@.get<std::string>("t.notif.title"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.notif.subtitle"); %></p>
     </div>
   </div>
   <!-- Скелетон-индикатор сегментных htmx-запросов (hx-indicator кнопок
@@ -65,9 +68,9 @@
        приехал, прежний сегмент остаётся на месте; «Повторить» перезапускает
        запрос элемента, на котором он оборвался (как #schedule-error). -->
   <section class="section flow" data-segment-error hidden role="alert">
-    <h3>Не получилось загрузить раздел</h3>
-    <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-    <button class="button" type="button" data-segment-retry>Повторить</button>
+    <h3><%c++ $$ << @@.get<std::string>("t.error.loadSection"); %></h3>
+    <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+    <button class="button" type="button" data-segment-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
   </section>
 </main>
 <%view tabbar %>

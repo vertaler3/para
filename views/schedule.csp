@@ -18,7 +18,13 @@
    (htmx:afterRequest !successful → #schedule-error с «Повторить» —
    ретриггер исходного запроса, 03 §5.3) и «Офлайн» (htmx:sendError →
    баннер каркаса, 03 §5.4); скелетон #schedule-indicator — hx-indicator
-   всех сегментных запросов (shimmer каркаса). */
+   всех сегментных запросов (shimmer каркаса).
+   5.18 (шаг 3): строки страницы — словарь t.<key> из view-данных
+   (ScheduleCtrl::page + i18n::insertUiStrings ДО рендера, Р-16); сегментные
+   партиалы (today/week) получают ТЕ ЖЕ view-данные — и при SSR-включении
+   сюда, и как самостоятельный htmx-ответ (ScheduleCtrl::segment тоже кладёт
+   бандл). Пользовательские строки (дисциплины/аудитории) экранируются
+   htmlTranslate как раньше (02 §6.4). */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: страница подключает htmx
@@ -30,8 +36,8 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1>Расписание</h1>
-      <p>Пары, переносы «было → стало» и изменения недели</p>
+      <h1><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.schedule.subtitle"); %></p>
     </div>
   </div>
   <div id="schedule-indicator" class="skeleton block htmx-indicator" aria-hidden="true"></div>
@@ -47,9 +53,9 @@ if (seg == "week") {
        app.js по htmx:afterRequest (!successful) / htmx:sendError; «Повторить»
        перезапускает запрос элемента, на котором он оборвался. -->
   <section class="section flow" id="schedule-error" hidden role="alert">
-    <h3>Не получилось загрузить расписание</h3>
-    <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-    <button class="button" type="button" data-schedule-retry>Повторить</button>
+    <h3><%c++ $$ << @@.get<std::string>("t.error.loadSchedule"); %></h3>
+    <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+    <button class="button" type="button" data-schedule-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
   </section>
   <!-- Sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet). Поля
        заполняет app.js из data-атрибутов карточки (только textContent —
@@ -59,16 +65,16 @@ if (seg == "week") {
        ссылки ICS в профиле (С6, 03 §4.3). Закрытие — кнопка/Esc
        (нативный <dialog>). -->
   <dialog id="lesson-sheet" class="lesson-sheet" aria-labelledby="lesson-sheet-title">
-    <h2 id="lesson-sheet-title" data-sheet-title>Детали пары</h2>
+    <h2 id="lesson-sheet-title" data-sheet-title><%c++ $$ << @@.get<std::string>("t.schedule.sheetTitle"); %></h2>
     <p class="caption" data-sheet-kind></p>
-    <div class="sheet-row"><span class="sheet-label">Когда</span><span data-sheet-when></span></div>
-    <div class="sheet-row"><span class="sheet-label">Аудитория</span><span data-sheet-room></span></div>
-    <div class="sheet-row" data-sheet-change-row hidden><span class="sheet-label">Перенос</span><span data-sheet-change></span></div>
-    <div class="sheet-row"><span class="sheet-label">Статус</span><span data-sheet-status></span></div>
-    <div class="sheet-row"><span class="sheet-label">Преподаватель</span><span><a class="lesson-teacher" data-sheet-teacher hidden href="/profile"></a><span class="muted small" data-sheet-teacher-empty>—</span></span></div>
+    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetWhen"); %></span><span data-sheet-when></span></div>
+    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetRoom"); %></span><span data-sheet-room></span></div>
+    <div class="sheet-row" data-sheet-change-row hidden><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetChange"); %></span><span data-sheet-change></span></div>
+    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetStatus"); %></span><span data-sheet-status></span></div>
+    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetTeacher"); %></span><span><a class="lesson-teacher" data-sheet-teacher hidden href="/profile"></a><span class="muted small" data-sheet-teacher-empty>—</span></span></div>
     <div class="actions">
-      <a class="button" href="/profile">Подписка на календарь</a>
-      <button class="button ghost" type="button" data-sheet-close>Закрыть</button>
+      <a class="button" href="/profile"><%c++ $$ << @@.get<std::string>("t.schedule.calendarSub"); %></a>
+      <button class="button ghost" type="button" data-sheet-close><%c++ $$ << @@.get<std::string>("t.common.close"); %></button>
     </div>
   </dialog>
 </main>

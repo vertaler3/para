@@ -10,6 +10,29 @@
 
   const $ = (sel) => document.querySelector(sel);
 
+  /* ---------- словарь интерфейса 5.18 (шаг 3) ------------------------- */
+  /* Тот же серверный словарь (models/i18n.h), что рендерит CSP: контроллер
+     кладёт его JSON-бандлом в view-данные ДО рендера (Р-16), footer.csp
+     отдаёт <script type="application/json" id="para-i18n"> (значения —
+     серверные константы, собирает и JSON-экранирует сервер — utils/
+     I18nView.cpp). t(key, fallback): ключ есть — перевод, нет — русская
+     строка-фолбэк на месте вызова (бандл отсутствует/повреждён — экран
+     выглядит как до 5.18). LANG — код из <html lang> (head.csp, тот же
+     резолв: cookie para_lang → Accept-Language → ru); LOCALE — для
+     toLocaleDateString дат виджетов. */
+  const I18N = (() => {
+    try {
+      const node = document.getElementById('para-i18n');
+      return node ? (JSON.parse(node.textContent) || {}) : {};
+    } catch (e) { return {}; }
+  })();
+  const t = (key, fallback) => {
+    const v = I18N[key];
+    return v || fallback || key;
+  };
+  const LANG = document.documentElement.lang || 'ru';
+  const LOCALE = { ru: 'ru-RU', en: 'en-GB', zh: 'zh-CN' }[LANG] || 'ru-RU';
+
   /* ---------- тост (app.css .toast; позиция — над таб-баром, 03 §2.8) ---------- */
   /* Второй аргумент — действие справа (03 §2.8: «действие справа»):
      {label, href}. Цвет действия — --bg на инверсном тосте (пара
@@ -47,8 +70,8 @@
       banner.hidden = !offline;
       if (offline && bannerText) {
         bannerText.textContent = lastSyncAt
-          ? 'Нет сети. Показываем данные на момент ' + lastSyncAt
-          : 'Нет сети. Проверьте подключение — и попробуйте ещё раз.';
+          ? t('offline.bannerStale', 'Нет сети. Показываем данные на момент ') + lastSyncAt
+          : t('offline.banner', 'Нет сети. Проверьте подключение — и попробуйте ещё раз.');
       }
     }
     /* действия, требующие сети, блокируются disabled-primary с helper-
@@ -69,7 +92,7 @@
           el.textContent = el.getAttribute('data-offline-label');
         }
         el.disabled = true;
-        el.title = 'Нужна сеть для этого действия';
+        el.title = t('offline.needed', 'Нужна сеть для этого действия');
       } else if (el.hasAttribute('data-was-disabled')) {
         el.disabled = el.getAttribute('data-was-disabled') === '1';
         el.removeAttribute('data-was-disabled');
@@ -89,7 +112,7 @@
       if (resp.ok) {
         applyOffline(false);
         refreshUnreadBadge();
-        toast('Сеть вернулась — данные обновлены');
+        toast(t('toast.netBack', 'Сеть вернулась — данные обновлены'));
       }
     } catch (e) { /* сети нет — баннер остаётся, пользователь может повторить */ }
     probing = false;
@@ -99,7 +122,7 @@
   window.addEventListener('online', () => {
     applyOffline(false);
     refreshUnreadBadge();
-    toast('Сеть вернулась — данные обновлены');
+    toast(t('toast.netBack', 'Сеть вернулась — данные обновлены'));
   });
   applyOffline(!navigator.onLine);
 
@@ -260,7 +283,7 @@
       if (!navigator.onLine) { applyOffline(true); return; }
       if (authedSettings) {
         const saved = await putSettings({ lang });
-        if (!saved) { toast('Не получилось сохранить язык'); return; }
+        if (!saved) { toast(t('toast.failLang', 'Не получилось сохранить язык')); return; }
       }
       const next = location.pathname + location.search;
       location.href = '/lang?lang=' + lang + '&next=' + encodeURIComponent(next);
@@ -276,10 +299,10 @@
      показе чеклиста (пользователь уже в сессии); все 4 — чеклист исчезает
      навсегда (оверлей дашборда не показывается). */
   const ONBOARD_STEPS = [
-    { key: 'login', label: 'Вошёл' },
-    { key: 'schedule', label: 'Посмотрел расписание' },
-    { key: 'application', label: 'Подал заявку' },
-    { key: 'notifications', label: 'Включил уведомления' }
+    { key: 'login', label: () => t('onboarding.stepLogin', 'Вошёл') },
+    { key: 'schedule', label: () => t('onboarding.stepSchedule', 'Посмотрел расписание') },
+    { key: 'application', label: () => t('onboarding.stepApplication', 'Подал заявку') },
+    { key: 'notifications', label: () => t('onboarding.stepNotifications', 'Включил уведомления') }
   ];
   const ONBOARD_KEYS = ONBOARD_STEPS.map((s) => s.key);
   /* только известные ключи, в каноничном порядке (тело PUT и рендер) */
@@ -307,7 +330,7 @@
       const row = obEl('button', 'ob-step');
       row.type = 'button';
       row.setAttribute('aria-pressed', String(done));
-      row.append(obEl('span', 'ob-mark', done ? '✓' : ''), obEl('span', 'ob-label', s.label));
+      row.append(obEl('span', 'ob-mark', done ? '✓' : ''), obEl('span', 'ob-label', s.label()));
       row.disabled = done; /* выполненный шаг — отметка уже сохранена */
       row.addEventListener('click', async () => {
         if (row.disabled || steps.indexOf(s.key) !== -1) return;
@@ -315,7 +338,7 @@
         row.disabled = true;
         const saved = await saveOnboarding(obNormalize(steps.concat(s.key)));
         row.disabled = false;
-        if (!saved) { toast('Не получилось отметить шаг — проверьте интернет'); return; }
+        if (!saved) { toast(t('toast.failStep', 'Не получилось отметить шаг — проверьте интернет')); return; }
         steps = obNormalize(saved.onboarding);
         renderOnboarding(root, steps, onChange);
         if (onChange) onChange(steps);
@@ -448,7 +471,7 @@
       let blockedFor = 0;      // Retry-After из 429 (03 §4.1/§5.3)
       if (submitButton) {
         submitButton.disabled = true;
-        submitButton.textContent = 'Входим…';
+        submitButton.textContent = t('login.busy', 'Входим…');
       }
       try {
         const resp = await fetch('/v1/auth/login', {
@@ -559,25 +582,54 @@
     const hour = new Date().getHours();
     const greetingEl = $$('[data-greeting]');
     if (greetingEl) {
-      greetingEl.textContent = hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
+      greetingEl.textContent = hour < 12 ? t('dash.greetingMorning', 'Доброе утро')
+        : hour < 18 ? t('dash.greetingAfternoon', 'Добрый день')
+        : t('dash.greetingEvening', 'Добрый вечер');
     }
     const dateEl = $$('[data-today-date]');
     if (dateEl) {
-      dateEl.textContent = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+      dateEl.textContent = new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' });
     }
 
     /* словари-константы словарей CHECK DDL (0002/0003/0004) — метки FE */
-    const LESSON_KIND = { lecture: 'Лекция', seminar: 'Семинар' };
-    const EXAM_KIND = { consultation: 'Консультация', exam: 'Экзамен', credit: 'Зачёт', retake: 'Пересдача' };
-    const APP_STATUS = {
-      draft: 'Черновик', submitted: 'Подана', accepted: 'Принята',
-      in_progress: 'В работе', need_info: 'Требуется уточнение',
-      ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
+    /* метки словарей CHECK DDL — из словаря 5.18 (t: бандл сервера);
+       фолбэк — прежние русские строки */
+    const LESSON_KIND = {
+      lecture: t('lesson.lecture', 'Лекция'),
+      seminar: t('lesson.seminar', 'Семинар'),
+      practice: t('lesson.practice', 'Практика')
     };
-    const NEWS_TYPE = { schedule: 'Расписание', deadline: 'Дедлайн', application: 'Заявка', announcement: 'Объявление' };
+    const EXAM_KIND = {
+      consultation: t('exam.consultation', 'Консультация'),
+      exam: t('exam.exam', 'Экзамен'),
+      credit: t('exam.credit', 'Зачёт'),
+      retake: t('exam.retake', 'Пересдача')
+    };
+    const APP_STATUS = {
+      draft: t('apps.statusDraft', 'Черновик'),
+      submitted: t('apps.statusSubmitted', 'Подана'),
+      accepted: t('apps.statusAccepted', 'Принята'),
+      in_progress: t('apps.statusInProgress', 'В работе'),
+      need_info: t('apps.statusNeedInfo', 'Требуется уточнение'),
+      ready: t('apps.statusReady', 'Готова'),
+      issued: t('apps.statusIssued', 'Выдана'),
+      rejected: t('apps.statusRejected', 'Отклонена'),
+      cancelled: t('apps.statusCancelled', 'Отменена')
+    };
+    const NEWS_TYPE = {
+      schedule: t('notif.typeSchedule', 'Расписание'),
+      deadline: t('notif.typeDeadline', 'Дедлайн'),
+      application: t('notif.typeApplication', 'Заявка'),
+      announcement: t('notif.typeAnnouncement', 'Объявление')
+    };
     /* категории новостей 5.17 — словарь CHECK 0007, метки те же, что на
        сегменте «Новости» экрана уведомлений */
-    const NEWS_CATEGORY = { official: 'Официальная', conference: 'Конференция', org: 'Организация', event: 'Событие' };
+    const NEWS_CATEGORY = {
+      official: t('news.categoryOfficial', 'Официальная'),
+      conference: t('news.categoryConference', 'Конференция'),
+      org: t('news.categoryOrg', 'Организация'),
+      event: t('news.categoryEvent', 'Событие')
+    };
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -603,9 +655,9 @@
     };
     const dayLabel = (iso) => {
       const diff = dayDiff(iso);
-      if (diff === 0) return 'сегодня';
-      if (diff === 1) return 'завтра';
-      return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+      if (diff === 0) return t('dash.todayAdv', 'сегодня');
+      if (diff === 1) return t('dash.tomorrowAdv', 'завтра');
+      return new Date(iso).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' });
     };
     const shortStamp = (iso) => {
       if (typeof iso !== 'string' || iso.length < 16) return '';
@@ -632,13 +684,13 @@
       if (!meta) return;
       const started = new Date(next.starts_at).getTime() <= Date.now();
       if (started) {
-        meta.textContent = 'идёт сейчас · до ' + timeOf(next.ends_at);
+        meta.textContent = t('dash.inProgressNow', 'идёт сейчас') + ' · ' + t('dash.until', 'до') + ' ' + timeOf(next.ends_at);
         return;
       }
       const mins = minutesUntil(next.starts_at);
       meta.textContent = mins >= 1
-        ? 'через ' + mins + ' ' + plural(mins, 'минуту', 'минуты', 'минут')
-        : 'меньше минуты';
+        ? t('dash.inMinutes', 'через {n}').replace('{n}', mins + ' ' + plural(mins, t('plural.minuteOne', 'минуту'), t('plural.minuteFew', 'минуты'), t('plural.minuteMany', 'минут')))
+        : t('dash.lessMinute', 'меньше минуты');
     };
     const renderNext = (next, failed) => {
       show('[data-next-loading]', false);
@@ -675,15 +727,16 @@
       const body = $$('[data-today-body]');
       const title = $$('[data-today-title]');
       if (!body) return;
+      const todayLabel = t('nav.today', 'Сегодня');
       if (failed) {
         body.hidden = true;
-        if (title) title.textContent = 'Сегодня';
+        if (title) title.textContent = todayLabel;
         return;
       }
       if (title) {
         title.textContent = events.length
-          ? 'Сегодня · ' + events.length + ' ' + plural(events.length, 'пара', 'пары', 'пар')
-          : 'Сегодня';
+          ? todayLabel + ' · ' + events.length + ' ' + plural(events.length, t('plural.classOne', 'пара'), t('plural.classFew', 'пары'), t('plural.classMany', 'пар'))
+          : todayLabel;
       }
       if (!events.length) { body.hidden = true; show('[data-today-empty]', true); return; }
       show('[data-today-empty]', false);
@@ -761,7 +814,7 @@
       body.replaceChildren();
       items.forEach((a) => {
         const row = el('div', 'compact-app');
-        const link = el('a', null, a.type_title || a.type || 'Заявка');
+        const link = el('a', null, a.type_title || a.type || t('notif.typeApplication', 'Заявка'));
         link.href = '/applications/' + a.id;
         const status = APP_STATUS[a.status] || a.status || '';
         const stamp = shortStamp(a.updated_at);
@@ -790,9 +843,10 @@
       const mixed = Array.isArray(freshNews) ? freshNews.slice(0, 2) : [];
       const nightMode = (() => { const h = new Date().getHours(); return h >= 23 || h < 6; })();
       if (title) {
+        const whatsNew = t('dash.whatsNew', 'Что нового');
         title.textContent = nightMode
-          ? 'За ночь: ' + (unreadCount || 0) + ' ' + plural(unreadCount || 0, 'событие', 'события', 'событий')
-          : ((items.length + mixed.length) ? 'Что нового · ' + (items.length + mixed.length) : 'Что нового');
+          ? t('dash.overnight', 'За ночь') + ': ' + (unreadCount || 0) + ' ' + plural(unreadCount || 0, t('plural.eventOne', 'событие'), t('plural.eventFew', 'события'), t('plural.eventMany', 'событий'))
+          : ((items.length + mixed.length) ? whatsNew + ' · ' + (items.length + mixed.length) : whatsNew);
       }
       if (failed) { body.hidden = true; return; }
       if (!items.length && !mixed.length) { body.hidden = true; show('[data-news-empty]', true); return; }
@@ -803,7 +857,7 @@
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
         link.href = '/notifications?segment=news';
-        const caption = el('p', 'caption', (NEWS_CATEGORY[n.category] || 'Новость') + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
+        const caption = el('p', 'caption', (NEWS_CATEGORY[n.category] || t('news.one', 'Новость')) + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
         row.append(link, caption);
         body.append(row);
       });
@@ -862,8 +916,8 @@
         const mid = el('div');
         mid.append(el('div', 'lesson-subject', r.title));
         const detail = el('p', 'lesson-detail', EXAM_KIND[r.kind] || LESSON_KIND[r.kind] || '');
-        if (r.status === 'moved') detail.append(' ', el('span', 'badge', 'Перенос'));
-        if (r.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+        if (r.status === 'moved') detail.append(' ', el('span', 'badge', t('schedule.sheetChange', 'Перенос')));
+        if (r.status === 'cancelled') detail.append(' ', el('span', 'badge danger', t('lesson.cancelled', 'Отменена')));
         mid.append(detail);
         row.append(time, mid);
         body.append(row);
@@ -912,7 +966,7 @@
       show('[data-applications-empty]', false);
       show('[data-news-empty]', false);
       const newsTitle = $$('[data-news-title]');
-      if (newsTitle) newsTitle.textContent = 'Что нового';
+      if (newsTitle) newsTitle.textContent = t('dash.whatsNew', 'Что нового');
       const data = await fetchJSON('/v1/dashboard');
       if (!data) {
         /* офлайн (баннер уже показал каркас) или ошибка API — экранная
@@ -981,7 +1035,7 @@
           skip.disabled = true;
           const saved = await saveOnboarding(ONBOARD_KEYS.slice());
           skip.disabled = false;
-          if (!saved) { toast('Не получилось сохранить — проверьте интернет'); return; }
+          if (!saved) { toast(t('toast.failSave', 'Не получилось сохранить — проверьте интернет')); return; }
           card.hidden = true;
         });
       }
@@ -1003,8 +1057,18 @@
     const sheet = document.getElementById('lesson-sheet');
     const errBox = document.getElementById('schedule-error');
     const PEOPLE_ID_OFFSET = 1000; // профиль человека = teacher_id + 1000 (Р-15)
-    const KIND = { lecture: 'Лекция', seminar: 'Семинар', practice: 'Практика' };
-    const STATUS = { normal: 'По расписанию', moved: 'Перенесена', cancelled: 'Отменена', substituted: 'Замена' };
+    /* метки — словарь 5.18 (t: бандл сервера), фолбэк — прежние строки */
+    const KIND = {
+      lecture: t('lesson.lecture', 'Лекция'),
+      seminar: t('lesson.seminar', 'Семинар'),
+      practice: t('lesson.practice', 'Практика')
+    };
+    const STATUS = {
+      normal: t('lesson.normal', 'По расписанию'),
+      moved: t('lesson.moved', 'Перенесена'),
+      cancelled: t('lesson.cancelled', 'Отменена'),
+      substituted: t('lesson.substituted', 'Замена')
+    };
 
     /* --- sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet;
        <dialog> в views/schedule.csp, закрытие — кнопка/Esc). Имя
@@ -1017,15 +1081,15 @@
     const openSheet = async (card) => {
       if (!sheet) return;
       const subject = card.querySelector('.lesson-subject');
-      setField('[data-sheet-title]', subject ? subject.textContent : 'Пара');
+      setField('[data-sheet-title]', subject ? subject.textContent : t('lesson.title', 'Пара'));
       setField('[data-sheet-kind]', KIND[card.dataset.kind] || '');
       setField('[data-sheet-when]', [card.dataset.date, card.dataset.start, card.dataset.end].filter(Boolean).join(' · '));
-      setField('[data-sheet-room]', 'аудитория ' + (card.dataset.room || '—'));
+      setField('[data-sheet-room]', t('dash.roomLabel', 'аудитория') + ' ' + (card.dataset.room || '—'));
       const changed = [];
-      if (card.dataset.prevRoom) changed.push('аудитория ' + card.dataset.prevRoom + ' → ' + (card.dataset.room || '—'));
-      if (card.dataset.prevStart && card.dataset.prevStart !== card.dataset.start) changed.push('время ' + card.dataset.prevStart + ' → ' + card.dataset.start);
+      if (card.dataset.prevRoom) changed.push(t('dash.roomLabel', 'аудитория') + ' ' + card.dataset.prevRoom + ' → ' + (card.dataset.room || '—'));
+      if (card.dataset.prevStart && card.dataset.prevStart !== card.dataset.start) changed.push(t('schedule.timeLabel', 'время') + ' ' + card.dataset.prevStart + ' → ' + card.dataset.start);
       showRow('[data-sheet-change-row]', changed.length > 0);
-      if (changed.length) setField('[data-sheet-change]', 'было → стало: ' + changed.join(' · '));
+      if (changed.length) setField('[data-sheet-change]', t('schedule.wasToLabel', 'было → стало:') + ' ' + changed.join(' · '));
       setField('[data-sheet-status]', STATUS[card.dataset.status] || card.dataset.status || '');
       const link = sheet.querySelector('[data-sheet-teacher]');
       const fallback = sheet.querySelector('[data-sheet-teacher-empty]');
@@ -1033,11 +1097,11 @@
       if (link && Number.isFinite(teacherId)) {
         const href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
         link.href = href;
-        link.textContent = 'Загрузка…';
+        link.textContent = t('common.loading', 'Загрузка…');
         link.hidden = false;
         if (fallback) fallback.hidden = true;
         const person = await fetchJSON('/v1/people/' + (teacherId + PEOPLE_ID_OFFSET));
-        link.textContent = person && person.person && person.person.fio ? person.person.fio : 'Открыть профиль';
+        link.textContent = person && person.person && person.person.fio ? person.person.fio : t('common.openProfile', 'Открыть профиль');
       } else if (link && fallback) {
         link.hidden = true;
         fallback.hidden = false;
@@ -1417,7 +1481,7 @@
       if (!btn) return;
       if (on) {
         btn.dataset.wasLabel = btn.textContent;
-        btn.textContent = busyLabel || 'Отправляем…';
+        btn.textContent = busyLabel || t('toast.sending', 'Отправляем…');
         btn.disabled = true;
       } else {
         btn.textContent = btn.dataset.wasLabel || btn.textContent;
@@ -1485,7 +1549,7 @@
         if (!state.typeKey || (submitBtn && submitBtn.disabled)) return;
         setFormError('');
         if (!navigator.onLine) { applyOffline(true); return; }
-        busy(submitBtn, true, 'Отправляем…');
+        busy(submitBtn, true, t('toast.sending', 'Отправляем…'));
         try {
           if (state.draftId && !state.draftStopped) await autosaveNow(); /* синк лучшего усилия */
           const resp = await fetch('/v1/applications', {
@@ -1608,7 +1672,7 @@
         }
         if (replyText) replyText.removeAttribute('aria-invalid');
         const previousLabel = replyBtn.textContent;
-        replyBtn.textContent = 'Отправляем…';
+        replyBtn.textContent = t('toast.sending', 'Отправляем…');
         replyBtn.disabled = true;
         try {
           /* fetchJSON форматует ошибки из {error:{code,message}} (02 §5.1);
@@ -1912,7 +1976,7 @@
             { label: 'Мои брони', href: '#bookings-title' });
         } else {
           let code = '';
-          let message = 'Не получилось забронировать';
+          let message = t('toast.failBooking', 'Не получилось забронировать');
           try {
             const body = await resp.json();
             if (body && body.error) {
@@ -1931,7 +1995,7 @@
         }
       } catch (e) {
         if (!navigator.onLine) applyOffline(true);
-        else showSlotWarn('Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз');
+        else showSlotWarn(t('toast.failBookingNet', 'Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз'));
       } finally {
         bookingBusy = false;
         /* выбор и подпись кнопки восстановит renderSlots/resetSelection
@@ -2030,7 +2094,7 @@
           } else {
             /* 409 повторной отмены/блокировка → message тела (02 §5.1);
                403/404/прочие — тот же inline, без деталей наружу */
-            let message = 'Не получилось отменить бронь';
+            let message = t('toast.failBookingCancel', 'Не получилось отменить бронь');
             try {
               const body = await resp.json();
               if (body && body.error && body.error.message) message = body.error.message;
@@ -2041,7 +2105,7 @@
         } catch (e) {
           dlg.close();
           if (!navigator.onLine) applyOffline(true);
-          else showBookingsWarn('Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз');
+          else showBookingsWarn(t('toast.failBookingCancelNet', 'Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз'));
         } finally {
           dlgConfirm.disabled = false;
           dlgConfirm.textContent = 'Отменить бронь';
@@ -2752,7 +2816,7 @@
       row.classList.add(n.read_at ? 'is-read' : 'is-unread');
       row.append(document.createRange().createContextualFragment(FEED_ICON[n.type] || FEED_ICON.fallback));
       const mid = el('div');
-      const title = el('div', 'ntitle', humanizeDates(n.title) || 'Уведомление');
+      const title = el('div', 'ntitle', humanizeDates(n.title) || t('notif.itemOne', 'Уведомление'));
       if (!n.read_at) {
         const dot = el('span', 'unread-mark');
         dot.setAttribute('aria-hidden', 'true');
@@ -2793,7 +2857,7 @@
            догрузка — inline у «Ещё» (повтор — та же кнопка) */
         if (cursor) {
           const warn = document.querySelector('[data-feed-warn]');
-          if (warn) warn.textContent = 'Не получилось загрузить ещё — попробуйте ещё раз';
+          if (warn) warn.textContent = t('toast.failLoadMore', 'Не получилось загрузить ещё — попробуйте ещё раз');
           show('[data-feed-warn]', true);
         } else {
           show('[data-feed-list]', false);
@@ -2888,7 +2952,7 @@
            догрузка — inline у «Ещё» (повтор — та же кнопка) */
         if (cursor) {
           const warn = document.querySelector('[data-news-warn]');
-          if (warn) warn.textContent = 'Не получилось загрузить ещё — попробуйте ещё раз';
+          if (warn) warn.textContent = t('toast.failLoadMore', 'Не получилось загрузить ещё — попробуйте ещё раз');
           show('[data-news-warn]', true);
         } else {
           show('[data-news-list]', false);
@@ -2988,7 +3052,7 @@
           refreshUnreadBadge();
           toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
         } else {
-          let message = 'Не получилось пометить всё прочитанным';
+          let message = t('toast.failReadAll', 'Не получилось пометить всё прочитанным');
           try {
             const body = await resp.json();
             if (body && body.error && body.error.message) message = body.error.message;
@@ -2997,7 +3061,7 @@
         }
       } catch (e) {
         if (!navigator.onLine) applyOffline(true);
-        else toast('Не получилось пометить всё прочитанным. Проверьте интернет — и попробуем ещё раз');
+        else toast(t('toast.failReadAllNet', 'Не получилось пометить всё прочитанным. Проверьте интернет — и попробуем ещё раз'));
       } finally {
         readAllBtn.disabled = false;
       }
@@ -3211,7 +3275,7 @@
         input.disabled = false;
         if (!saved) {
           input.checked = !input.checked;
-          toast('Не получилось сохранить настройку');
+          toast(t('toast.failSetting', 'Не получилось сохранить настройку'));
         }
       });
     });
@@ -3227,7 +3291,7 @@
         quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
       });
       if (saved) toast('Тихие часы сохранены');
-      else toast('Не получилось сохранить тихие часы');
+      else toast(t('toast.failQuiet', 'Не получилось сохранить тихие часы'));
     };
     const quietFrom = $('[data-quiet-from]');
     const quietTo = $('[data-quiet-to]');
@@ -3244,7 +3308,7 @@
         if (!navigator.onLine) { applyOffline(true); return; }
         const saved = await putSettings({ theme: t });
         if (saved) toast('Оформление сохранено');
-        else toast('Не получилось сохранить тему');
+        else toast(t('toast.failTheme', 'Не получилось сохранить тему'));
       });
     });
 
@@ -3277,7 +3341,7 @@
           showIcs(data.token);
           toast('Подписка создана — прежняя ссылка отозвана');
         } else {
-          toast('Не получилось создать подписку');
+          toast(t('toast.failIcsCreate', 'Не получилось создать подписку'));
         }
       });
     }
@@ -3301,7 +3365,7 @@
           show('[data-ics-none]', true);
           toast('Подписка отозвана — календарь больше не обновляется');
         } else {
-          toast('Не получилось отозвать подписку');
+          toast(t('toast.failIcsRevoke', 'Не получилось отозвать подписку'));
         }
       });
     }
@@ -3353,15 +3417,15 @@
         const p = meData && meData.profile;
         if (!p) return;
         /* «para-demo:{student_card_no}» — константа приложения, не секрет */
-        openQr('QR-карточка студента', 'para-demo:' + p.student_card_no,
-          p.fio + ' · студ. билет № ' + p.student_card_no);
+        openQr(t('profile.qrStudent', 'QR-карточка студента'), 'para-demo:' + p.student_card_no,
+          p.fio + ' · ' + t('profile.cardNoLabel', 'студ. билет №') + ' ' + p.student_card_no);
       });
     }
     const libraryQr = $('[data-qr-library]');
     if (libraryQr) {
       libraryQr.addEventListener('click', () => {
         const no = $('[data-library-card-no]');
-        openQr('Читательский билет', no ? no.textContent : '', 'Библиотека · билет № ' + (no ? no.textContent : ''));
+        openQr(t('profile.libraryCard', 'Читательский билет'), no ? no.textContent : '', t('profile.libraryNoLabel', 'Библиотека · билет №') + ' ' + (no ? no.textContent : ''));
       });
     }
     if (qrDialog) {
@@ -3400,7 +3464,7 @@
           }
           logoutConfirm.disabled = false;
           logoutConfirm.textContent = 'Выйти';
-          toast('Не получилось выйти — проверьте интернет');
+          toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
         });
       }
     }

@@ -1,5 +1,6 @@
 #include "controllers/GradebookCtrl.h"
 
+#include "utils/I18nView.h"
 #include "services/GradebookService.h"
 #include "utils/ApiError.h"
 
@@ -47,10 +48,13 @@ void GradebookCtrl::gradebookPage(
     // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3);
     // книжка всегда своя — user_id только из сессии (02 §6.3).
     const auto session = req->attributes()->get<SessionInfo>("session");
+    // 5.18 (шаг 3): каркас — словарь (тело зачётки — ru, вне охвата шага 3).
+    const auto lang = i18n::resolveRequestLang(req);
     GradebookService::gradebook(
         app().getDbClient("para"), session.userId,
-        [cb](GradebookService::Result r) mutable {
+        [cb, lang](GradebookService::Result r) mutable {
             HttpViewData data;
+            i18n::insertUiStrings(data, lang);
             // Каркасные view-данные (partials head/topbar/tabbar) —
             // серверные константы (02 §6.4).
             data.insert("pageTitle", std::string("Зачётная книжка · Пара"));

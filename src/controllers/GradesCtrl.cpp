@@ -1,5 +1,7 @@
 #include "controllers/GradesCtrl.h"
 
+#include "utils/I18nView.h"
+
 #include "services/GradesService.h"
 #include "utils/ApiError.h"
 
@@ -193,11 +195,14 @@ void fetchGradesPage(const drogon::orm::DbClientPtr& db,
 }
 
 // Каркасные view-данные страниц (partials head/topbar/tabbar): pageTitle и
-// activeTab — серверные константы (02 §6.4).
-HttpViewData baseViewData()
+// activeTab — серверные константы (02 §6.4). 5.18 (шаг 3): строки словаря —
+// в view-данные ДО рендера (Р-16); заголовок вкладки — из словаря
+// («Успеваемость · Пара» / "Grades · Para" / «成绩 · Para»).
+HttpViewData baseViewData(i18n::Lang lang)
 {
     HttpViewData data;
-    data.insert("pageTitle", std::string("Успеваемость · Пара"));
+    i18n::insertUiStrings(data, lang);
+    data.insert("pageTitle", i18n::pageTitleOf("nav.grades", lang));
     data.insert("activeTab", std::string("grades"));
     return data;
 }
@@ -209,10 +214,13 @@ void GradesCtrl::gradesPage(const HttpRequestPtr& req,
 {
     // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
     const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // 5.18 (шаг 3): язык запроса резолвится ДО асинхронного рендера
+    // (para_lang → Accept-Language → ru; Р-16 — строки в view-данные).
+    const auto lang = i18n::resolveRequestLang(req);
     fetchGradesPage(
         app().getDbClient("para"), session.userId,
-        [cb](PageBodies b) mutable {
-            HttpViewData data = baseViewData();
+        [cb, lang](PageBodies b) mutable {
+            HttpViewData data = baseViewData(lang);
             data.insert("failed", std::string("0"));
             // В view-данные — только сериализованные тела сервиса; строки
             // (дисциплины, комментарии) экранирует шаблон при выводе
@@ -222,13 +230,13 @@ void GradesCtrl::gradesPage(const HttpRequestPtr& req,
             data.insert("examsJson", toJson(b.exams));
             cb(HttpResponse::newHttpViewResponse("grades", std::move(data)));
         },
-        [cb]() mutable {
+        [cb, lang]() mutable {
             // Ошибка БД при сборке страницы (03 §5.3): каркас с состоянием
             // ошибки и «Повторить» ([data-grades-retry] — app.js,
             // перезагрузка страницы); offline-баннер и ретрай сети — каркас
             // (topbar + app.js, 03 §5.4). Шаблон failed=1 рендерит только
             // блок ошибки — данных в view-данные не кладём.
-            HttpViewData data = baseViewData();
+            HttpViewData data = baseViewData(lang);
             data.insert("failed", std::string("1"));
             cb(HttpResponse::newHttpViewResponse("grades", std::move(data)));
         });
@@ -243,9 +251,12 @@ void GradesCtrl::disciplinePage(
     // guard для path-id СТРОК оценки здесь не применяется; выборка своих
     // оценок по user_id сессии, чужой/несуществующий discipline_id → 404.
     const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // 5.18 (шаг 3): каркас страницы дисциплины — тот же бандл (тело экрана
+    // остаётся по-русски — вторичный экран, вне охвата шага 3).
+    const auto lang = i18n::resolveRequestLang(req);
     fetchGradesPage(
         app().getDbClient("para"), session.userId,
-        [cb, disciplineId](PageBodies b) mutable {
+        [cb, disciplineId, lang](PageBodies b) mutable {
             // Дисциплина экрана — по СВОИМ оценкам (строки списка): нет ни
             // одной своей оценки с этим discipline_id — 404 not_found (и
             // чужая, и несуществующая — неотличимо, 03 §5.3).
@@ -268,7 +279,7 @@ void GradesCtrl::disciplinePage(
                                       k404NotFound));
                 return;
             }
-            HttpViewData data = baseViewData();
+            HttpViewData data = baseViewData(lang);
             data.insert("failed", std::string("0"));
             data.insert("disciplineId", std::to_string(disciplineId));
             data.insert("summaryJson", toJson(b.summary));
@@ -277,9 +288,9 @@ void GradesCtrl::disciplinePage(
             cb(HttpResponse::newHttpViewResponse("grades_discipline",
                                                  std::move(data)));
         },
-        [cb, disciplineId]() mutable {
+        [cb, disciplineId, lang]() mutable {
             // Ошибка БД — состояние ошибки (см. gradesPage), не данные.
-            HttpViewData data = baseViewData();
+            HttpViewData data = baseViewData(lang);
             data.insert("failed", std::string("1"));
             data.insert("disciplineId", std::to_string(disciplineId));
             cb(HttpResponse::newHttpViewResponse("grades_discipline",

@@ -26,9 +26,16 @@
    «Перенесена» + «было → стало» (.lesson-was); cancelled — зачёркнуто +
    бейдж danger «Отменена»; substituted — бейдж info «Замена».
    Пустой день (03 §5.2/§4.3): «Пар нет — день твой» строкой в карточке,
-   без иконки и кнопки. */
+   без иконки и кнопки.
+   5.18 (шаг 3): строки — словарь t.<key> из view-данных (Р-16: бандл
+   кладут ScheduleCtrl::page и ::segment ДО рендера); имена месяцев/дней
+   недели и формы множественного — те же t.month.NN / t.weekday.NN /
+   t.plural.*, формат дат «17 ноября»/«17 November»/«11月17日» ветвится по
+   view-переменной lang (байт-арифметики по UTF-8 нет — только склейка
+   готовых строк словаря). */
 const std::string bodyJson = @@.get<std::string>("bodyJson");
 const std::string todayIso = @@.get<std::string>("todayIso");
+const std::string uiLang = @@.get<std::string>("lang");
 
 Json::Value root(Json::objectValue);
 {
@@ -46,6 +53,11 @@ const Json::Value& events = root["events"];
 const bool hasEvents = events.isArray() && events.size() > 0;
 
 // --- серверные константы и форматирование (данные — строки «…Z») -------
+// Строка словаря из view-данных («t.» + ключ); значения — серверные
+// константы, экранировать нечего (Р-16).
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
 };
@@ -77,13 +89,22 @@ const auto weekdayOf = [&daysFromCivil](const std::string& ymd) -> int {
         return -1;
     }
 };
-static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
-                                "мая",      "июня",    "июля",     "августа",
-                                "сентября", "октября", "ноября",   "декабря"};
-static const char* kWeekdays[] = {"Понедельник", "Вторник",   "Среда",
-                                  "Четверг",    "Пятница",   "Суббота",
-                                  "Воскресенье"};
-const auto dayTitle = [&weekdayOf](const std::string& ymd) {
+// Локализованная дата: ru/en — «17 ноября»/«17 November» (имя — словарь
+// t.month.NN), zh — числовой формат «11月17日» (склейка строк-литералов).
+const auto dayMonth = [&uiLang, &vstr](int d, int m) -> std::string {
+    if (m < 1 || m > 12) return "";
+    if (uiLang == "zh")
+        return std::to_string(m) + "月" + std::to_string(d) + "日";
+    const std::string key =
+        std::string("month.") + (m < 10 ? "0" : "") + std::to_string(m);
+    return std::to_string(d) + " " + vstr(key.c_str());
+};
+const auto weekdayName = [&vstr](int w) -> std::string {
+    if (w < 0 || w > 6) return "";
+    return vstr((std::string("weekday.0") + std::to_string(w + 1)).c_str());
+};
+const auto dayTitle = [&weekdayOf, &weekdayName, &dayMonth, &uiLang](
+                          const std::string& ymd) {
     const int w = weekdayOf(ymd);
     std::string dayNum;
     int m = 0;
@@ -95,31 +116,40 @@ const auto dayTitle = [&weekdayOf](const std::string& ymd) {
             m = 0;
         }
     }
-    std::string out = w >= 0 ? std::string(kWeekdays[w]) : std::string();
-    out += ", " + dayNum;
-    if (m >= 1 && m <= 12) out += std::string(" ") + kMonths[m - 1];
+    const std::string dm = dayMonth(std::stoi(dayNum.empty() ? "0" : dayNum), m);
+    std::string out = w >= 0 ? weekdayName(w) : std::string();
+    if (!dm.empty())
+        out += (uiLang == "zh" ? std::string("，") : std::string(", ")) + dm;
     return out;
 };
-// Словари CHECK DDL 0002 (kind) — метки FE; practice — на случай расширения.
-const auto kindLabel = [](const std::string& k) {
-    if (k == "lecture") return "Лекция";
-    if (k == "seminar") return "Семинар";
-    if (k == "practice") return "Практика";
+// Словари CHECK DDL 0002 (kind) — метки FE из словаря; practice — на случай
+// расширения.
+const auto kindLabel = [&vstr](const std::string& k) -> std::string {
+    if (k == "lecture") return vstr("lesson.lecture");
+    if (k == "seminar") return vstr("lesson.seminar");
+    if (k == "practice") return vstr("lesson.practice");
     return "";
 };
-const auto plural = [](int n, const char* one, const char* few,
-                       const char* many) {
+// Формы множественного по ключам словаря (en/zh формы совпадают — подбор
+// ru-правилами всё равно даст корректную форму).
+const auto pluralForm = [&vstr](int n, const std::string& one,
+                                const std::string& few,
+                                const std::string& many) -> const std::string& {
     const int m10 = n % 10, m100 = n % 100;
     if (m10 == 1 && m100 != 11) return one;
     if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
     return many;
 };
-// Бейджи статусов (03 §4.3) — серверные константы разметки.
-const auto statusBadge = [](const std::string& st) -> std::string {
-    if (st == "moved") return " <span class=\"badge warn\">Перенесена</span>";
+// Бейджи статусов (03 §4.3) — подписи словаря, разметка — константа.
+const auto statusBadge = [&vstr](const std::string& st) -> std::string {
+    if (st == "moved")
+        return " <span class=\"badge warn\">" + vstr("lesson.moved") + "</span>";
     if (st == "cancelled")
-        return " <span class=\"badge danger\">Отменена</span>";
-    if (st == "substituted") return " <span class=\"badge info\">Замена</span>";
+        return " <span class=\"badge danger\">" + vstr("lesson.cancelled") +
+               "</span>";
+    if (st == "substituted")
+        return " <span class=\"badge info\">" + vstr("lesson.substituted") +
+               "</span>";
     return "";
 };
 // «было → стало» (С1/С3): перенесённая аудитория и/или время.
@@ -166,16 +196,16 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
 %>
 <%c++ $$ << "<div id=\"schedule-segment\" class=\"content-narrow\" data-state=\"" << (hasEvents ? "data" : "empty") << "\">"; %>
   <div class="calendar-toolbar">
-    <div class="segments" role="group" aria-label="Период расписания">
+    <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.schedulePeriod"); %>">
       <button type="button" aria-pressed="true"
         hx-get="/schedule/segment?segment=today" hx-target="#schedule-segment"
         hx-swap="outerHTML" hx-push-url="/schedule?segment=today"
-        hx-indicator="#schedule-indicator" hx-disabled-elt="this">Сегодня</button>
+        hx-indicator="#schedule-indicator" hx-disabled-elt="this"><%c++ $$ << @@.get<std::string>("t.nav.today"); %></button>
       <button type="button" aria-pressed="false"
         hx-get="/schedule/segment?segment=week&amp;offset=0"
         hx-target="#schedule-segment" hx-swap="outerHTML"
         hx-push-url="/schedule?segment=week&amp;offset=0"
-        hx-indicator="#schedule-indicator" hx-disabled-elt="this">Неделя</button>
+        hx-indicator="#schedule-indicator" hx-disabled-elt="this"><%c++ $$ << @@.get<std::string>("t.schedule.week"); %></button>
     </div>
     <!-- Ghost-ссылка входа в «Бронь аудитории» (03 §4.3:421, 5.10/§4.9.5):
          в экране «Расписание» сознательно откладывалась (журнал 2026-11-08:
@@ -183,16 +213,21 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
          экрана «Бронь аудитории» GET /rooms живёт — откладка снята.
          Внутри партиала — ссылка переживает htmx-обмен сегмента
          (outerHTML #schedule-segment) в обоих сегментах. -->
-    <a class="button ghost rooms-ghost" href="/rooms">Забронировать аудиторию<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+    <a class="button ghost rooms-ghost" href="/rooms"><%c++ $$ << @@.get<std::string>("t.schedule.bookRoom"); %><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
   </div>
   <div class="section-title">
     <h2 id="day-title"><%c++ $$ << esc(dayTitle(todayIso)); %></h2>
     <span class="caption" id="day-count"><%c++
 if (hasEvents)
-    $$ << std::to_string(events.size()) + " " +
-              plural(static_cast<int>(events.size()), "пара", "пары", "пар");
+{
+    const std::string one = vstr("plural.classOne");
+    const std::string few = vstr("plural.classFew");
+    const std::string many = vstr("plural.classMany");
+    $$ << std::to_string(events.size()) << " "
+       << pluralForm(static_cast<int>(events.size()), one, few, many);
+}
 else
-    $$ << "пар нет";
+    $$ << vstr("schedule.noClasses");
     %></span>
   </div>
   <div class="schedule-list" id="day-lessons">
@@ -200,7 +235,8 @@ else
 if (!hasEvents)
 {
     // Пустой день (03 §5.2, «Сегодня»): строка без иконки и кнопки.
-    $$ << "<div class=\"empty\"><p class=\"muted\">Пар нет — день твой</p></div>";
+    $$ << "<div class=\"empty\"><p class=\"muted\">" << vstr("dash.emptyClasses")
+       << "</p></div>";
 }
 else
 {
@@ -233,6 +269,6 @@ else
 %>
   </div>
   <div class="actions section">
-    <a class="button" href="/profile">Подписка на календарь</a>
+    <a class="button" href="/profile"><%c++ $$ << @@.get<std::string>("t.schedule.calendarSub"); %></a>
   </div>
 <%c++ $$ << "</div>"; %>

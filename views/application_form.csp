@@ -39,9 +39,9 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Мои заявки</a>
-      <h1>Новая заявка</h1>
-      <p>Выберите документ — форма подставит данные профиля</p>
+      <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.apps.title"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.apps.formTitle"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.apps.formSubtitle"); %></p>
     </div>
   </div>
   <div class="content-form flow">
@@ -50,7 +50,7 @@
     <div class="notice" data-profile-card hidden>
       <strong data-profile-fio></strong>
       <p data-profile-meta></p>
-      <p class="caption">Данные подставлены из профиля — при получении проверьте паспорт</p>
+      <p class="caption"><%c++ $$ << @@.get<std::string>("t.apps.profileNote"); %></p>
     </div>
 
     <!-- Состояние «Загрузка» (03 §5.1): скелетоны каталога + профиля;
@@ -64,9 +64,9 @@
     <!-- Состояние «Ошибка» (03 §5.3): каталог не загрузился; «Повторить»
          реально перезапрашивает (app.js, [data-form-retry]). -->
     <section class="section flow" data-form-error hidden role="alert">
-      <h3>Не получилось загрузить каталог</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-form-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.error.loadCatalog"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-form-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
 
     <!-- Каталог типов: строки строит app.js из GET /v1/application-types
@@ -76,14 +76,14 @@
     <!-- Форма типа: поля строит app.js по выбранному типу (1–2 вопроса,
          03 §4.5.3); скрыта, пока тип не выбран -->
     <form id="application-form" class="flow" data-form hidden>
-      <p class="caption"><span data-type-title></span> · <button type="button" class="offline-retry" data-type-back>выбрать другой тип</button></p>
+      <p class="caption"><span data-type-title></span> · <button type="button" class="offline-retry" data-type-back><%c++ $$ << @@.get<std::string>("t.apps.chooseOther"); %></button></p>
       <div data-type-fields></div>
       <p class="field-error" data-form-error hidden></p>
       <div class="actions section">
-        <button class="button" type="button" data-save-draft data-network-action data-offline-label="Нужна сеть для черновика">Сохранить черновик</button>
-        <button class="button primary" type="submit" data-submit-app data-network-action data-offline-label="Нужна сеть, чтобы отправить заявку">Отправить заявку</button>
+        <button class="button" type="button" data-save-draft data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineDraft"); %>"><%c++ $$ << @@.get<std::string>("t.apps.saveDraft"); %></button>
+        <button class="button primary" type="submit" data-submit-app data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineSubmit"); %>"><%c++ $$ << @@.get<std::string>("t.apps.submitApp"); %></button>
       </div>
-      <p class="caption" role="status" data-draft-status>Обычно готова до 3 рабочих дней</p>
+      <p class="caption" role="status" data-draft-status><%c++ $$ << @@.get<std::string>("t.apps.usualTime"); %></p>
     </form>
   </div>
 </main>

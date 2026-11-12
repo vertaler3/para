@@ -1,5 +1,7 @@
 #include "controllers/ScheduleCtrl.h"
 
+#include "utils/I18nView.h"
+
 #include <string>
 
 #include "services/ScheduleCache.h"
@@ -358,10 +360,14 @@ void ScheduleCtrl::page(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso](const Json::Value& body,
-                        const Json::Value& changes) mutable {
+        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+            const Json::Value& body,
+            const Json::Value& changes) mutable {
+            // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера
+            // (Р-16); язык — para_lang → Accept-Language → ru.
             HttpViewData data;
-            data.insert("pageTitle", std::string("Расписание · Пара"));
+            i18n::insertUiStrings(data, lang);
+            data.insert("pageTitle", i18n::pageTitleOf("nav.schedule", lang));
             data.insert("activeTab", std::string("schedule"));
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
@@ -396,9 +402,14 @@ void ScheduleCtrl::segment(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso](const Json::Value& body,
-                        const Json::Value& changes) mutable {
+        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+            const Json::Value& body,
+            const Json::Value& changes) mutable {
+            // 5.18 (шаг 3): htmx-фрагмент несёт те же словарные строки
+            // (сегментные кнопки/подписи дней) — бандл в view-данные
+            // ДО рендера (Р-16).
             HttpViewData data;
+            i18n::insertUiStrings(data, lang);
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
             data.insert("bodyJson", toJson(body));

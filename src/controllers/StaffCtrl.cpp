@@ -1,5 +1,6 @@
 #include "controllers/StaffCtrl.h"
 
+#include "utils/I18nView.h"
 #include <drogon/drogon.h>
 
 #include "models/Applications.h"
@@ -559,7 +560,11 @@ void StaffCtrl::staffPage(const HttpRequestPtr& req,
     // (views/staff.csp mode="forbidden") — постановка экрана Э7; StaffFilter
     // продолжает защищать API-роуты выше (JSON 403 без изменений).
     const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // 5.18 (шаг 3): каркас страницы (head/topbar/tabbar/footer) — словарь
+    // из view-данных (Р-16); ТЕЛО стола сотрудника остаётся по-русски —
+    // рабочий экран офиса, вне объёма потребительской фичи (журнал 5.18).
     HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
     data.insert("pageTitle", std::string("Стол сотрудника · Пара"));
     // Студенческие табы каркаса к столу сотрудника не применяются — ни один
     // не подсвечивается (свой набор табов 03 §4.8 не собирается).

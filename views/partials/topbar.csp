@@ -11,12 +11,15 @@
    min-height 72px (80px на ≥1024px), sticky; спека 03 §3.3 «56px» —
    до синхронизации 03 (пивот палитры/оболочки — Р-16 в docs/decisions.md).
    Под шапкой — офлайн-баннер (03 §5.4: строка, не модально); тап по баннеру
-   и кнопка «Повторить» — проверка сети в static/js/app.js. */
+   и кнопка «Повторить» — проверка сети в static/js/app.js.
+   5.18 (шаг 3): строки каркаса (skip, aria, вход сотрудника, баннер) —
+   словарь t.<key> из view-данных (Р-16: insertUiStrings ДО рендера);
+   вордрмарк «пара» — как логотип, не переводится. */
 %>
-<a class="skip" href="#main">К содержимому</a>
+<a class="skip" href="#main"><%c++ $$ << @@.get<std::string>("t.a11y.skipToContent"); %></a>
 <header class="site-header">
   <div class="header-inner">
-    <a class="brand" href="/" aria-label="Пара, на главную"><span class="brand-symbol" aria-hidden="true"></span>пара</a>
+    <a class="brand" href="/" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.brandHome"); %>"><span class="brand-symbol" aria-hidden="true"></span>пара</a>
 <%c++
 /* Вход сотрудника в шапке (фикс ревью экрана «Стол сотрудника» — без
    него /staff недостижим из навигации). Блок рендерится ТОЛЬКО когда
@@ -29,15 +32,15 @@
 const std::string staffEntry = @@.get<std::string>("staffEntry");
 if (staffEntry == "1") {
 %>
-    <span class="staff-label">Учебный офис</span>
-    <nav class="staff-nav" aria-label="Разделы сотрудника"><a href="/staff">Стол сотрудника</a></nav>
+    <span class="staff-label"><%c++ $$ << @@.get<std::string>("t.staff.office"); %></span>
+    <nav class="staff-nav" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.staffNav"); %>"><a href="/staff"><%c++ $$ << @@.get<std::string>("t.staff.desk"); %></a></nav>
 <%c++ } %>
     <div class="header-actions">
-      <a class="icon-button" href="/notifications" aria-label="Уведомления">
+      <a class="icon-button" href="/notifications" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.notifications"); %>">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
         <span class="notification-count" data-unread-badge hidden></span>
       </a>
     </div>
   </div>
 </header>
-<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text>Нет сети. Проверьте подключение — и попробуйте ещё раз.</span> <button type="button" class="offline-retry" data-offline-retry>Повторить</button></div>
+<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>

@@ -11,17 +11,24 @@
    pageTitle — view-переменная, которую страница (её рендер-вызов) вставляет в
    HttpViewData ДО рендера; пусто/нет — «Пара». Понимаются std::string и
    const char*. Вывод экранируется htmlTranslate; сюда подставлять только
-   серверные константы — названия экранов (02 §6.4: экранирование данных). */
+   серверные константы — названия экранов (02 §6.4: экранирование данных).
+   5.18 (шаг 3): мультиязычный каркас — контроллер кладёт в view-данные
+   строки словаря t.<key> (i18n::insertUiStrings, Р-16: до рендера) и код
+   «lang»; дефолт title и <html lang> берутся из словаря (t.app.title —
+   «Пара»/«Para», lang — ru/en/zh; ключа нет — прежние русские константы,
+   render без бандла меняет вид не сильнее отсутствия pageTitle). */
 const std::any &pageTitleVal = @@["pageTitle"];
 std::string pageTitle;
 if(pageTitleVal.type() == typeid(std::string))
     pageTitle = *std::any_cast<std::string>(&pageTitleVal);
 else if(pageTitleVal.type() == typeid(const char *))
     pageTitle = *std::any_cast<const char *>(&pageTitleVal);
+const std::string uiLang = @@.get<std::string>("lang");
+if(pageTitle.empty()) pageTitle = @@.get<std::string>("t.app.title");
 if(pageTitle.empty()) pageTitle = "Пара";
 %>
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="<%c++ if(!uiLang.empty()) $$ << uiLang; else $$ << "ru"; %>">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

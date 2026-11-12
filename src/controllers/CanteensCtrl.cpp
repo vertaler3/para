@@ -1,5 +1,6 @@
 #include "controllers/CanteensCtrl.h"
 
+#include "utils/I18nView.h"
 #include <drogon/drogon.h>
 
 #include "services/CanteensService.h"
@@ -62,8 +63,10 @@ void CanteensCtrl::canteensPage(
     // JSON-роутов этого контроллера (GET /v1/canteens, GET
     // /v1/canteens/{id}/menu — 02 §5.2). Состояния 03 §5 — в шаблоне и
     // static/js/app.js.
-    (void)req;
+    // 5.18 (шаг 3): каркас — словарь из view-данных (Р-16); тело экрана —
+    // по-русски (вторичный экран, вне охвата шага 3 — журнал 5.18).
     HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
     data.insert("pageTitle", std::string("Столовые · Пара"));
     // Экран НЕ таб (03 §3.1 — вход из профиля, 03 §4.9.6/5.13): пустой
     // activeTab — ни один пункт таб-бара не получает aria-current.

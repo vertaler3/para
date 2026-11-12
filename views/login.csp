@@ -12,40 +12,46 @@
    /v1/auth/login, «Входим…», ошибки у формы (03 §5.1/§5.3) — в
    static/js/app.js. Пользовательские данные в шаблоне отсутствуют:
    строки — серверные константы, экранирования не требуется (02 §6.4);
-   демо-пароль в разметку не подставляется (AGENTS.md §5.2). */
+   демо-пароль в разметку не подставляется (AGENTS.md §5.2).
+   5.18 (шаг 3): все строки экрана — словарь t.<key> из view-данных
+   (AuthCtrl::loginPage + i18n::insertUiStrings ДО рендера, Р-16);
+   вход — публичный экран, язык резолвится по cookie para_lang →
+   Accept-Language → ru (переключатель — в footer). Вордрмарк «пара» —
+   не переводится; h1 — одной строкой словаря (перенос «Хороший день<br>
+   начинается…» заменён естественным переносом текста). */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js подключает сама страница
      (defer, локальный путь — AGENTS: без npm/CDN; как в design-drafts). -->
 <script defer src="/static/js/app.js"></script>
 <body data-page="login">
-<a class="skip" href="#main">К содержимому</a>
-<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text>Нет сети. Проверьте подключение — и попробуйте ещё раз.</span> <button type="button" class="offline-retry" data-offline-retry>Повторить</button></div>
+<a class="skip" href="#main"><%c++ $$ << @@.get<std::string>("t.a11y.skipToContent"); %></a>
+<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>
 <main id="main" class="shell">
   <div class="login-layout">
     <header class="login-intro">
       <p class="brand"><span class="brand-symbol" aria-hidden="true"></span>пара</p>
-      <p class="muted small">деканат в кармане</p>
-      <p class="eyebrow">Ваш студенческий кабинет</p>
-      <h1 class="serif">Хороший день<br>начинается с ясности.</h1>
-      <p class="muted small">Расписание, учёба и дела в кампусе — в одном месте.</p>
+      <p class="muted small"><%c++ $$ << @@.get<std::string>("t.login.tagline"); %></p>
+      <p class="eyebrow"><%c++ $$ << @@.get<std::string>("t.login.subtitle"); %></p>
+      <h1 class="serif"><%c++ $$ << @@.get<std::string>("t.login.heading"); %></h1>
+      <p class="muted small"><%c++ $$ << @@.get<std::string>("t.login.lead"); %></p>
     </header>
     <form id="login-form" class="surface" method="post" action="/v1/auth/login">
-      <h2>Войти в кабинет</h2>
+      <h2><%c++ $$ << @@.get<std::string>("t.login.formTitle"); %></h2>
       <div class="field">
-        <label for="login">Логин</label>
+        <label for="login"><%c++ $$ << @@.get<std::string>("t.login.loginLabel"); %></label>
         <input id="login" name="login" type="text" autocomplete="username" required>
       </div>
       <div class="field">
-        <label for="password">Пароль</label>
+        <label for="password"><%c++ $$ << @@.get<std::string>("t.login.passwordLabel"); %></label>
         <div class="password-wrap">
           <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button type="button" class="icon-button" id="toggle-password" aria-label="Показать пароль" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button type="button" class="icon-button" id="toggle-password" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.showPassword"); %>" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
         </div>
       </div>
       <!-- data-offline-label — helper-текст офлайна на самой кнопке
            (03 §5.4: «Нужна сеть для входа»), ставит/снимает applyOffline -->
-      <button class="button primary full section" type="submit" data-network-action data-offline-label="Нужна сеть для входа">Войти</button>
+      <button class="button primary full section" type="submit" data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.login.offlineHint"); %>"><%c++ $$ << @@.get<std::string>("t.login.submit"); %></button>
       <!-- Текст ошибки — только при ответе сервера (03 §4.1: под кнопкой,
            поля не очищаются; для invalid_credentials фокус переводится в
            пароль). Заполняет static/js/app.js. -->
@@ -56,15 +62,15 @@
          подставляется: единый демо-пароль публикуется в комментарии к работе,
          в репозитории и разметке его нет (AGENTS.md §5.2). -->
     <section class="section" aria-labelledby="demo-access-title">
-      <div class="section-title"><h2 id="demo-access-title">Демо-доступы для жюри</h2></div>
+      <div class="section-title"><h2 id="demo-access-title"><%c++ $$ << @@.get<std::string>("t.login.demoTitle"); %></h2></div>
       <div class="login-roles">
-        <button type="button" class="role-button" data-demo-login="anya.demo" aria-pressed="false"><div><strong>anya.demo</strong><span>студентка 1 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="oleg.demo" aria-pressed="false"><div><strong>oleg.demo</strong><span>студент 1 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="mark.demo" aria-pressed="false"><div><strong>mark.demo</strong><span>студент 4 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="dina.demo" aria-pressed="false"><div><strong>dina.demo</strong><span>студентка 4 курса</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="dean.demo" aria-pressed="false"><div><strong>dean.demo</strong><span>сотрудник деканата</span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="anya.demo" aria-pressed="false"><div><strong>anya.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="oleg.demo" aria-pressed="false"><div><strong>oleg.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="mark.demo" aria-pressed="false"><div><strong>mark.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="dina.demo" aria-pressed="false"><div><strong>dina.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" class="role-button" data-demo-login="dean.demo" aria-pressed="false"><div><strong>dean.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStaff"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
       </div>
-      <p class="caption">Тап по строке подставляет логин в форму. Единый демо-пароль публикуется в комментарии к работе.</p>
+      <p class="caption"><%c++ $$ << @@.get<std::string>("t.login.demoCaption"); %></p>
     </section>
   </div>
 </main>

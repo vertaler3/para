@@ -6,6 +6,7 @@
 #include "services/PasswordHasher.h"
 #include "services/UserService.h"
 #include "utils/ApiError.h"
+#include "utils/I18nView.h"
 
 using namespace para;
 using namespace drogon::orm;
@@ -28,12 +29,17 @@ int64_t nowSec()
 
 }  // namespace
 
-void AuthCtrl::loginPage(const HttpRequestPtr&,
+void AuthCtrl::loginPage(const HttpRequestPtr& req,
                          std::function<void(const HttpResponsePtr&)>&& cb)
 {
     // Тонкий: только рендер CSP-шаблона views/login.csp (03 §4.1; стили —
     // FE-дорожка). Скомпилированный шаблон — DrTemplate «login».
-    cb(HttpResponse::newHttpViewResponse("login"));
+    // 5.18 (шаг 3): вход — публичный экран, язык резолвится здесь (cookie
+    // para_lang → Accept-Language → ru); строки словаря — в view-данные
+    // ДО рендера (Р-16, utils/I18nView.h).
+    HttpViewData data;
+    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
+    cb(HttpResponse::newHttpViewResponse("login", std::move(data)));
 }
 
 void AuthCtrl::login(const HttpRequestPtr& req,

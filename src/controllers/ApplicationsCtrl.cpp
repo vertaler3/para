@@ -1,5 +1,7 @@
 #include "controllers/ApplicationsCtrl.h"
 
+#include "utils/I18nView.h"
+
 #include "models/Applications.h"
 #include "services/ApplicationsService.h"
 #include "utils/ApiError.h"
@@ -296,10 +298,13 @@ std::string pageJson(const Json::Value& body)
 }
 
 // Каркасные view-данные страниц (partials head/topbar/tabbar): pageTitle и
-// activeTab — серверные константы (02 §6.4).
-HttpViewData basePageData(const std::string& title)
+// activeTab — серверные константы (02 §6.4). 5.18 (шаг 3): строки словаря —
+// в view-данные ДО рендера (Р-16); заголовок передан готовым (список/форма
+// переводятся, карточка заявки — русский заголовок, экран вне охвата шага).
+HttpViewData basePageData(const std::string& title, i18n::Lang lang)
 {
     HttpViewData data;
+    i18n::insertUiStrings(data, lang);
     data.insert("pageTitle", title);
     data.insert("activeTab", std::string("applications"));
     return data;
@@ -337,9 +342,13 @@ void ApplicationsCtrl::listPage(
     }
     ApplicationsService::list(
         app().getDbClient("para"), session.userId, statusFilter,
-        [cb = std::move(cb),
-         status = statusFilter](ApplicationsService::Result r) mutable {
-            HttpViewData data = basePageData("Мои заявки · Пара");
+        [cb = std::move(cb), status = statusFilter,
+         lang = i18n::resolveRequestLang(req)](
+            ApplicationsService::Result r) mutable {
+            // 5.18 (шаг 3): язык — para_lang → Accept-Language → ru;
+            // строки словаря — в view-данные ДО рендера (Р-16).
+            HttpViewData data =
+                basePageData(i18n::pageTitleOf("apps.title", lang), lang);
             if (!r.ok)
             {
                 // Ошибка БД при сборке страницы (03 §5.3): каркас с
@@ -368,8 +377,10 @@ void ApplicationsCtrl::newPage(
     // типов и профиль страница не хардкодит: их грузит клиент
     // (GET /v1/application-types и /v1/me — 02 §5.2), рендерит app.js;
     // состояния загрузки/ошибки — в шаблоне и app.js (03 §5.1/§5.3).
-    (void)req;
-    HttpViewData data = basePageData("Новая заявка · Пара");
+    // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера (Р-16).
+    const auto lang = i18n::resolveRequestLang(req);
+    HttpViewData data =
+        basePageData(i18n::pageTitleOf("apps.formTitle", lang), lang);
     // Имя шаблона — application_form (подчёркивание): drogon_ctl 1.9.14
     // генерирует из имени файла имя C++-класса, дефис не компилирует
     // (прецедент Э7 экрана «Расписание»: schedule_today/schedule_week).
@@ -382,6 +393,9 @@ void ApplicationsCtrl::cardPage(
     int64_t applicationId)
 {
     const auto session = req->attributes()->get<para::SessionInfo>("session");
+    // 5.18 (шаг 3): каркас карточки — тот же бандл (тело экрана
+    // по-русски: карточка заявки — вторичный экран, вне охвата шага 3).
+    const auto lang = i18n::resolveRequestLang(req);
     auto db = app().getDbClient("para");
     // РЕШЕНИЕ ПО GUARD на этом path-id (задокументировано в шапке
     // заголовка): OwnershipGuard::check(Table::Applications) ДО любой отдачи
@@ -395,14 +409,14 @@ void ApplicationsCtrl::cardPage(
     // move в одной ветке оставил бы следующей пустой std::function).
     OwnershipGuard::check(
         db, OwnershipGuard::Table::Applications, session.userId, applicationId,
-        [db, applicationId, cb](OwnershipGuard::Verdict v) mutable {
+        [db, applicationId, cb, lang](OwnershipGuard::Verdict v) mutable {
             switch (v)
             {
                 case OwnershipGuard::Verdict::Own:
                     ApplicationsService::one(
                         db, applicationId,
-                        [cb](ApplicationsService::OneResult r) mutable {
-                            HttpViewData data = basePageData("Заявка · Пара");
+                        [cb, lang](ApplicationsService::OneResult r) mutable {
+                            HttpViewData data = basePageData("Заявка · Пара", lang);
                             HttpStatusCode code = k200OK;
                             switch (r.status)
                             {
@@ -434,7 +448,7 @@ void ApplicationsCtrl::cardPage(
                 {
                     // Обе ситуации — одна нейтральная карточка «Не нашли то,
                     // что искали» (03 §5.3); коды статуса разные.
-                    HttpViewData data = basePageData("Заявка · Пара");
+                    HttpViewData data = basePageData("Заявка · Пара", lang);
                     data.insert("mode", std::string("guard"));
                     auto resp = HttpResponse::newHttpViewResponse(
                         "application", std::move(data));
@@ -448,7 +462,7 @@ void ApplicationsCtrl::cardPage(
                 {
                     // Ошибка БД — fail-closed (разрешением не считается):
                     // карточка «Сервис не отвечает», 500.
-                    HttpViewData data = basePageData("Заявка · Пара");
+                    HttpViewData data = basePageData("Заявка · Пара", lang);
                     data.insert("mode", std::string("dberror"));
                     auto resp = HttpResponse::newHttpViewResponse(
                         "application", std::move(data));
