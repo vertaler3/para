@@ -160,15 +160,82 @@ void NotificationsFeedCtrl::markAllRead(
 
 // --- Страничная плоскость (Э7, экран «Уведомления»; см. шапку заголовка) --
 
+namespace {
+
+// 5.17: ?segment= — notifications (по умолчанию) | news | events; иное
+// непустое значение → false → 400 bad_request (паттерн parseSegmentQuery
+// ScheduleCtrl: чужое имя сегмента не молчит пустой страницей).
+bool parseSegment(const HttpRequestPtr& req, std::string& out)
+{
+    out = req->getParameter("segment");
+    if (out.empty())
+        out = "notifications";
+    return out == "notifications" || out == "news" || out == "events";
+}
+
+// 400 по 02 §5.1: страница — JSON {error:{code,message}}; htmx-запросу —
+// HTML-фрагмент (02 §5.1, Р-19; копия badSegmentRequest ScheduleCtrl).
+HttpResponsePtr badSegment(bool htmx)
+{
+    const std::string message =
+        "segment — notifications|news|events";
+    if (!htmx)
+        return api::errorResponse("bad_request", message, k400BadRequest);
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setStatusCode(k400BadRequest);
+    resp->setContentTypeCode(CT_TEXT_HTML);
+    resp->setBody("<div class=\"notice danger\" role=\"alert\">" +
+                  HttpViewData::htmlTranslate(message) + "</div>");
+    return resp;
+}
+
+}  // namespace
+
 void NotificationsFeedCtrl::page(
     const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb)
 {
-    (void)req;  // сессию проверил LoginFilter (303 без неё — страница);
-                // данных страница не содержит — view-данные только каркасные
+    // Сессию проверил LoginFilter (303 без неё — страница); данных страница
+    // не содержит — view-данные только каркасные + выбранный сегмент 5.17.
+    std::string segment;
+    if (!parseSegment(req, segment))
+    {
+        cb(badSegment(false));
+        return;
+    }
     HttpViewData data;
     data.insert("pageTitle", std::string("Уведомления · Пара"));
     // Экран НЕ таб (03 §3.2: пять табов, колокольчик — в шапке): пустой
     // activeTab → ни один пункт таб-бара не получает aria-current.
     data.insert("activeTab", std::string(""));
+    // Сегмент «Уведомления | Новости | События» (5.17): партиал читает и
+    // рисует переключатель с нужным aria-pressed; данные — клиент (шапка
+    // NotificationsFeedCtrl.h).
+    data.insert("segment", segment);
     cb(HttpResponse::newHttpViewResponse("notifications", std::move(data)));
+}
+
+void NotificationsFeedCtrl::segment(
+    const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb)
+{
+    // Фрагменты — только по htmx (02 §3.2: HX-Request); прямой заход — на
+    // страницу (браузер сам вернётся к сегменту через query страницы).
+    const bool htmx = req->getHeader("HX-Request") == "true";
+    if (!htmx)
+    {
+        cb(HttpResponse::newRedirectionResponse("/notifications",
+                                                k303SeeOther));
+        return;
+    }
+    std::string segment;
+    if (!parseSegment(req, segment))
+    {
+        cb(badSegment(true));
+        return;
+    }
+    HttpViewData data;
+    data.insert("segment", segment);
+    // Партиал-оболочка (разметка состояний — данные грузит клиент из
+    // /v1/notifications и /v1/news; имя шаблона — файл без расширения).
+    cb(HttpResponse::newHttpViewResponse("notifications_segment",
+                                         std::move(data)));
 }

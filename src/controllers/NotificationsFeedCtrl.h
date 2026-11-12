@@ -34,6 +34,17 @@ using namespace drogon;
 //       грузит клиент ТЕМИ ЖЕ JSON-роутами, что стоят за API выше
 //       (паттерн views/rooms.csp, Э7). Контроллер остаётся тонким:
 //       страница — только каркасные view-данные pageTitle/activeTab.
+//       5.17: сегменты «Уведомления | Новости | События» — query
+//       ?segment= notifications (по умолчанию) | news | events; иное
+//       значение → 400 bad_request (как ?segment у /schedule, 02 §5.1).
+//   GET /notifications/segment — htmx-фрагмент сегмента (5.17, паттерн
+//       /schedule/segment из Э7/Р-18): при HX-Request: true — партиал
+//       notifications_segment (outerHTML-обмен #notifications-segment),
+//       при прямом заходе → 303 на /notifications. Фрагмент — ТОЛЬКО
+//       разметка-оболочка (сегмент-переключатель + состояния 03 §5):
+//       данные всех трёх вкладок клиент грузит JSON-роутами (лента —
+//       /v1/notifications выше, новости/события — GET /v1/news, NewsCtrl)
+//       — экран клиент-рендеренный, в отличие от SSR-расписания.
 //
 // Роуты не конфликтуют: read-all/settings — статические сегменты (3-й
 // уровень), {id}/read — 4-й уровень; статический приоритетнее (сверено
@@ -58,6 +69,8 @@ class NotificationsFeedCtrl : public HttpController<NotificationsFeedCtrl>
                   "/v1/notifications/read-all", Post, "LoginFilter");
     ADD_METHOD_TO(NotificationsFeedCtrl::page, "/notifications", Get,
                   "LoginFilter");
+    ADD_METHOD_TO(NotificationsFeedCtrl::segment,
+                  "/notifications/segment", Get, "LoginFilter");
     METHOD_LIST_END
 
     void feed(const HttpRequestPtr& req,
@@ -69,4 +82,6 @@ class NotificationsFeedCtrl : public HttpController<NotificationsFeedCtrl>
                      std::function<void(const HttpResponsePtr&)>&& cb);
     void page(const HttpRequestPtr& req,
               std::function<void(const HttpResponsePtr&)>&& cb);
+    void segment(const HttpRequestPtr& req,
+                 std::function<void(const HttpResponsePtr&)>&& cb);
 };

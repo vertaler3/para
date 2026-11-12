@@ -172,6 +172,22 @@ a.notification,button.notification{width:100%;border:0;background:var(--clear);p
 .notif-skeleton .skeleton{margin:0}
 .notif-skeleton .sk-icon{width:24px;height:24px;border-radius:var(--r-full)}
 .notif-skeleton .sk-lines{display:grid;gap:.5rem;align-content:start}
+/* 5.17: сегменты «Уведомления | Новости | События» — каркасный .segments
+   (03 §2.8), отступ до содержимого вкладки; строки новостей/событий —
+   бейдж категории + дата публикации (flex-wrap на 360px), заголовок
+   весом 600 (редакционная лента — состояния прочитанности НЕТ, точек
+   нет), дата/место события и тело — --text-2, дата публикации --text-3
+   (как .nwhen). Скелетон новости — бейдж-пилюля вместо иконки-круга.
+   Новых цветовых пар НЕТ — только baseline-токены contrast_check. */
+.notifications-segments{margin:0 0 1rem}
+.news-item{border-bottom:1px solid var(--border);padding:1.25rem 0}
+.news-item:last-child{border-bottom:0}
+.news-item .news-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.news-item .news-date{font-size:.75rem;color:var(--text-3)}
+.news-item h2{font-size:1rem;line-height:1.5;font-weight:600;margin-top:.6rem}
+.news-item .news-meta{font-size:.875rem;color:var(--text-2);margin-top:.35rem}
+.news-item .news-body{font-size:.875rem;color:var(--text-2);margin-top:.5rem}
+.notif-skeleton .sk-badge{width:72px;height:20px;border-radius:var(--r-full)}
 
 /* ==== Экран «Профиль» (views/profile.csp, 03 §4.7; Э7, экран 4 из 4) ====
    QR-карточка (5.9) и читательский билет (5.12), настройки уведомлений,

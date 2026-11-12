@@ -214,13 +214,47 @@ $$ << esc(login.empty() ? "сотрудник учебного офиса" : log
     </div>
   </section>
 
-  <!-- ==== Объявления (POST /v1/staff/announcements + GET
+  <!-- ==== Объявления и новости (POST /v1/staff/announcements + GET
        /v1/announcements): ПОДПИСЬ «без push-уведомления, только в ленте» —
-       01 §4.5 (объявления без push и без уведомлений) ==== -->
+       01 §4.5 (объявления БЕЗ push и без уведомлений; новости 5.17 — те
+       же правила, NewsService уведомлений не создаёт). «Тип записи»
+       (5.17): kind='announcement' — прежняя ветка байт-в-байт; kind='news'
+       — дополнительно категория (словарь CHECK 0007), дата и место
+       события, публикация уходит в таблицу news → сегмент «Новости»
+       экрана уведомлений; поля kind=news показывает/прячет app.js. ==== -->
   <section id="announcements" class="section" aria-labelledby="staff-announce-title">
     <div class="section-title"><h2 id="staff-announce-title">Объявления</h2></div>
     <div class="content-form">
       <form data-announce-form novalidate>
+        <fieldset>
+          <legend>Тип записи</legend>
+          <label class="option"><input type="radio" name="announce-kind" value="announcement" checked>Объявление — в ленту объявлений</label>
+          <label class="option"><input type="radio" name="announce-kind" value="news">Новость — в ленту «Новости»</label>
+        </fieldset>
+        <!-- Поля kind=news (5.17): категория обязательна (словарь CHECK
+             0007), дата события и место — опциональны (у новости без
+             события event_at/location NULL); datetime-local даёт
+             «ГГГГ-ММ-ДДTЧЧ:ММ» — app.js дополняет до строгого
+             «…THH:MM:SSZ» контракта NewsService -->
+        <div data-announce-news-fields hidden>
+          <div class="field">
+            <label for="announce-category">Категория</label>
+            <select id="announce-category" data-announce-category>
+              <option value="official">Официальная</option>
+              <option value="conference">Конференция</option>
+              <option value="org">Организация</option>
+              <option value="event">Событие</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="announce-event">Дата и время события — если у новости есть событие</label>
+            <input type="datetime-local" id="announce-event" data-announce-event>
+          </div>
+          <div class="field">
+            <label for="announce-location">Место события</label>
+            <input type="text" id="announce-location" data-announce-location maxlength="120" placeholder="например, Корпус Б, ауд. В-402">
+          </div>
+        </div>
         <div class="field">
           <label for="announce-title">Заголовок</label>
           <input type="text" id="announce-title" data-announce-title maxlength="200" placeholder="Например: Смена режима работы деканата">

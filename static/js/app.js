@@ -532,6 +532,9 @@
       ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
     };
     const NEWS_TYPE = { schedule: 'Расписание', deadline: 'Дедлайн', application: 'Заявка', announcement: 'Объявление' };
+    /* категории новостей 5.17 — словарь CHECK 0007, метки те же, что на
+       сегменте «Новости» экрана уведомлений */
+    const NEWS_CATEGORY = { official: 'Официальная', conference: 'Конференция', org: 'Организация', event: 'Событие' };
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -725,24 +728,42 @@
     };
 
     /* --- виджет «Что нового» → /notifications; счётчик «· N»; ночью
-       заголовок — «За ночь: N событий» (03 §4.2) ------------------------- */
-    const renderNews = (items, failed, unreadCount) => {
+       заголовок — «За ночь: N событий» (03 §4.2). 5.17: к уведомлениям
+       агрегата ПОДМЕШИВАЮТСЯ 1–2 свежие новости (freshNews — первые
+       строки GET /v1/news, он отсортирован published_at DESC; null —
+       fetch не удался, виджет не роняем, остаются уведомления) —
+       решение «как читает данные» за клиентским fetch: агрегат
+       /v1/dashboard новостями не владеет (DashboardService — уведомления),
+       а прецедент подмешивания поверх агрегата — renderTomorrow с его
+       GET /v1/schedule/week. Строки-новости ведут на сегмент «Новости»
+       (/notifications?segment=news — живая страница), счётчик «· N»
+       считает показанные строки. ---------------------------------------- */
+    const renderNews = (items, failed, unreadCount, freshNews) => {
       show('[data-news-loading]', false);
       show('[data-news-error]', Boolean(failed));
       const body = $$('[data-news-body]');
       const title = $$('[data-news-title]');
       if (!body) return;
+      const mixed = Array.isArray(freshNews) ? freshNews.slice(0, 2) : [];
       const nightMode = (() => { const h = new Date().getHours(); return h >= 23 || h < 6; })();
       if (title) {
         title.textContent = nightMode
           ? 'За ночь: ' + (unreadCount || 0) + ' ' + plural(unreadCount || 0, 'событие', 'события', 'событий')
-          : (items.length ? 'Что нового · ' + items.length : 'Что нового');
+          : ((items.length + mixed.length) ? 'Что нового · ' + (items.length + mixed.length) : 'Что нового');
       }
       if (failed) { body.hidden = true; return; }
-      if (!items.length) { body.hidden = true; show('[data-news-empty]', true); return; }
+      if (!items.length && !mixed.length) { body.hidden = true; show('[data-news-empty]', true); return; }
       show('[data-news-empty]', false);
       body.hidden = false;
       body.replaceChildren();
+      mixed.forEach((n) => {
+        const row = el('div', 'news-row');
+        const link = el('a', null, n.title || '');
+        link.href = '/notifications?segment=news';
+        const caption = el('p', 'caption', (NEWS_CATEGORY[n.category] || 'Новость') + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
+        row.append(link, caption);
+        body.append(row);
+      });
       items.forEach((n) => {
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
@@ -871,7 +892,13 @@
       renderToday(Array.isArray(data.today) ? data.today : [], hit('today'));
       renderDeadlines(Array.isArray(data.deadlines) ? data.deadlines : [], hit('deadlines'));
       renderApplications(Array.isArray(data.applications) ? data.applications : [], hit('applications'));
-      renderNews(Array.isArray(data.news) ? data.news : [], hit('news'), data.unread_count);
+      /* 5.17: свежие новости для «Что нового» — отдельный GET /v1/news
+         (клиентский, как /v1/schedule/week у renderTomorrow); сбой —
+         freshNews null, виджет остаётся на уведомлениях агрегата */
+      let freshNews = null;
+      const newsFeed = await fetchJSON('/v1/news');
+      if (newsFeed && Array.isArray(newsFeed.news)) freshNews = newsFeed.news.slice(0, 2);
+      renderNews(Array.isArray(data.news) ? data.news : [], hit('news'), data.unread_count, freshNews);
       await applyDayMode();
     };
     const retry = $$('[data-dashboard-retry]');
@@ -2641,7 +2668,10 @@
                                        (views/dashboard.csp:126)
          /exams           → /grades   — сессия/экзамены живут на /grades
          /room-bookings   → /rooms    — брони: каталог и сетка аудиторий
-         /news            → /notifications — лента новостей = уведомления
+         /news            → /notifications?segment=news — лента новостей
+                                       5.17: сегмент «Новости» экрана
+                                       уведомлений (страница живая,
+                                       ?segment= читает NotificationsFeedCtrl::page)
          /ics, /ics/…     → /profile  — подписка ICS — карточка профиля
                                        (/ics/{token} — отдача календаря,
                                        не экран)
@@ -2652,7 +2682,7 @@
       '/deadlines': '/grades',
       '/exams': '/grades',
       '/room-bookings': '/rooms',
-      '/news': '/notifications'
+      '/news': '/notifications?segment=news'
     };
     const LIVE_FIRST_SEG = new Set([
       '', 'login', 'schedule', 'grades', 'applications', 'profile',
@@ -2741,106 +2771,277 @@
       }
     };
 
-    /* тап по строке: пометка В ФОНЕ, deep_link-переход не ждёт её */
-    const listEl = document.querySelector('[data-feed-list]');
-    if (listEl) {
-      listEl.addEventListener('click', (event) => {
-        const row = event.target.closest('[data-notif-id]');
-        if (!row || !row.classList.contains('is-unread')) return;
-        const id = Number(row.dataset.notifId);
-        const item = state.items.find((x) => x.id === id);
-        if (!item || item.read_at) return; // повторный тап до ответа/уже прочитано
-        if (!navigator.onLine) { applyOffline(true); return; }
-        fetch('/v1/notifications/' + id + '/read', {
-          method: 'POST',
-          headers: { Accept: 'application/json' },
-          keepalive: true /* фон: запрос переживает уход по deep_link */
-        }).then((resp) => {
-          if (!resp.ok) return; /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
-          item.read_at = new Date().toISOString();
-          row.classList.remove('is-unread');
-          row.classList.add('is-read');
-          const dot = row.querySelector('.unread-mark');
-          if (dot) dot.remove();
-          /* синхронизация бейджа колокольчика — та же каркасная функция */
-          refreshUnreadBadge();
-        }).catch(() => { /* сеть ушла — точка остаётся, баннер покажет каркас */ });
-        /* <a>-строка: браузер сам уходит по deep_link (preventDefault нет);
-           строки без deep_link (<button>) остаются на месте — точка гаснет */
-      });
-    }
+    /* ===== 5.17: сегменты «Уведомления | Новости | События» ============
+       Экран переключается htmx-фрагментами GET /notifications/segment
+       (outerHTML #notifications-segment — паттерн /schedule/segment,
+       Э7/Р-18): после обмена initCurrentSegment() перечитывает
+       data-segment контейнера и запускает логику активной вкладки.
+       Данные — клиент: лента — прежний GET /v1/notifications (Э6, без
+       изменений), новости/события — GET /v1/news (NewsCtrl, 5.17).
+       Контролы — делегирование на document: контейнер сегмента
+       перерисовывается htmx ЦЕЛИКОМ, слушатели на его элементах не
+       переживают обмен (тот же приём, что у sheet «Детали пары» экрана
+       «Расписание»). */
+    const NEWS_CATEGORY = {
+      official: 'Официальная', conference: 'Конференция',
+      org: 'Организация', event: 'Событие'
+    };
+    /* «D месяца, HH:MM» из ISO-метки новости (published_at/event_at —
+       строки «…Z»); тот же формат, что у stampOf/humanizeDates выше */
+    const newsDayLabel = (iso) => {
+      if (typeof iso !== 'string' || iso.length < 10) return '';
+      const p = iso.slice(0, 10).split('-').map(Number);
+      if (p.length !== 3 || p.some(Number.isNaN)) return '';
+      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+      if (Number.isNaN(day.getTime())) return '';
+      const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return iso.length >= 16 ? label + ', ' + iso.slice(11, 16) : label;
+    };
+    /* строка новости (5.17, 01 §5.17 «На экране»): бейдж категории
+       (словарь CHECK 0007), заголовок, дата и место события (когда есть),
+       тело; дата публикации — справа от бейджа */
+    const renderNewsRow = (n) => {
+      const row = el('article', 'news-item');
+      const head = el('div', 'news-head');
+      head.append(el('span', 'badge', NEWS_CATEGORY[n.category] || 'Новость'));
+      const pub = stampOf(n.published_at);
+      if (pub) head.append(el('span', 'news-date', pub));
+      row.append(head);
+      row.append(el('h2', null, humanizeDates(n.title) || 'Новость'));
+      const meta = [];
+      if (n.event_at) meta.push(newsDayLabel(n.event_at));
+      if (n.location) meta.push(n.location);
+      if (meta.length) row.append(el('p', 'news-meta', meta.join(' · ')));
+      if (n.body) row.append(el('p', 'news-body', humanizeDates(n.body)));
+      return row;
+    };
+    const newsState = { mode: null, cursor: null, items: [] };
+    const renderNewsList = () => {
+      const list = document.querySelector('[data-news-list]');
+      if (!list) return;
+      list.replaceChildren();
+      newsState.items.forEach((n) => list.append(renderNewsRow(n)));
+      list.hidden = !newsState.items.length;
+    };
+    /* Страница новостей/событий: «События» — те же строки /v1/news с
+       event_at (BE-фильтра «только события» в API нет, 02 §5.2 — фильтр
+       на клиенте). Страница могла не дать ни одного события: пока
+       строк-событий нет и есть next_cursor, догружаем следующую страницу
+       сами (кап 10 — лента конечна, детектор next_cursor её закрывает). */
+    const loadNews = async (cursor, depth) => {
+      show('[data-news-error]', false);
+      show('[data-news-warn]', false);
+      if (!cursor) {
+        show('[data-news-list]', false);
+        show('[data-news-empty]', false);
+        show('[data-news-more]', false);
+        show('[data-news-loading]', true);
+      }
+      const data = await fetchJSON('/v1/news' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+      show('[data-news-loading]', false);
+      if (!data || !Array.isArray(data.news)) {
+        /* офлайн: баннер уже показал каркас (fetchJSON); ошибка API —
+           03 §5.3: первая страница — экранная ошибка с «Повторить»,
+           догрузка — inline у «Ещё» (повтор — та же кнопка) */
+        if (cursor) {
+          const warn = document.querySelector('[data-news-warn]');
+          if (warn) warn.textContent = 'Не получилось загрузить ещё — попробуйте ещё раз';
+          show('[data-news-warn]', true);
+        } else {
+          show('[data-news-list]', false);
+          show('[data-news-error]', true);
+        }
+        return;
+      }
+      newsState.cursor = data.next_cursor || null;
+      const page = newsState.mode === 'events'
+        ? data.news.filter((n) => typeof n.event_at === 'string' && n.event_at)
+        : data.news;
+      newsState.items = cursor ? newsState.items.concat(page) : page;
+      renderNewsList();
+      show('[data-news-more]', Boolean(newsState.cursor));
+      if (!newsState.items.length) {
+        if (newsState.mode === 'events' && newsState.cursor && (depth || 0) < 10) {
+          /* страница без событий — искать дальше (лента свежее сверху,
+             анонсы могут быть глубже первой страницы) */
+          loadNews(newsState.cursor, (depth || 0) + 1);
+          return;
+        }
+        show('[data-news-empty]', true);
+      }
+    };
+    const initCurrentSegment = () => {
+      const segBox = document.getElementById('notifications-segment');
+      const seg = segBox && segBox.dataset.segment ? segBox.dataset.segment : 'notifications';
+      if (seg === 'news' || seg === 'events') {
+        newsState.mode = seg;
+        newsState.cursor = null;
+        newsState.items = [];
+        loadNews(null, 0);
+        return;
+      }
+      /* лента Э6: фрагмент приехал с чипами по умолчанию («Все», без
+         unread) — state приводится к разметке, первая страница */
+      state.type = '';
+      state.unread = false;
+      state.cursor = null;
+      state.items = [];
+      load(null);
+    };
+    initCurrentSegment();
+    document.body.addEventListener('htmx:afterSwap', (e) => {
+      const target = e.detail && e.detail.target;
+      if (target && target.id === 'notifications-segment') initCurrentSegment();
+    });
+
+    /* --- тап по строке ленты: пометка В ФОНЕ, deep_link-переход не ждёт её */
+    const markReadInBackground = (row) => {
+      if (!row.classList.contains('is-unread')) return;
+      const id = Number(row.dataset.notifId);
+      const item = state.items.find((x) => x.id === id);
+      if (!item || item.read_at) return; // повторный тап до ответа/уже прочитано
+      if (!navigator.onLine) { applyOffline(true); return; }
+      fetch('/v1/notifications/' + id + '/read', {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        keepalive: true /* фон: запрос переживает уход по deep_link */
+      }).then((resp) => {
+        if (!resp.ok) return; /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
+        item.read_at = new Date().toISOString();
+        row.classList.remove('is-unread');
+        row.classList.add('is-read');
+        const dot = row.querySelector('.unread-mark');
+        if (dot) dot.remove();
+        /* синхронизация бейджа колокольчика — та же каркасная функция */
+        refreshUnreadBadge();
+      }).catch(() => { /* сеть ушла — точка остаётся, баннер покажет каркас */ });
+      /* <a>-строка: браузер сам уходит по deep_link (preventDefault нет);
+         строки без deep_link (<button>) остаются на месте — точка гаснет */
+    };
 
     /* «Прочитать всё»: 204 идемпотентно → точки сняты, бейдж обнулён */
-    const readAllBtn = document.querySelector('[data-read-all]');
-    if (readAllBtn) {
-      readAllBtn.addEventListener('click', async () => {
-        if (readAllBtn.disabled) return;
-        if (!navigator.onLine) { applyOffline(true); return; }
-        readAllBtn.disabled = true;
-        try {
-          const resp = await fetch('/v1/notifications/read-all', {
-            method: 'POST',
-            headers: { Accept: 'application/json' }
-          });
-          if (resp.status === 204) {
-            if (state.unread) {
-              /* замечание ревью раунда 1: под фильтром «только
-                 непрочитанные» после read-all локально показанные
-                 прочитанные строки НЕ оставляем — сервер на этот фильтр
-                 теперь отвечает пусто («По этой теме пока ничего не
-                 было», 03 §5.2); перечитываем первую страницу */
-              load(null);
-            } else {
-              const now = new Date().toISOString();
-              state.items.forEach((n) => { if (!n.read_at) n.read_at = now; });
-              renderList();
-            }
-            refreshUnreadBadge();
-            toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
+    const readAll = async (readAllBtn) => {
+      if (readAllBtn.disabled) return;
+      if (!navigator.onLine) { applyOffline(true); return; }
+      readAllBtn.disabled = true;
+      try {
+        const resp = await fetch('/v1/notifications/read-all', {
+          method: 'POST',
+          headers: { Accept: 'application/json' }
+        });
+        if (resp.status === 204) {
+          if (state.unread) {
+            /* замечание ревью раунда 1: под фильтром «только
+               непрочитанные» после read-all локально показанные
+               прочитанные строки НЕ оставляем — сервер на этот фильтр
+               теперь отвечает пусто («По этой теме пока ничего не
+               было», 03 §5.2); перечитываем первую страницу */
+            load(null);
           } else {
-            let message = 'Не получилось пометить всё прочитанным';
-            try {
-              const body = await resp.json();
-              if (body && body.error && body.error.message) message = body.error.message;
-            } catch (e) { /* тело не JSON */ }
-            toast(message);
+            const now = new Date().toISOString();
+            state.items.forEach((n) => { if (!n.read_at) n.read_at = now; });
+            renderList();
           }
-        } catch (e) {
-          if (!navigator.onLine) applyOffline(true);
-          else toast('Не получилось пометить всё прочитанным. Проверьте интернет — и попробуйте ещё раз');
-        } finally {
-          readAllBtn.disabled = false;
+          refreshUnreadBadge();
+          toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
+        } else {
+          let message = 'Не получилось пометить всё прочитанным';
+          try {
+            const body = await resp.json();
+            if (body && body.error && body.error.message) message = body.error.message;
+          } catch (e) { /* тело не JSON */ }
+          toast(message);
         }
-      });
-    }
+      } catch (e) {
+        if (!navigator.onLine) applyOffline(true);
+        else toast('Не получилось пометить всё прочитанным. Проверьте интернет — и попробуем ещё раз');
+      } finally {
+        readAllBtn.disabled = false;
+      }
+    };
 
-    /* чипы-фильтры: смена — первая страница нового фильтра (cursor сброс) */
-    document.querySelectorAll('[data-feed-filter]').forEach((chip) => {
-      chip.addEventListener('click', () => {
+    /* клики контролов — делегирование (переживают htmx-обмен сегмента):
+       строки ленты, «Прочитать всё», чипы-фильтры (смена — первая
+       страница нового фильтра, cursor сброс), «Ещё»/«Повторить» обеих
+       вкладок */
+    document.addEventListener('click', (event) => {
+      const row = event.target.closest('[data-notif-id]');
+      if (row) { markReadInBackground(row); return; }
+      const readAllBtn = event.target.closest('[data-read-all]');
+      if (readAllBtn) { readAll(readAllBtn); return; }
+      const chip = event.target.closest('[data-feed-filter]');
+      if (chip) {
         if (chip.getAttribute('aria-pressed') === 'true') return;
         state.type = chip.dataset.feedFilter || '';
         document.querySelectorAll('[data-feed-filter]').forEach((c) => {
           c.setAttribute('aria-pressed', String(c === chip));
         });
         load(null);
-      });
-    });
-    const unreadChip = document.querySelector('[data-feed-unread]');
-    if (unreadChip) {
-      unreadChip.addEventListener('click', () => {
+        return;
+      }
+      const unreadChip = event.target.closest('[data-feed-unread]');
+      if (unreadChip) {
         state.unread = unreadChip.getAttribute('aria-pressed') !== 'true';
         unreadChip.setAttribute('aria-pressed', String(state.unread));
         load(null);
+        return;
+      }
+      const moreBtn = event.target.closest('[data-feed-more]');
+      if (moreBtn) {
+        if (state.cursor) load(state.cursor);
+        return;
+      }
+      const feedRetry = event.target.closest('[data-feed-retry]');
+      if (feedRetry) { load(null); return; }
+      const newsMore = event.target.closest('[data-news-more]');
+      if (newsMore) {
+        if (newsState.cursor) loadNews(newsState.cursor, 0);
+        return;
+      }
+      const newsRetry = event.target.closest('[data-news-retry]');
+      if (newsRetry) { loadNews(null, 0); return; }
+    });
+
+    /* --- состояния ПЕРЕКЛЮЧЕНИЯ сегмента (03 §5.3/§5.4; паттерн экрана
+       «Расписание»): ошибка сетевого GET /notifications/segment — блок
+       [data-segment-error], прежний сегмент остаётся на месте;
+       «Повторить» перезапускает запрос элемента, на котором он оборвался
+       (ретриггер клика; 03 §5.3 — «Повторить» всегда реально
+       перезапрашивает); офлайн — баннер каркаса; истёкшая сессия (фильтр
+       отвечает 303 → /login, XHR следует редиректу) — браузерный переход
+       на вход. */
+    const segmentErrorBox = document.querySelector('[data-segment-error]');
+    let segmentRetryElt = null;
+    document.body.addEventListener('htmx:afterRequest', (e) => {
+      if (!segmentErrorBox) return;
+      if (e.detail && e.detail.successful) {
+        segmentErrorBox.hidden = true;
+        return;
+      }
+      if (e.detail && e.detail.elt) segmentRetryElt = e.detail.elt;
+      segmentErrorBox.hidden = false;
+    });
+    document.body.addEventListener('htmx:sendError', (e) => {
+      if (!navigator.onLine) applyOffline(true);
+      if (segmentErrorBox) {
+        if (e.detail && e.detail.elt) segmentRetryElt = e.detail.elt;
+        segmentErrorBox.hidden = false;
+      }
+    });
+    document.body.addEventListener('htmx:beforeSwap', (e) => {
+      const xhr = e.detail && e.detail.xhr;
+      if (xhr && /\/login(?:\?.*)?$/.test(xhr.responseURL || '')) {
+        e.detail.shouldSwap = false;
+        window.location.href = '/login';
+      }
+    });
+    const segmentRetryBtn = document.querySelector('[data-segment-retry]');
+    if (segmentRetryBtn) {
+      segmentRetryBtn.addEventListener('click', () => {
+        if (segmentRetryElt) segmentRetryElt.click();
+        else window.location.reload();
       });
     }
-    const moreBtn = document.querySelector('[data-feed-more]');
-    if (moreBtn) moreBtn.addEventListener('click', () => {
-      if (state.cursor) load(state.cursor);
-    });
-    const feedRetry = document.querySelector('[data-feed-retry]');
-    if (feedRetry) feedRetry.addEventListener('click', () => load(null));
-
-    load(null);
   }
 
   /* ---------- экран «Профиль» (views/profile.csp; 03 §4.7, §5) ---------- */
@@ -3842,15 +4043,37 @@
       });
     }
 
-    /* --- объявления (POST /v1/staff/announcements; лента GET
-       /v1/announcements?cursor=) ------------------------------------------ */
+    /* --- объявления и новости (POST /v1/staff/announcements — kind
+       'announcement' по умолчанию / 'news' 5.17; лента GET
+       /v1/announcements?cursor= — лента объявлений, новости живут в
+       сегменте «Новости» экрана уведомлений) ------------------------------ */
     const announceForm = document.querySelector('[data-announce-form]');
     const announceTitle = document.querySelector('[data-announce-title]');
     const announceBody = document.querySelector('[data-announce-body]');
     const announceGroup = document.querySelector('[data-announce-group]');
     const announceErr = document.querySelector('[data-announce-error]');
+    const announceNewsFields = document.querySelector('[data-announce-news-fields]');
+    const announceCategory = document.querySelector('[data-announce-category]');
+    const announceEvent = document.querySelector('[data-announce-event]');
+    const announceLocation = document.querySelector('[data-announce-location]');
     const showAnnounceErr = (text) => { if (announceErr) { announceErr.textContent = text; announceErr.hidden = !text; } };
     if (announceForm) {
+      /* «Тип записи» (5.17): kind=news показывает категорию/дату/место
+         события и меняет подпись кнопки; сброс формы (reset/успех)
+         возвращает тип «Объявление» — syncKindUI приводит UI к радиокнопке */
+      const announceKind = () => {
+        const checked = announceForm.querySelector('input[name="announce-kind"]:checked');
+        return checked ? checked.value : 'announcement';
+      };
+      const syncKindUI = () => {
+        const isNews = announceKind() === 'news';
+        if (announceNewsFields) announceNewsFields.hidden = !isNews;
+        const btn = announceForm.querySelector('button[type="submit"]');
+        if (btn) btn.textContent = isNews ? 'Опубликовать новость' : 'Опубликовать объявление';
+      };
+      announceForm.querySelectorAll('input[name="announce-kind"]').forEach((radio) => {
+        radio.addEventListener('change', syncKindUI);
+      });
       /* радио «Группе» — включаем поле номера группы */
       announceForm.querySelectorAll('input[name="announce-audience"]').forEach((radio) => {
         radio.addEventListener('change', () => {
@@ -3875,15 +4098,33 @@
           if (!/^[1-9][0-9]*$/.test(g)) { showAnnounceErr('Укажите номер группы — число от 1'); return; }
           payload.audience = ['group:' + Number(g)];
         }
+        if (announceKind() === 'news') {
+          /* kind=news (5.17): категория — словарь CHECK 0007, дата
+             события — datetime-local «ГГГГ-ММ-ДДTЧЧ:ММ» → строгий
+             «…TЧЧ:ММ:SSZ» контракта NewsService (проект — UTC), место —
+             необязательная строка; публикация попадёт в таблицу news */
+          const category = announceCategory ? announceCategory.value : '';
+          if (!category) { showAnnounceErr('Выберите категорию новости'); return; }
+          payload.kind = 'news';
+          payload.category = category;
+          const ev = announceEvent ? announceEvent.value : '';
+          if (ev) payload.event_at = ev.length === 16 ? ev + ':00Z' : ev;
+          const location = announceLocation ? announceLocation.value.trim() : '';
+          if (location) payload.location = location;
+        }
         busy(btn, true, 'Публикуем…');
         const r = await postJSON('/v1/staff/announcements', payload);
         busy(btn, false);
         if (r && r.ok) {
-          /* объявления БЕЗ push и БЕЗ уведомлений — только лента (01 §4.5;
-             подпись об этом стоит в форме) */
-          toast('Объявление опубликовано — оно появится только в ленте');
+          /* объявления и новости БЕЗ push и БЕЗ уведомлений — только
+             лента (01 §4.5; подпись об этом стоит в форме); новость — в
+             сегмент «Новости» экрана уведомлений, НЕ в ленту объявлений */
+          toast(announceKind() === 'news'
+            ? 'Новость опубликована — она появится в ленте «Новости»'
+            : 'Объявление опубликовано — оно появится только в ленте');
           announceForm.reset();
           if (announceGroup) announceGroup.disabled = true;
+          syncKindUI();
           loadFeed(true);
           return;
         }
@@ -3892,6 +4133,7 @@
         if (r.status >= 500) toast(message);
         showAnnounceErr(message);
       });
+      syncKindUI();
     }
     let feedCursor = null;
     const audienceLabel = (a) => {

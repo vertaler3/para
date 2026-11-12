@@ -1,0 +1,159 @@
+<%inc
+#include <string>
+%>
+<%c++
+/* Пара · сегмент экрана «Уведомления» (5.17; 03 §2.8/§4.6). Рендерится
+   страницей views/notifications.csp (активный сегмент — view-переменная
+   из ?segment=) и возвращается контроллером как ОТВЕТ htmx на
+   GET /notifications/segment?segment=… (HX-Request: true) — outerHTML-
+   обмен контейнера #notifications-segment, как «Сегодня|Неделя» у
+   расписания (partials/schedule_today.csp, Э7/Р-18); имя класса —
+   notifications_segment: дефис drogon_ctl 1.9.14 в имя класса не
+   допускает. Фрагмент — ТОЛЬКО разметка-оболочка: экран клиент-
+   рендеренный, данные ленты/новостей/событий грузит static/js/app.js
+   (GET /v1/notifications и GET /v1/news — 02 §5.2), строк-данных в
+   шаблоне нет вовсе (Р-16: {{}} не существует, а json-тела здесь и не
+   нужны). Сегмент «Уведомления» — прежняя лента Э6 БЕЗ изменений
+   (совместимость): разметка переехала сюда дословно. Сегменты
+   «Новости»/«События» — states-оболочки 03 §5 (скелетон/пусто/ошибка/
+   офлайн-баннер каркаса): «События» — те же данные /v1/news, отфильтров
+   по event_at на клиенте (BE-фильтра «только события» в API нет,
+   02 §5.2). Пустые тексты — «Новостей пока нет»/«Событий пока нет»
+   (5.17), форма — паттерн .empty 03 §5.2 (иконка в круге, заголовок,
+   подпись — без действия: читать нечего, «включать» нечего). */
+const std::string segment = @@.get<std::string>("segment");
+const bool isNews = segment == "news";
+const bool isEvents = segment == "events";
+
+// Кнопка сегмента (03 §2.8 segmented — класс .segments каркаса: активный
+// aria-pressed + bg --surface + тень --e1 из app.css; hx-* — паттерн
+// schedule_today.csp:168-177: outerHTML #notifications-segment, push-url
+// для шаринга/обновления, hx-indicator — скелетон страницы,
+// hx-disabled-elt — двойной тап в полёте). Активный сегмент НЕ hx-get'ит
+// сам себя (повторный тап — no-op, aria-pressed уже true).
+const auto segButton = [&segment](const std::string& name,
+                                  const std::string& label) {
+    return std::string("<button type=\"button\" aria-pressed=\"") +
+           (name == segment ? "true" : "false") +
+           "\" hx-get=\"/notifications/segment?segment=" + name +
+           "\" hx-target=\"#notifications-segment\""
+           " hx-swap=\"outerHTML\""
+           " hx-push-url=\"/notifications?segment=" + name +
+           "\" hx-indicator=\"#notifications-indicator\""
+           " hx-disabled-elt=\"this\">" + label + "</button>";
+};
+%>
+<%c++ $$ << "<div id=\"notifications-segment\" class=\"content-narrow\" data-segment=\"" << segment << "\">" <<
+      "<div class=\"segments notifications-segments\" role=\"group\" aria-label=\"Раздел ленты\">" <<
+      segButton("notifications", "Уведомления") <<
+      segButton("news", "Новости") <<
+      segButton("events", "События") <<
+      "</div>"; %>
+<%c++ if (!isNews && !isEvents) { %>
+    <!-- Фильтры + «Прочитать всё» (03 §4.6: чипы, активный — primary-soft;
+         draft notifications.html — чипы и ghost-кнопка одной строкой;
+         row.wrap переносит на 360px). aria-pressed проставляет app.js. -->
+    <div class="row wrap notifications-toolbar">
+      <div class="chips" role="group" aria-label="Фильтр уведомлений">
+        <button class="chip" type="button" data-feed-filter="" aria-pressed="true">Все</button>
+        <button class="chip" type="button" data-feed-filter="schedule" aria-pressed="false">Расписание</button>
+        <button class="chip" type="button" data-feed-filter="deadline" aria-pressed="false">Дедлайны</button>
+        <button class="chip" type="button" data-feed-filter="application" aria-pressed="false">Заявки</button>
+        <button class="chip" type="button" data-feed-filter="announcement" aria-pressed="false">Объявления</button>
+        <button class="chip" type="button" data-feed-unread aria-pressed="false">Непрочитанные</button>
+      </div>
+      <button class="button ghost" type="button" data-read-all>Прочитать всё</button>
+    </div>
+
+    <!-- Скелетон ленты (03 §5.1: 4 строки — иконка-круг 24 + 2 строки
+         текста); прячется app.js по ответу (данные/пусто/ошибка). -->
+    <div data-feed-loading aria-busy="true" aria-label="Загрузка уведомлений">
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+    </div>
+
+    <!-- Ошибка (03 §5.3; states-черновик #error): «Повторить» —
+         повторный fetch первой страницы текущего фильтра. -->
+    <section class="section flow" data-feed-error hidden role="alert">
+      <h3>Не получилось загрузить уведомления</h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-feed-retry>Повторить</button>
+    </section>
+
+    <!-- Пусто: вся лента без фильтров (дословно 03 §5.2, иконка bell-off;
+         действие — настройки уведомлений в профиле, экран следующей
+         очереди Э7). -->
+    <div class="empty" data-feed-empty hidden>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 3A6 6 0 0 1 18 8c0 2.4.4 4 .9 5.3M6.3 6.3C6.1 6.8 6 7.4 6 8c0 7-3 9-3 9h14"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="m2 2 20 20"/></svg></div>
+      <h2>Тихо. Всё под контролем</h2>
+      <p>Новые переносы, дедлайны и статусы заявок появятся здесь — и придут push-ем, если вы включите уведомления</p>
+      <a class="button primary" href="/profile#notifications">Включить уведомления</a>
+    </div>
+
+    <!-- Пустой фильтр (дословно 03 §5.2; без действия) -->
+    <div class="empty" data-feed-empty-filter hidden>
+      <p>По этой теме пока ничего не было</p>
+    </div>
+
+    <!-- Inline-предупреждение неудачной догрузки «Ещё» (03 §5.3): текст
+         ставит app.js; повтор — та же кнопка «Ещё». -->
+    <p class="notice warn" data-feed-warn role="alert" hidden></p>
+
+    <!-- Лента: строки строит app.js из GET /v1/notifications (иконка типа,
+         title, body-превью, время, точка непрочитанного — 03 §4.6).
+         Группировка по типам (02 §5.2) — опция отображения, здесь плоская
+         лента (постановка экрана). -->
+    <div data-feed-list hidden></div>
+
+    <!-- «Ещё» — следующая страница по next_cursor (составная пагинация
+         (created_at, id) — сервис); кнопку прячет app.js при
+         next_cursor=null (постановка экрана). -->
+    <button class="button full" type="button" data-feed-more hidden>Ещё</button>
+<%c++ } else { %>
+    <!-- Скелетон новостей/событий (03 §5.1): 3 строки «бейдж-пилюля +
+         2 строки текста» — форма строки новости (бейдж категории);
+         прячется app.js по ответу. -->
+    <div data-news-loading aria-busy="true" aria-label="Загрузка <%c++ $$ << (isEvents ? std::string("событий") : std::string("новостей")); %>">
+      <div class="notif-skeleton"><span class="skeleton sk-badge"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-badge"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+      <div class="notif-skeleton"><span class="skeleton sk-badge"></span><div class="sk-lines"><span class="skeleton"></span><span class="skeleton short"></span></div></div>
+    </div>
+
+    <!-- Ошибка (03 §5.3): «Повторить» — повторный fetch первой страницы. -->
+    <section class="section flow" data-news-error hidden role="alert">
+      <h3><%c++ $$ << (isEvents ? std::string("Не получилось загрузить события") : std::string("Не получилось загрузить новости")); %></h3>
+      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
+      <button class="button" type="button" data-news-retry>Повторить</button>
+    </section>
+
+    <!-- Пусто (5.17): заголовок дословно из постановки, подпись — в стиле
+         03 §5.2, без действия (лента редакционная, «включать» нечего). -->
+    <div class="empty" data-news-empty hidden>
+<%c++ if (isEvents) { %>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></div>
+      <h2>Событий пока нет</h2>
+      <p>Конференции, турниры и встречи появятся здесь, как только их анонсируют</p>
+<%c++ } else { %>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8V6Z"/></svg></div>
+      <h2>Новостей пока нет</h2>
+      <p>Официальные новости и анонсы появятся здесь, как только их опубликуют</p>
+<%c++ } %>
+    </div>
+
+    <!-- Inline-предупреждение неудачной догрузки «Ещё» (03 §5.3): текст
+         ставит app.js; повтор — та же кнопка «Ещё». -->
+    <p class="notice warn" data-news-warn role="alert" hidden></p>
+
+    <!-- Лента: строки строит app.js из GET /v1/news — бейдж категории,
+         заголовок, дата и место события, тело (5.17); «События» — те же
+         строки с event_at (фильтр на клиенте). -->
+    <div data-news-list hidden></div>
+
+    <!-- «Ещё» — следующая страница по next_cursor (составная пагинация
+         (published_at, id) — NewsService); кнопку прячет app.js при
+         next_cursor=null. -->
+    <button class="button full" type="button" data-news-more hidden>Ещё</button>
+<%c++ } %>
+<%c++ $$ << "</div>"; %>
