@@ -113,6 +113,9 @@ button.change-detail{display:inline-flex;align-items:center;min-height:44px;padd
 .next-schedule{display:inline-flex;align-items:center;gap:.35rem;min-height:44px;margin-top:.5rem;font-size:.8rem;font-weight:550;color:var(--link);text-decoration:none}
 .next-schedule .icon{width:16px;height:16px}
 .next-schedule:hover{text-decoration:underline;text-underline-offset:4px}
+.grade-tags{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .75rem}
+.discipline-row .small.red{margin-top:.4rem}
+.discipline-row .row strong{white-space:nowrap}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}

@@ -54,7 +54,7 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1><%c++ $$ << @@.get<std::string>("t.nav.grades"); %></h1>
+      <h1><%c++ $$ << @@.get<std::string>("t.grades.title"); %></h1>
       <p><%c++ $$ << @@.get<std::string>("t.grades.subtitle"); %></p>
     </div>
   </div>
@@ -205,7 +205,7 @@ if (broken) {
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg></div>
         <h2><%c++ $$ << @@.get<std::string>("t.grades.emptyTitle"); %></h2>
         <p><%c++ $$ << @@.get<std::string>("t.grades.emptyText"); %></p>
-        <a class="button" href="/schedule"><%c++ $$ << @@.get<std::string>("t.grades.openSchedule"); %></a>
+        <a class="button primary" href="/schedule"><%c++ $$ << @@.get<std::string>("t.grades.viewSchedule"); %></a>
       </div>
     </div>
   </div>
@@ -228,7 +228,22 @@ if (broken) {
         <p class="overline"><%c++ $$ << @@.get<std::string>("t.grades.average"); %></p>
         <p class="metric"><span class="tnum"><%c++ $$ << average; %></span><span class="caption"> / 100</span></p>
       </div>
-      <p class="small muted"><%c++ $$ << disciplineCount << " " << pluralForm(disciplineCount, vstr("plural.subjectOne"), vstr("plural.subjectFew"), vstr("plural.subjectMany")) << (uiLang == "zh" ? "" : " ") << @@.get<std::string>("t.grades.withScores"); %></p>
+      <p class="small muted"><%c++
+    $$ << disciplineCount << " " << pluralForm(disciplineCount, vstr("plural.subjectOne"), vstr("plural.subjectFew"), vstr("plural.subjectMany")) << (uiLang == "zh" ? "" : " ") << @@.get<std::string>("t.grades.withScores");
+    // «N из M без долга» (эталон grades.html «4 из 6 дисциплин закрыты»):
+    // «закрыта» в схеме не определена — честный счёт missing==0 сводки
+    int noDebt = 0;
+    for (const auto& d : disciplines)
+        if (d["missing"].asInt() == 0) ++noDebt;
+    std::string line = vstr("grades.noDebt");
+    const auto put = [&line](const std::string& k, int v) {
+        const auto pos = line.find(k);
+        if (pos != std::string::npos) line.replace(pos, k.size(), std::to_string(v));
+    };
+    put("{n}", noDebt);
+    put("{m}", disciplineCount);
+    $$ << "<br>" << line;
+%></p>
     </div>
     <section class="section">
       <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.grades.subjects"); %></h2></div>
@@ -243,19 +258,31 @@ if (broken) {
             const int missing = d["missing"].asInt();
             $$ << "<a class=\"discipline-row\" href=\"/grades/discipline/"
                << id << "\">";
+            // Разметка эталона grades.html: строка «название — баллы»,
+            // прогресс, затем строки статуса. Баллы — score_sum / max_sum
+            // (прод честнее «/ 100» эталона, аудит G4); бейдж типа
+            // контроля прод сохраняет (G5) — в строке статуса.
             $$ << "<div class=\"row\"><h3>"
-               << esc(d["discipline"].asString()) << "</h3>"
-               << controlBadge(d["control_type"].asString()) << "</div>";
-            // прогресс + баллы tnum (03 §4.4); --value — целое из сводки
-            $$ << "<div class=\"row grade-meter\"><div class=\"progress "
-               << progressClass(percent) << "\" style=\"--value:" << percent
-               << "%\"></div><strong class=\"tnum\">"
+               << esc(d["discipline"].asString()) << "</h3><strong class=\"tnum\">"
                << d["score_sum"].asInt64() << " / "
                << d["max_sum"].asInt64() << "</strong></div>";
+            $$ << "<div class=\"progress " << progressClass(percent)
+               << "\" style=\"--value:" << percent << "%\"></div>";
+            $$ << "<div class=\"grade-tags\">"
+               << controlBadge(d["control_type"].asString());
+            // «Зачёт получен» (эталон, small muted) — зачёт без недобора;
+            // экзамен/дифзачёт без недобора — «Порог достигнут» (G6)
+            if (missing == 0)
+                $$ << "<span class=\"small muted\">"
+                   << vstr(d["control_type"].asString() == "credit"
+                               ? "grades.creditPassed"
+                               : "grades.thresholdReached")
+                   << "</span>";
+            $$ << "</div>";
             // «до допуска не хватает N» при missing>0 (03 §4.4: body-sm
             // --warning-text; демо-арифметика 05 §3 Э4: 78/82 → 4)
             if (missing > 0)
-                $$ << "<p class=\"small grade-missing\">"
+                $$ << "<p class=\"small red\">"
                    << vstr("grades.missingPrefix") << (uiLang == "zh" ? "" : " ")
                    << missing << (uiLang == "zh" ? "" : " ")
                    << pluralForm(missing, vstr("plural.pointOne"),
@@ -268,7 +295,7 @@ if (broken) {
             if (retakeIt != retakes.end())
             {
                 const Json::Value& r = *retakeIt->second;
-                $$ << "<p class=\"small grade-retake\">"
+                $$ << "<p class=\"small red\">"
                    << vstr("exam.retake") << (uiLang == "zh" ? "：" : ": ")
                    << esc(dayMonthOf(r["starts_at"].asString()));
                 const std::string room = r["room"].asString();
@@ -335,23 +362,11 @@ if (hasExams)
       </div>
       <p class="caption"><%c++ $$ << @@.get<std::string>("t.grades.calendarHint"); %></p>
     </section>
-    <!-- ==== Зачётная книжка (5.15) — точка входа: в черновике
-         grades.html вход стоит внизу экрана (ghost-кнопка «Зачётная
-         книжка» в .actions.section после дисциплин — порядок сохранён,
-         fix: входы 5.15/5.14 не значились в брифе Батча 2). Карточка-
-         ссылка — класс .service-link секции «В кампусе» дашборда
-         (fix 3a75cbf); подпись — заголовок страницы-приёмника
-         (gradebook.csp:60 «Итоги по дисциплинам»); href — реальный
-         маршрут /gradebook (GradebookCtrl.h:32, LoginFilter). Ссылка-
-         константа — view-данных не нужно (Р-16). Цвета — только
-         токены .service-link (тёмная тема красит автоматически). ==== -->
-    <section class="section">
-      <a class="service-link" href="/gradebook">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg>
-        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.gradebookHint"); %></p></div>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-      </a>
-    </section>
+    <!-- Вход в зачётную книжку — .actions.section эталона grades.html
+         (кнопка «Демо успеваемости Марка» — демо, не переносится, G10) -->
+    <div class="actions section">
+      <a class="button" href="/gradebook"><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></a>
+    </div>
   </div>
 <%c++
     }
