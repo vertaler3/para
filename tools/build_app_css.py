@@ -65,6 +65,13 @@ a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:n
 .lesson.moved .lesson-detail{color:var(--text-2)}
 button.change-detail{display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:var(--clear);font:inherit;font-size:.875rem;color:var(--danger-text);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .lesson-dialog .change-block{margin-top:1rem}
+.week-board .day-group.is-today>.section-title h2{color:inherit}
+.week-board .day-group.is-today .schedule-list{border:1px solid var(--border);border-radius:13px}
+.week-board .lesson.cancelled{background:var(--surface-2)}
+.week-board .lesson.cancelled .lesson-room s{color:var(--text-2)}
+.week-changes{margin:1.5rem 0}
+.week-changes .change-block{margin-top:.75rem}
+@media(min-width:1200px){.week-board .lesson{grid-row:var(--event-row)/span var(--event-span,3)}.week-board .day-group.is-today .schedule-list{border:0;border-radius:0}.week-changes{max-width:600px}}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}

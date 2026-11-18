@@ -1331,6 +1331,37 @@
       if (typeof input.showPicker === 'function') { try { input.showPicker(); } catch (e) { /* без жеста — просто фокус */ } }
     });
 
+    /* --- «Показать: Все занятия / Лекции / Семинары» (Неделя): фильтр на
+       клиенте по data-kind карточек (реальные виды DDL), счётчик «N занятий»
+       — формы plural из data-one/few/many (словарь сервера) по
+       Intl.PluralRules. Выбор переживает htmx-обмен (стрелки недель). --- */
+    let lessonKind = '';
+    const applyLessonFilter = () => {
+      const box = segment();
+      const select = box ? box.querySelector('[data-lesson-filter]') : null;
+      if (!box || !select) return;
+      if (select.value !== lessonKind) select.value = lessonKind;
+      if (select.value !== lessonKind) { lessonKind = ''; select.value = ''; }
+      let shown = 0;
+      box.querySelectorAll('.lesson[data-kind]').forEach((card) => {
+        const on = !lessonKind || card.dataset.kind === lessonKind;
+        card.hidden = !on;
+        if (on) shown += 1;
+      });
+      const count = box.querySelector('[data-lesson-count]');
+      if (count) {
+        const rule = new Intl.PluralRules(LOCALE).select(shown);
+        const form = rule === 'one' ? count.dataset.one : rule === 'few' ? count.dataset.few : count.dataset.many;
+        count.textContent = shown + ' ' + (form || '');
+      }
+    };
+    document.addEventListener('change', (event) => {
+      const select = event.target;
+      if (!(select instanceof HTMLSelectElement) || !select.matches('[data-lesson-filter]')) return;
+      lessonKind = select.value;
+      applyLessonFilter();
+    });
+
     /* --- заголовок страницы следует за сегментом (День/Неделя) --- */
     const syncHeading = () => {
       const box = segment();
@@ -1398,6 +1429,7 @@
     scrollTodayIntoView();
     document.body.addEventListener('htmx:afterSwap', () => {
       syncHeading();
+      applyLessonFilter();
       setTimeout(scrollTodayIntoView, 0);
     });
     let touchX = 0, touchY = 0, swipeArmed = false;
