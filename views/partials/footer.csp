@@ -7,6 +7,9 @@
    экранах, включая вход (гость): активный отмечает app.js по cookie
    para_lang; клик — мини-роут /lang (ставит cookie сервер) + PUT {lang}
    для авторизованного; подпись-автонимы не переводятся (i18n.h lang.*).
+   v3 (fe_rebuild шаг 4, Р-31(в)): рядом — переключатель темы (data-footer-theme:
+   применяется сразу, авторизованному — PUT {theme}, гостю — только на странице,
+   без localStorage); обе группы — в .footer-links эталона.
    5.18 (шаг 3): aria переключателя и словарь для app.js (тосты/состояния
    клиента) — из view-данных: i18nJson (JSON-бандл того же словаря,
    собран сервером ДО рендера — Р-16) читает app.js через
@@ -18,12 +21,21 @@
     <p class="disclaimer">концепт для хакатона, данные вымышленные<br>Не является официальным сервисом вуза</p>
     <span>пара · деканат в кармане</span>
   </div>
-  <div class="lang-switch" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.langGroup"); %>">
-    <button type="button" data-lang-choice="ru">Рус</button>
-    <span aria-hidden="true">·</span>
-    <button type="button" data-lang-choice="en">EN</button>
-    <span aria-hidden="true">·</span>
-    <button type="button" data-lang-choice="zh">中文</button>
+  <div class="footer-links footer-switches">
+    <div class="lang-switch" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.langGroup"); %>">
+      <button type="button" data-lang-choice="ru">Рус</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" data-lang-choice="en">EN</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" data-lang-choice="zh">中文</button>
+    </div>
+    <div class="lang-switch" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.themeGroup"); %>">
+      <button type="button" data-footer-theme="light"><%c++ $$ << @@.get<std::string>("t.profile.themeLight"); %></button>
+      <span aria-hidden="true">·</span>
+      <button type="button" data-footer-theme="dark"><%c++ $$ << @@.get<std::string>("t.profile.themeDark"); %></button>
+      <span aria-hidden="true">·</span>
+      <button type="button" data-footer-theme="system"><%c++ $$ << @@.get<std::string>("t.profile.themeSystem"); %></button>
+    </div>
   </div>
 </footer>
 <div id="toast" class="toast" role="status" hidden></div>

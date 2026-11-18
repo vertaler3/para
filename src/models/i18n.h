@@ -124,6 +124,7 @@ struct Entry
 inline constexpr Entry kRu[]{
     // a11y.* — aria-метки каркаса и экранов
     {"a11y.brandHome", "Пара, на главную"},
+    {"a11y.campusNav", "Сервисы кампуса"},
     {"a11y.feedFilter", "Фильтр уведомлений"},
     {"a11y.feedSegment", "Раздел ленты"},
     {"a11y.langGroup", "Язык интерфейса"},
@@ -178,6 +179,7 @@ inline constexpr Entry kRu[]{
     {"campus.mapHint", "Найти кабинет"},
     {"campus.people", "Найти человека"},
     {"campus.peopleHint", "Преподаватели и студенты"},
+    {"campus.rooms", "Бронь аудитории"},
     {"campus.title", "В кампусе"},
     // common.* — межэкранные кнопки/строки
     {"common.all", "Все"},
@@ -297,7 +299,7 @@ inline constexpr Entry kRu[]{
     {"month.12", "декабря"},
     // nav.* — пять табов
     {"nav.applications", "Заявки"},
-    {"nav.grades", "Успеваемость"},
+    {"nav.grades", "Учёба"},
     {"nav.profile", "Профиль"},
     {"nav.schedule", "Расписание"},
     {"nav.today", "Сегодня"},
@@ -435,6 +437,10 @@ inline constexpr Entry kRu[]{
     {"settings.quietHours", "Тихие часы"},
     {"settings.schedule", "Переносы и отмены"},
     // staff.* — вход в стол сотрудника (шапка/дашборд; сам staff.csp — ru)
+    {"shell.semester", "Осенний семестр · 2026"},
+    {"shell.sidebarFoot", "пара / учебное пространство"},
+    {"shell.tagline", "Всё в вашем темпе."},
+    {"shell.workspace", "Моё пространство"},
     {"staff.desk", "Стол сотрудника"},
     {"staff.office", "Учебный офис"},
     // toast.* — тосты app.js (успехи и «Не получилось …»)
@@ -487,6 +493,7 @@ inline constexpr Entry kRu[]{
 // --- en — короткие естественные UI-строки -----------------------------------
 inline constexpr Entry kEn[]{
     {"a11y.brandHome", "Para, go to home page"},
+    {"a11y.campusNav", "Campus services"},
     {"a11y.feedFilter", "Notification filter"},
     {"a11y.feedSegment", "Feed section"},
     {"a11y.langGroup", "Interface language"},
@@ -538,6 +545,7 @@ inline constexpr Entry kEn[]{
     {"campus.mapHint", "Find a room"},
     {"campus.people", "Find a person"},
     {"campus.peopleHint", "Teachers and students"},
+    {"campus.rooms", "Room booking"},
     {"campus.title", "On campus"},
     {"common.all", "All"},
     {"common.allNeut", "All"},
@@ -646,7 +654,7 @@ inline constexpr Entry kEn[]{
     {"month.11", "November"},
     {"month.12", "December"},
     {"nav.applications", "Requests"},
-    {"nav.grades", "Grades"},
+    {"nav.grades", "Study"},
     {"nav.profile", "Profile"},
     {"nav.schedule", "Schedule"},
     {"nav.today", "Today"},
@@ -774,6 +782,10 @@ inline constexpr Entry kEn[]{
     {"settings.quietHint", "Only urgent schedule changes arrive during these hours."},
     {"settings.quietHours", "Quiet hours"},
     {"settings.schedule", "Changes and cancellations"},
+    {"shell.semester", "Autumn term · 2026"},
+    {"shell.sidebarFoot", "para / study space"},
+    {"shell.tagline", "All at your own pace."},
+    {"shell.workspace", "My space"},
     {"staff.desk", "Staff desk"},
     {"staff.office", "Academic office"},
     {"toast.booked", "booked"},
@@ -823,6 +835,7 @@ inline constexpr Entry kEn[]{
 // --- zh — упрощённый китайский, короткие UI-строки ---------------------------
 inline constexpr Entry kZh[]{
     {"a11y.brandHome", "пара，返回主页"},
+    {"a11y.campusNav", "校园服务"},
     {"a11y.feedFilter", "通知筛选"},
     {"a11y.feedSegment", "动态栏目"},
     {"a11y.langGroup", "界面语言"},
@@ -874,6 +887,7 @@ inline constexpr Entry kZh[]{
     {"campus.mapHint", "查找教室"},
     {"campus.people", "找人"},
     {"campus.peopleHint", "教师与学生"},
+    {"campus.rooms", "预订教室"},
     {"campus.title", "校园服务"},
     {"common.all", "全部"},
     {"common.allNeut", "全部"},
@@ -982,7 +996,7 @@ inline constexpr Entry kZh[]{
     {"month.11", "十一月"},
     {"month.12", "十二月"},
     {"nav.applications", "申请"},
-    {"nav.grades", "成绩"},
+    {"nav.grades", "学业"},
     {"nav.profile", "个人中心"},
     {"nav.schedule", "课程表"},
     {"nav.today", "今日"},
@@ -1110,6 +1124,10 @@ inline constexpr Entry kZh[]{
     {"settings.quietHint", "此时段仅接收紧急调课通知。"},
     {"settings.quietHours", "免打扰时段"},
     {"settings.schedule", "调课与停课"},
+    {"shell.semester", "2026 秋季学期"},
+    {"shell.sidebarFoot", "para / 学习空间"},
+    {"shell.tagline", "按你的节奏来。"},
+    {"shell.workspace", "我的空间"},
     {"staff.desk", "员工工作台"},
     {"staff.office", "教务办公室"},
     {"toast.booked", "预约成功"},

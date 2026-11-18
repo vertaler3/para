@@ -210,10 +210,10 @@
       const label = count >= 20 ? '20+' : String(count);
       badge.textContent = label;
       badge.hidden = false;
-      if (bellLink) bellLink.setAttribute('aria-label', 'Уведомления, непрочитанных: ' + label);
+      if (bellLink) bellLink.setAttribute('aria-label', t('a11y.notifications', 'Уведомления') + ': ' + label);
     } else {
       badge.hidden = true;
-      if (bellLink) bellLink.setAttribute('aria-label', 'Уведомления');
+      if (bellLink) bellLink.setAttribute('aria-label', t('a11y.notifications', 'Уведомления'));
     }
   };
   const refreshUnreadBadge = async () => {
@@ -253,6 +253,7 @@
     if (!s) return;
     authedSettings = true;
     if (s.theme) applyTheme(s.theme);
+    markFooterTheme(s.theme || 'system');
     markLang(s.lang);
   });
 
@@ -290,6 +291,66 @@
     });
   });
   markLang(paraLang());
+
+  /* ---------- каркас v3 (fe_rebuild шаг 4, Р-31): тема в footer, дата недели,
+     аватар, активный пункт «В кампусе» ---------- */
+  /* Тема из footer: та же механика, что сегмент профиля — applyTheme сразу,
+     авторизованному PUT {theme}; гостю — только на текущей странице
+     (локального хранилища нет — конвенция каркаса). */
+  function markFooterTheme(theme) {
+    document.querySelectorAll('[data-footer-theme]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.footerTheme === theme));
+    });
+  }
+  markFooterTheme(document.documentElement.getAttribute('data-theme') || 'system');
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest && e.target.closest('[data-footer-theme]');
+    if (!btn) return;
+    const theme = btn.dataset.footerTheme;
+    if (!/^(light|dark|system)$/.test(theme)) return;
+    applyTheme(theme);
+    markFooterTheme(theme);
+    document.querySelectorAll('[data-theme-choice]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.themeChoice === theme));
+    });
+    if (authedSettings) {
+      const saved = await putSettings({ theme });
+      toast(saved ? t('toast.themeSaved', 'Оформление сохранено')
+                  : t('toast.failTheme', 'Не получилось сохранить тему'));
+    }
+  });
+  /* Дата в шапке — текущая учебная неделя «пн–вс» в формате языка страницы
+     (<html lang>, Intl; без строк словаря — месяцы локализует браузер). */
+  (() => {
+    const el = document.querySelector('[data-header-date]');
+    if (!el || typeof Intl === 'undefined') return;
+    const now = new Date();
+    const mon = new Date(now); mon.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    const lang = document.documentElement.lang || 'ru';
+    try {
+      const f = new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'long' });
+      el.textContent = f.formatRange ? f.formatRange(mon, sun) : f.format(mon) + ' – ' + f.format(sun);
+    } catch (_) { /* старый браузер — дата просто не показывается */ }
+  })();
+  /* Аватар — инициалы ФИО из GET /v1/me (гость/ошибка — кружок пустой,
+     ссылка на профиль работает). */
+  (() => {
+    const av = document.querySelector('[data-avatar]');
+    if (!av) return;
+    fetchJSON('/v1/me').then((me) => {
+      const fio = me && me.profile && me.profile.fio ? String(me.profile.fio) : '';
+      const parts = fio.trim().split(/\s+/).filter(Boolean);
+      const ini = parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2);
+      av.textContent = ini.toUpperCase();
+    });
+  })();
+  document.querySelectorAll('[data-campus-link]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (href && (location.pathname === href || location.pathname.indexOf(href + '/') === 0)) {
+      a.setAttribute('aria-current', 'page');
+    }
+  });
 
   /* ---------- онбординг С5 (03 §4.7/§4.9.4) ---------- */
   /* Состояние чеклиста — onboarding_json настроек: массив КЛЮЧЕЙ закрытых
