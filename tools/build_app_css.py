@@ -74,6 +74,39 @@ button.change-detail{display:inline-flex;align-items:center;min-height:44px;padd
 .week-board .lesson.cancelled .lesson-room s{color:var(--text-2)}
 .week-changes{margin:1.5rem 0}
 .week-changes .change-block{margin-top:.75rem}
+.campus-scene{cursor:grab}
+.campus-scene.is-dragging{cursor:grabbing}
+.campus-scene:focus-visible{outline:3px solid var(--link);outline-offset:-3px}
+.campus-svg{display:block;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
+.campus-labels{position:absolute;inset:0;z-index:2;pointer-events:none}
+.campus-labels .campus-building-label{width:max-content;display:flex;align-items:center;justify-content:center;pointer-events:auto;cursor:pointer}
+.campus-ground{fill:var(--surface);stroke:var(--border);stroke-width:1}
+.campus-block{cursor:pointer;outline:none}
+.campus-block polygon{stroke:var(--primary);stroke-width:1;stroke-linejoin:round}
+.campus-roof{fill:var(--surface)}
+.campus-wall-l{fill:var(--surface-2)}
+.campus-wall-r{fill:var(--border)}
+.campus-block.is-empty polygon{stroke-dasharray:4 3}
+.campus-block:hover>.campus-roof{fill:var(--surface-2)}
+.campus-block:focus-visible polygon{stroke:var(--link);stroke-width:3}
+.campus-block.is-selected>.campus-roof,.campus-slab.is-active .campus-roof{fill:var(--primary)}
+.campus-block.is-selected>.campus-wall-l,.campus-slab.is-active .campus-wall-l{fill:var(--primary-hover)}
+.campus-block.is-selected>.campus-wall-r,.campus-slab.is-active .campus-wall-r{fill:var(--primary-pressed)}
+.campus-slab.is-active polygon{stroke:var(--surface)}
+.campus-loading[hidden]{display:none}
+.campus-state{flex-direction:column;gap:.75rem;text-align:center;padding:1.5rem}
+.campus-state h3{font-size:1rem;color:var(--text)}
+.campus-skeleton{width:min(420px,80%);height:12rem;margin:0}
+.map-plan--floor{display:flex;flex-direction:column;gap:.75rem;min-height:0}
+.map-side{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:.75rem}
+.map-plan--floor .corridor{padding:.6rem 0;border-top:1px dashed var(--control-border);border-bottom:1px dashed var(--control-border)}
+.map-room{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.2rem;min-height:44px;font:inherit;font-weight:600;cursor:pointer}
+.map-room .caption{font-weight:400;color:var(--text-2)}
+.map-room.is-found{border:2px solid var(--primary);animation:map-pulse 1.2s ease-in-out 3}
+@keyframes map-pulse{50%{box-shadow:0 0 0 6px var(--primary-soft-bg)}}
+@media(prefers-reduced-motion:reduce){.map-room.is-found{animation:none}}
+.map-search-results{margin-top:.5rem;flex-wrap:wrap}
+#room-search-form .row input{flex:1;min-width:0}
 @media(min-width:1200px){.week-board .lesson{grid-row:var(--event-row)/span var(--event-span,3)}.week-board .day-group.is-today .schedule-list{border:0;border-radius:0}.week-changes{max-width:600px}}
 '''
 

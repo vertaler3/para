@@ -2690,231 +2690,577 @@
     loadCanteens();
   }
 
-  /* ---------- экран «Карта» (views/map.csp; 03 §4.9.6/5.16) -------------- */
-  /* Корпуса → этажи → кабинеты и поиск по номеру. Данные — ТЕ ЖЕ JSON-
-     роуты, что за API (02 §5.2): GET /v1/map/buildings (чипы корпусов),
-     GET /v1/map/rooms?building_id=N (этажи выбранного корпуса — distinct
-     floor, кабинеты этажа — плитки .map-plan/.map-room) и GET
-     /v1/map/rooms?q= (карточки «номер · корпус · этаж · тип» — формат
-     черновика map.html). Страница читает ?q= из location.search при
-     загрузке (алиас GET /map/rooms → 303 /map?q=… ведёт сюда из
-     профилей людей): поле предзаполняется, поиск выполняется сразу;
-     новый поиск — history.replaceState (ссылка шарится). floor/kind
-     nullable — пустое не рисуется (02 §5.2). Гонку ответов гасит seq.
-     Пустой поиск — «Ничего не нашлось»; этаж без кабинетов — «На этом
-     этаже кабинеты ещё не добавлены» (дословно черновик map.html).
-     Состояния 03 §5: скелетоны секций только при ответе > 300 мс,
-     ошибки с «Повторить», офлайн — баннер каркаса. Вставка — только
-     createElement/textContent (02 §6.4). */
+  /* ---------- экран «Карта кампуса» (views/map.csp; дизайн v3, Р-32) ---------- */
+  /* Интерактивная SVG-схема кампуса из прод-данных вместо 3D Three.js/OSM эталона:
+     GET /v1/map/buildings {id,name,address} + GET /v1/map/rooms {id,name,building_id,
+     building,floor,kind} (без query — весь каталог одним запросом; поиск — тот же
+     роут с q=). Параметра floor у API нет: этажи — distinct floor кабинетов корпуса.
+     Корпус — изометрический блок (крыша + две стены), высота ∝ max(floor) его
+     кабинетов (корпус без кабинетов — 1 этаж, «без аудиторий»); раскладка
+     детерминированная: сортировка по id в сетку ceil(√n). Выбранный корпус
+     раскрывается стопкой этажей, активный этаж — плита --primary. Зум/пан — viewBox
+     (кнопки, клавиатура на сцене, перетаскивание pointer events). Нижний блок —
+     корпус → этаж → план этажа (авто-раскладка по двум сторонам коридора в порядке
+     name) → карточка помещения. Deep link ?q= / ?room= / ?building=. Вставка — только
+     createElement(NS)/textContent (02 §6.4). Строки — словарь map.* (5.18). */
   if (document.body.dataset.page === 'map') {
-    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    const $m = (sel) => document.querySelector(sel);
+    const show = (sel, on) => { const n = $m(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
       if (className) node.className = className;
       if (text != null) node.textContent = text;
       return node;
     };
-    const input = document.querySelector('[data-map-q]');
-    const state = { buildings: [], buildingId: null, floor: null, seq: 0, searchSeq: 0 };
-    let skSearch = 0, skRooms = 0; /* таймеры скелетонов (03 §5.1: ответ > 300 мс) */
+    const svgEl = (tag, attrs) => {
+      const node = document.createElementNS(SVGNS, tag);
+      Object.keys(attrs || {}).forEach((k) => node.setAttribute(k, attrs[k]));
+      return node;
+    };
+    const fmt = (key, fallback, n) => t(key, fallback).replace('{n}', String(n));
+    const KIND_KEYS = { 'аудитория': ['map.kindRoom', 'аудитория'], 'лаборатория': ['map.kindLab', 'лаборатория'], 'деканат': ['map.kindDean', 'деканат'] };
+    const kindLabel = (kind) => (kind && KIND_KEYS[kind] ? t(KIND_KEYS[kind][0], KIND_KEYS[kind][1]) : (kind || ''));
+    const BOOKABLE = { 'аудитория': true, 'лаборатория': true };
+    const floorLabel = (f) => (f == null ? t('map.noFloor', 'Без этажа') : fmt('map.floorN', 'этаж {n}', f));
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru', { numeric: true });
+    const reduceMotion = () => document.documentElement.classList.contains('para-reduce-motion') ||
+      (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-    /* «Корпус Б · этаж 2 · аудитория» — подпись карточки/тип (null — нет) */
-    const roomSub = (r) => {
-      const parts = [r.building || ''];
-      if (r.floor != null) parts.push('этаж ' + r.floor);
-      if (r.kind) parts.push(r.kind);
-      return parts.filter(Boolean).join(' · ');
+    const scene = $m('[data-campus-scene]');
+    const statusEl = $m('[data-campus-status]');
+    const meta = $m('[data-campus-selection]');
+    const picker = $m('[data-campus-picker]');
+    const bSelect = $m('[data-map-building]');
+    const fSelect = $m('[data-map-floor]');
+    const input = $m('[data-map-q]');
+    const topBtn = $m('[data-campus-action="top"]');
+    const say = (text) => { if (statusEl) statusEl.textContent = text; };
+
+    const state = {
+      buildings: [], rooms: [], info: new Map(), loaded: false,
+      buildingId: null, floor: undefined, roomId: null, foundId: null,
+      mode: 'iso', k: 1, cx: 0, cy: 0, base: null, searchSeq: 0, loadSeq: 0,
     };
 
-    /* --- поиск: GET /v1/map/rooms?q= → карточки ------------------------- */
-    const runSearch = async (rawQ) => {
-      const q = String(rawQ || '').trim();
-      if (!q) {
-        show('[data-search-section]', false);
+    /* --- геометрия схемы --------------------------------------------------- */
+    const FOOT_W = 60, FOOT_D = 42, STEP = 120, FLOOR_H = 12, GAP = 6;
+    const C30 = Math.cos(Math.PI / 6), S30 = 0.5;
+    const proj = (x, y, z) => (state.mode === 'top' ? [x, y] : [(x - y) * C30, (x + y) * S30 - z]);
+    const pts = (list) => list.map((p) => { const q = proj(p[0], p[1], p[2]); return q[0].toFixed(1) + ',' + q[1].toFixed(1); }).join(' ');
+    const layout = () => {
+      const cols = Math.max(1, Math.ceil(Math.sqrt(state.buildings.length)));
+      state.buildings.forEach((b, i) => {
+        const inf = state.info.get(b.id);
+        inf.x = (i % cols) * STEP;
+        inf.y = Math.floor(i / cols) * STEP;
+      });
+    };
+    const stackHeight = (inf) => inf.levels * FLOOR_H + (inf.levels - 1) * GAP;
+    /* блок: крыша + две видимые стены (грани x+w и y+d при взгляде с +x+y) */
+    const block = (g, x, y, z0, h, cls) => {
+      const z1 = z0 + h, w = FOOT_W, d = FOOT_D;
+      if (state.mode !== 'top') {
+        g.append(svgEl('polygon', { class: 'campus-wall-l ' + cls, points: pts([[x, y + d, z0], [x + w, y + d, z0], [x + w, y + d, z1], [x, y + d, z1]]) }));
+        g.append(svgEl('polygon', { class: 'campus-wall-r ' + cls, points: pts([[x + w, y, z0], [x + w, y + d, z0], [x + w, y + d, z1], [x + w, y, z1]]) }));
+      }
+      g.append(svgEl('polygon', { class: 'campus-roof ' + cls, points: pts([[x, y, z1], [x + w, y, z1], [x + w, y + d, z1], [x, y + d, z1]]) }));
+    };
+    const computeBase = () => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      state.buildings.forEach((b) => {
+        const inf = state.info.get(b.id);
+        const top = stackHeight(inf);
+        [[0, 0], [FOOT_W, 0], [0, FOOT_D], [FOOT_W, FOOT_D]].forEach((c) => {
+          [0, top].forEach((z) => {
+            const q = proj(inf.x + c[0], inf.y + c[1], z);
+            minX = Math.min(minX, q[0]); maxX = Math.max(maxX, q[0]);
+            minY = Math.min(minY, q[1]); maxY = Math.max(maxY, q[1]);
+          });
+        });
+      });
+      const pad = 36;
+      state.base = { x: minX - pad, y: minY - pad - 30, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 + 30 };
+    };
+    const resetView = () => {
+      computeBase();
+      state.k = 1;
+      state.cx = state.base.x + state.base.w / 2;
+      state.cy = state.base.y + state.base.h / 2;
+    };
+    const clampView = () => {
+      state.k = Math.min(3, Math.max(0.6, state.k));
+      const b = state.base;
+      state.cx = Math.min(b.x + b.w, Math.max(b.x, state.cx));
+      state.cy = Math.min(b.y + b.h, Math.max(b.y, state.cy));
+    };
+    const viewBox = () => {
+      const w = state.base.w / state.k, h = state.base.h / state.k;
+      return { x: state.cx - w / 2, y: state.cy - h / 2, w, h };
+    };
+    /* масштаб «единица схемы → px» при preserveAspectRatio xMidYMid meet */
+    const screenMap = () => {
+      const vb = viewBox();
+      const cw = scene.clientWidth || 1, ch = scene.clientHeight || 1;
+      const s = Math.min(cw / vb.w, ch / vb.h);
+      return { vb, s, ox: (cw - vb.w * s) / 2, oy: (ch - vb.h * s) / 2, cw, ch };
+    };
+
+    /* --- отрисовка сцены ---------------------------------------------------- */
+    let svg = null, labels = null;
+    const applyViewBox = () => {
+      if (!svg) return;
+      const vb = viewBox();
+      svg.setAttribute('viewBox', [vb.x, vb.y, vb.w, vb.h].map((v) => v.toFixed(1)).join(' '));
+      placeLabels();
+    };
+    const placeLabels = () => {
+      if (!labels) return;
+      const m = screenMap();
+      const placed = [];
+      const nodes = Array.from(labels.children);
+      /* приоритет — выбранный корпус, затем по id; перекрывающиеся подписи скрываются */
+      nodes.sort((a, b) => (Number(b.dataset.selected) - Number(a.dataset.selected)) || (Number(a.dataset.buildingId) - Number(b.dataset.buildingId)));
+      nodes.forEach((node) => {
+        const px = m.ox + (Number(node.dataset.ax) - m.vb.x) * m.s;
+        const py = m.oy + (Number(node.dataset.ay) - m.vb.y) * m.s;
+        node.style.left = px.toFixed(1) + 'px';
+        node.style.top = py.toFixed(1) + 'px';
+        node.hidden = false;
+        const w = node.offsetWidth, h = node.offsetHeight;
+        const r = { l: px - w / 2, r: px + w / 2, t: py - h, b: py };
+        const outside = r.r < 0 || r.l > m.cw || r.b < 0 || r.t > m.ch;
+        const hit = placed.some((p) => r.l < p.r + 4 && r.r > p.l - 4 && r.t < p.b + 2 && r.b > p.t - 2);
+        if (outside || hit) { node.hidden = true; return; }
+        placed.push(r);
+      });
+    };
+    const renderScene = () => {
+      if (!scene || !state.buildings.length) return;
+      const focusedId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.buildingId : null;
+      if (!svg) {
+        svg = svgEl('svg', { class: 'campus-svg', preserveAspectRatio: 'xMidYMid meet', focusable: 'false' });
+        labels = el('div', 'campus-labels');
+        scene.append(svg, labels);
+      }
+      svg.replaceChildren();
+      labels.replaceChildren();
+      svg.setAttribute('data-mode', state.mode);
+      /* участок кампуса — подложка под сеткой корпусов */
+      const cols = Math.max(1, Math.ceil(Math.sqrt(state.buildings.length)));
+      const rows = Math.ceil(state.buildings.length / cols);
+      const m = 24;
+      svg.append(svgEl('polygon', {
+        class: 'campus-ground', 'aria-hidden': 'true',
+        points: pts([[-m, -m, 0], [(cols - 1) * STEP + FOOT_W + m, -m, 0], [(cols - 1) * STEP + FOOT_W + m, (rows - 1) * STEP + FOOT_D + m, 0], [-m, (rows - 1) * STEP + FOOT_D + m, 0]]),
+      }));
+      /* художник: сначала дальние корпуса (меньше x+y) */
+      const order = state.buildings.slice().sort((a, b) => {
+        const ia = state.info.get(a.id), ib = state.info.get(b.id);
+        return (ia.x + ia.y) - (ib.x + ib.y) || a.id - b.id;
+      });
+      order.forEach((b) => {
+        const inf = state.info.get(b.id);
+        const selected = b.id === state.buildingId;
+        const g = svgEl('g', {
+          class: 'campus-block' + (selected ? ' is-selected' : '') + (inf.noRooms ? ' is-empty' : ''),
+          role: 'button', tabindex: '0', 'data-building-id': String(b.id),
+          'aria-pressed': String(selected),
+          'aria-label': (b.name || '') + '. ' + (inf.noRooms ? t('map.noRooms', 'без аудиторий') : fmt('map.floorsCount', 'этажей с аудиториями: {n}', inf.levels)),
+        });
+        let topZ;
+        if (selected && state.mode !== 'top' && !inf.noRooms) {
+          /* стопка этажей выбранного корпуса; активный этаж — плита --primary */
+          for (let f = 1; f <= inf.levels; f += 1) {
+            const z0 = (f - 1) * (FLOOR_H + GAP);
+            const slab = svgEl('g', { class: 'campus-slab' + (f === state.floor ? ' is-active' : ''), 'data-floor': String(f) });
+            block(slab, inf.x, inf.y, z0, FLOOR_H, '');
+            g.append(slab);
+          }
+          topZ = stackHeight(inf);
+        } else {
+          topZ = inf.levels * FLOOR_H;
+          block(g, inf.x, inf.y, 0, topZ, '');
+        }
+        svg.append(g);
+        const anchor = proj(inf.x + FOOT_W / 2, inf.y + FOOT_D / 2, topZ);
+        const label = el('span', 'campus-building-label' + (selected ? ' is-selected' : ''), b.name || '');
+        label.setAttribute('aria-hidden', 'true');
+        label.dataset.buildingId = String(b.id);
+        label.dataset.selected = selected ? '1' : '0';
+        label.dataset.ax = String(anchor[0]);
+        label.dataset.ay = String(anchor[1] - 6);
+        labels.append(label);
+      });
+      applyViewBox();
+      if (focusedId) {
+        const again = svg.querySelector('[data-building-id="' + focusedId + '"]');
+        if (again) again.focus({ preventScroll: true });
+      }
+    };
+
+    /* --- выбор корпуса / этажа / кабинета ------------------------------------ */
+    const roomsOf = (id) => state.rooms.filter((r) => r.building_id === id);
+    const floorsOf = (id) => {
+      const out = [];
+      roomsOf(id).forEach((r) => { if (!out.includes(r.floor)) out.push(r.floor); });
+      return out.sort((a, b) => (a == null ? 1 : b == null ? -1 : a - b));
+    };
+    const building = (id) => state.buildings.find((b) => b.id === id) || null;
+    const renderMeta = () => {
+      if (!meta) return;
+      meta.replaceChildren();
+      const b = building(state.buildingId);
+      if (!b) {
+        meta.append(el('strong', null, t('map.sceneLabel', 'Схема кампуса')), el('span', null, t('map.metaHint', 'Нажмите на здание, чтобы рассмотреть его ближе.')));
         return;
       }
+      const inf = state.info.get(b.id);
+      meta.append(el('strong', null, b.name || ''));
+      if (b.address) meta.append(el('span', null, b.address));
+      meta.append(el('span', null, inf.noRooms ? t('map.noRooms', 'без аудиторий') : fmt('map.floorsCount', 'этажей с аудиториями: {n}', inf.levels)));
+    };
+    const renderFloorSelect = () => {
+      if (!fSelect) return;
+      fSelect.replaceChildren();
+      const floors = state.buildingId == null ? [] : floorsOf(state.buildingId);
+      floors.forEach((f) => {
+        const opt = el('option', null, f == null ? t('map.noFloor', 'Без этажа') : String(f));
+        opt.value = f == null ? '' : String(f);
+        fSelect.append(opt);
+      });
+      fSelect.disabled = !floors.length;
+      if (floors.length) fSelect.value = state.floor == null ? '' : String(state.floor);
+    };
+    const showCard = (room) => {
+      const title = $m('[data-room-title]'), body = $m('[data-room-body]'), actions = $m('[data-room-actions]');
+      if (!room) {
+        if (title) title.textContent = t('map.roomPick', 'Выберите кабинет на плане');
+        if (body) body.textContent = t('map.roomPickHint', 'Здесь появятся корпус, этаж и тип помещения.');
+        if (actions) actions.hidden = true;
+        return;
+      }
+      if (title) title.textContent = room.name || '';
+      if (body) body.textContent = [room.building || '', room.floor != null ? floorLabel(room.floor) : '', kindLabel(room.kind)].filter(Boolean).join(' · ');
+      if (actions) actions.hidden = !BOOKABLE[room.kind];
+    };
+    const renderPlan = () => {
+      const grid = $m('[data-rooms-grid]');
+      const loc = $m('[data-map-location]');
+      const empty = $m('[data-rooms-empty]');
+      if (!grid) return;
+      grid.replaceChildren();
+      const b = building(state.buildingId);
+      show('[data-rooms-hint]', !b);
+      if (!b) {
+        if (loc) loc.textContent = t('map.chooseBuilding', 'Выберите корпус');
+        grid.hidden = true;
+        if (empty) empty.hidden = true;
+        return;
+      }
+      const hasFloors = floorsOf(b.id).length > 0;
+      if (loc) loc.textContent = (b.name || '') + (hasFloors ? ' · ' + floorLabel(state.floor) : '');
+      const onFloor = roomsOf(b.id).filter((r) => r.floor === state.floor).sort(byName);
+      if (!onFloor.length) {
+        grid.hidden = true;
+        if (empty) {
+          empty.textContent = hasFloors ? t('map.floorEmpty', 'На этом этаже кабинеты ещё не добавлены. Выберите другой этаж.') : t('map.buildingEmpty', 'В каталоге нет аудиторий этого корпуса.');
+          empty.hidden = false;
+        }
+        return;
+      }
+      if (empty) empty.hidden = true;
+      /* авто-раскладка: первая половина по name — одна сторона коридора, вторая — другая */
+      const half = Math.ceil(onFloor.length / 2);
+      const sideA = el('div', 'map-side'), sideB = el('div', 'map-side');
+      onFloor.forEach((r, i) => {
+        const tile = el('button', 'map-room' + (r.id === state.foundId ? ' is-found' : ''));
+        tile.type = 'button';
+        tile.dataset.roomId = String(r.id);
+        tile.setAttribute('aria-pressed', String(r.id === state.roomId));
+        tile.append(el('strong', null, r.name || ''));
+        if (r.kind) tile.append(el('span', 'caption', kindLabel(r.kind)));
+        (i < half ? sideA : sideB).append(tile);
+      });
+      grid.append(sideA, el('p', 'corridor', t('map.corridor', 'Коридор · схема этажа')));
+      if (sideB.children.length) grid.append(sideB);
+      grid.hidden = false;
+    };
+    const syncAll = () => {
+      if (bSelect) bSelect.value = state.buildingId == null ? '' : String(state.buildingId);
+      if (picker) picker.value = state.buildingId == null ? '' : String(state.buildingId);
+      renderFloorSelect();
+      renderMeta();
+      renderPlan();
+      renderScene();
+    };
+    const selectBuilding = (id, opts = {}) => {
+      const b = building(id);
+      state.buildingId = b ? b.id : null;
+      const floors = b ? floorsOf(b.id) : [];
+      state.floor = opts.floor !== undefined && floors.includes(opts.floor) ? opts.floor : (floors.length ? floors[0] : undefined);
+      if (!opts.keepRoom) { state.roomId = null; state.foundId = null; showCard(null); }
+      if (opts.focus && b) {
+        const inf = state.info.get(b.id);
+        const c = proj(inf.x + FOOT_W / 2, inf.y + FOOT_D / 2, stackHeight(inf) / 2);
+        state.cx = c[0]; state.cy = c[1]; state.k = 1.8;
+        clampView();
+      }
+      syncAll();
+      if (b) say(t('map.statusSelected', 'Выбрано:') + ' ' + (b.name || ''));
+    };
+    const selectRoom = (room, found, scroll = true) => {
+      state.roomId = room.id;
+      state.foundId = found ? room.id : null;
+      selectBuilding(room.building_id, { floor: room.floor, keepRoom: true });
+      showCard(room);
+      if (found && scroll) {
+        const tile = $m('.map-room[data-room-id="' + room.id + '"]');
+        if (tile) tile.scrollIntoView({ block: 'nearest', behavior: reduceMotion() ? 'auto' : 'smooth' });
+      }
+    };
+
+    /* --- загрузка ----------------------------------------------------------- */
+    let skTimer = 0;
+    const fillSelect = (sel, keepFirst) => {
+      if (!sel) return;
+      while (sel.options.length > keepFirst) sel.remove(keepFirst);
+      state.buildings.forEach((b) => {
+        const opt = el('option', null, b.name || '');
+        opt.value = String(b.id);
+        sel.append(opt);
+      });
+    };
+    const load = async () => {
+      const seq = ++state.loadSeq;
+      show('[data-campus-error]', false);
+      show('[data-campus-empty]', false);
+      clearTimeout(skTimer);
+      skTimer = setTimeout(() => show('[data-campus-loading]', true), 300);
+      say(t('map.loading', 'Загружаем схему кампуса…'));
+      const [bData, rData] = await Promise.all([fetchJSON('/v1/map/buildings'), fetchJSON('/v1/map/rooms')]);
+      if (seq !== state.loadSeq) return false;
+      clearTimeout(skTimer);
+      show('[data-campus-loading]', false);
+      if (!bData || !Array.isArray(bData.buildings) || !rData || !Array.isArray(rData.rooms)) {
+        show('[data-campus-error]', true);
+        say(t('map.errorLoad', 'Не получилось загрузить схему кампуса'));
+        return false;
+      }
+      state.buildings = bData.buildings.slice().sort((a, b) => a.id - b.id);
+      state.rooms = rData.rooms;
+      state.info = new Map();
+      state.buildings.forEach((b) => {
+        const max = roomsOf(b.id).reduce((acc, r) => Math.max(acc, Number(r.floor) || 0), 0);
+        state.info.set(b.id, { levels: Math.max(1, max), noRooms: !roomsOf(b.id).length });
+      });
+      state.loaded = true;
+      if (!state.buildings.length) {
+        show('[data-campus-empty]', true);
+        say(t('map.emptyTitle', 'Корпуса ещё не добавлены'));
+        return true;
+      }
+      fillSelect(picker, 1);
+      fillSelect(bSelect, 1);
+      layout();
+      resetView();
+      syncAll();
+      say(t('map.statusReady', 'Схема готова. Выберите здание или найдите аудиторию.'));
+      return true;
+    };
+
+    /* --- поиск: GET /v1/map/rooms?q= ----------------------------------------- */
+    const searchStatus = $m('[data-search-status]');
+    const searchList = $m('[data-search-results]');
+    const runSearch = async (rawQ, scroll = true) => {
+      const q = String(rawQ || '').trim();
+      if (searchList) { searchList.replaceChildren(); searchList.hidden = true; }
+      show('[data-search-retry]', false);
+      if (!q) { if (searchStatus) searchStatus.textContent = ''; return; }
       const seq = ++state.searchSeq;
-      show('[data-search-section]', true);
-      clearTimeout(skSearch);
-      show('[data-search-loading]', false);
-      show('[data-search-empty]', false);
-      show('[data-search-error]', false);
-      show('[data-search-results]', false);
-      skSearch = setTimeout(() => show('[data-search-loading]', true), 300);
       const data = await fetchJSON('/v1/map/rooms?q=' + encodeURIComponent(q));
       if (seq !== state.searchSeq) return;
-      clearTimeout(skSearch);
-      show('[data-search-loading]', false);
       if (!data || !Array.isArray(data.rooms)) {
-        show('[data-search-error]', true);
+        if (searchStatus) searchStatus.textContent = t('map.searchError', 'Не получилось выполнить поиск.');
+        show('[data-search-retry]', true);
         return;
       }
-      if (!data.rooms.length) {
-        show('[data-search-empty]', true);
+      const rooms = data.rooms.slice().sort(byName);
+      const exact = rooms.filter((r) => String(r.name).toLowerCase() === q.toLowerCase());
+      const hits = exact.length === 1 ? exact : rooms;
+      if (!hits.length) {
+        if (searchStatus) searchStatus.textContent = t('map.searchNotFound', 'Не нашли кабинет. Проверьте номер — например, 1207 или Б-204.');
         return;
       }
-      const box = document.querySelector('[data-search-results]');
-      if (!box) return;
-      box.replaceChildren();
-      data.rooms.forEach((r) => {
-        const card = el('div', 'surface section');
-        card.style.marginTop = '0';
-        card.append(el('h2', null, r.name || ''));
-        card.append(el('p', 'muted', roomSub(r)));
-        box.append(card);
-      });
-      show('[data-search-results]', true);
+      const describe = (r) => [r.name, r.building, r.floor != null ? floorLabel(r.floor) : ''].filter(Boolean).join(' · ');
+      if (hits.length === 1) {
+        if (searchStatus) searchStatus.textContent = t('map.searchFound', 'Нашли:') + ' ' + describe(hits[0]);
+        selectRoom(hits[0], true, scroll);
+        return;
+      }
+      if (searchStatus) searchStatus.textContent = t('map.searchMany', 'Нашли несколько кабинетов — выберите нужный:');
+      if (searchList) {
+        hits.forEach((r) => {
+          const chip = el('button', 'chip', describe(r));
+          chip.type = 'button';
+          chip.dataset.roomId = String(r.id);
+          searchList.append(chip);
+        });
+        searchList.hidden = false;
+      }
     };
-
-    const submitSearch = (q) => {
-      const clean = String(q || '').trim();
-      /* адрес держим в резонансе с экраном — ссылка шарится (алиас ведёт
-         сюда же через /map?q=…), состояние истории не засоряем */
-      const url = clean ? '/map?q=' + encodeURIComponent(clean) : '/map';
-      window.history.replaceState(null, '', url);
-      runSearch(clean);
-    };
-    const form = document.querySelector('[data-map-form]');
+    const form = $m('[data-map-form]');
     if (form) {
       form.addEventListener('submit', (event) => {
         event.preventDefault();
-        submitSearch(input ? input.value : '');
+        const q = input ? input.value.trim() : '';
+        window.history.replaceState(null, '', q ? '/map?q=' + encodeURIComponent(q) : '/map');
+        runSearch(q);
       });
     }
-    const searchRetry = document.querySelector('[data-search-retry]');
+    const searchRetry = $m('[data-search-retry]');
     if (searchRetry) searchRetry.addEventListener('click', () => runSearch(input ? input.value : ''));
-
-    /* --- обзор: корпуса → этажи → кабинеты ------------------------------ */
-    const loadRooms = async () => {
-      if (!state.buildingId) return;
-      const seq = ++state.seq;
-      clearTimeout(skRooms);
-      show('[data-rooms-loading]', false);
-      show('[data-rooms-empty]', false);
-      show('[data-rooms-error]', false);
-      show('[data-rooms-grid]', false);
-      show('[data-floor-chips]', true);
-      skRooms = setTimeout(() => show('[data-rooms-loading]', true), 300);
-      const data = await fetchJSON('/v1/map/rooms?building_id=' + state.buildingId);
-      if (seq !== state.seq) return;
-      clearTimeout(skRooms);
-      show('[data-rooms-loading]', false);
-      if (!data || !Array.isArray(data.rooms)) {
-        show('[data-rooms-error]', true);
-        return;
-      }
-      /* чипы этажей — distinct floor выбранного корпуса (null — «без этажа») */
-      const floors = [];
-      data.rooms.forEach((r) => {
-        if (!floors.some((f) => f.key === r.floor)) floors.push({ key: r.floor });
+    if (searchList) {
+      searchList.addEventListener('click', (event) => {
+        const chip = event.target.closest('[data-room-id]');
+        if (!chip) return;
+        const room = state.rooms.find((r) => String(r.id) === chip.dataset.roomId);
+        if (room) {
+          searchList.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+          selectRoom(room, true);
+        }
       });
-      floors.sort((a, b) => {
-        if (a.key == null) return 1;
-        if (b.key == null) return -1;
-        return a.key - b.key;
-      });
-      const chips = document.querySelector('[data-floor-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      floors.forEach((f) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.floor = f.key == null ? '' : String(f.key);
-        chip.textContent = f.key == null ? 'Без этажа' : 'Этаж ' + f.key;
-        chip.addEventListener('click', () => {
-          state.floor = f.key;
-          syncFloorChips();
-          renderRooms(data.rooms);
-        });
-        chips.append(chip);
-      });
-      if (!floors.some((f) => f.key === state.floor)) {
-        state.floor = floors.length ? floors[0].key : null;
-      }
-      syncFloorChips();
-      renderRooms(data.rooms);
-    };
-    const syncFloorChips = () => {
-      document.querySelectorAll('[data-floor-chips] .chip').forEach((chip) => {
-        const val = chip.dataset.floor === '' ? null : Number(chip.dataset.floor);
-        chip.setAttribute('aria-pressed', String(val === state.floor));
-      });
-    };
-    const renderRooms = (rooms) => {
-      const grid = document.querySelector('[data-rooms-grid]');
-      if (!grid) return;
-      grid.replaceChildren();
-      const onFloor = rooms.filter((r) => r.floor === state.floor);
-      if (!onFloor.length) {
-        show('[data-rooms-grid]', false);
-        show('[data-rooms-empty]', true);
-        return;
-      }
-      onFloor.forEach((r) => {
-        const tile = el('div', 'map-room');
-        tile.append(el('strong', null, r.name || ''));
-        if (r.kind) tile.append(el('span', 'caption', r.kind));
-        grid.append(tile);
-      });
-      show('[data-rooms-empty]', false);
-      show('[data-rooms-grid]', true);
-    };
-
-    const syncBuildingChips = () => {
-      document.querySelectorAll('[data-building-chips] .chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.buildingId) === state.buildingId));
-      });
-    };
-    const selectBuilding = (b) => {
-      state.buildingId = b.id;
-      state.floor = null;
-      syncBuildingChips();
-      const addr = document.querySelector('[data-building-address]');
-      if (addr) {
-        addr.textContent = b.address || '';
-        addr.hidden = !b.address;
-      }
-      const floorsSection = document.querySelector('[data-floors-section]');
-      if (floorsSection) floorsSection.hidden = false;
-      loadRooms();
-    };
-    const loadBuildings = async () => {
-      show('[data-buildings-error]', false);
-      const data = await fetchJSON('/v1/map/buildings');
-      if (!data || !Array.isArray(data.buildings)) {
-        show('[data-buildings-error]', true);
-        return;
-      }
-      state.buildings = data.buildings;
-      const chips = document.querySelector('[data-building-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      state.buildings.forEach((b) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.buildingId = String(b.id);
-        chip.textContent = b.name || '';
-        chip.addEventListener('click', () => {
-          if (state.buildingId !== b.id) selectBuilding(b);
-        });
-        chips.append(chip);
-      });
-      if (state.buildings.length) selectBuilding(state.buildings[0]);
-    };
-    const buildingsRetry = document.querySelector('[data-buildings-retry]');
-    if (buildingsRetry) buildingsRetry.addEventListener('click', () => loadBuildings());
-    const roomsRetry = document.querySelector('[data-rooms-retry]');
-    if (roomsRetry) roomsRetry.addEventListener('click', () => loadRooms());
-
-    loadBuildings();
-
-    /* ?q= при загрузке (алиас /map/rooms?q=… и шареные ссылки): поле
-       предзаполнено, поиск выполнен сразу — постановка экрана карты */
-    const initial = new URLSearchParams(window.location.search).get('q');
-    if (initial && input) {
-      input.value = initial;
-      runSearch(initial);
     }
+
+    /* --- нижний блок: selects и план ------------------------------------------ */
+    if (bSelect) bSelect.addEventListener('change', () => selectBuilding(bSelect.value ? Number(bSelect.value) : null));
+    if (picker) picker.addEventListener('change', () => {
+      if (picker.value) selectBuilding(Number(picker.value), { focus: true });
+      else { selectBuilding(null); resetView(); applyViewBox(); say(t('map.statusReset', 'Исходный вид восстановлен.')); }
+    });
+    if (fSelect) fSelect.addEventListener('change', () => {
+      state.floor = fSelect.value === '' ? null : Number(fSelect.value);
+      state.roomId = null; state.foundId = null; showCard(null);
+      renderPlan();
+      renderScene();
+    });
+    const grid = $m('[data-rooms-grid]');
+    if (grid) grid.addEventListener('click', (event) => {
+      const tile = event.target.closest('.map-room');
+      if (!tile) return;
+      const room = state.rooms.find((r) => String(r.id) === tile.dataset.roomId);
+      if (!room) return;
+      state.roomId = room.id;
+      grid.querySelectorAll('.map-room').forEach((n) => n.setAttribute('aria-pressed', String(n === tile)));
+      showCard(room);
+    });
+
+    /* --- сцена: клик, клавиатура, зум/пан, перетаскивание ---------------------- */
+    let drag = null, dragMoved = false;
+    const zoom = (f) => { state.k *= f; clampView(); applyViewBox(); say(t('map.statusZoom', 'Масштаб изменён.')); };
+    const pan = (dx, dy) => {
+      const vb = viewBox();
+      state.cx += dx * vb.w * 0.15; state.cy += dy * vb.h * 0.15;
+      clampView(); applyViewBox(); say(t('map.statusPan', 'Карта перемещена.'));
+    };
+    const fullReset = () => {
+      state.mode = 'iso';
+      if (topBtn) topBtn.setAttribute('aria-pressed', 'false');
+      resetView(); renderScene();
+      say(t('map.statusReset', 'Исходный вид восстановлен.'));
+    };
+    const ACTIONS = {
+      'zoom-in': () => zoom(1.25), 'zoom-out': () => zoom(0.8),
+      'pan-up': () => pan(0, -1), 'pan-down': () => pan(0, 1), 'pan-left': () => pan(-1, 0), 'pan-right': () => pan(1, 0),
+      reset: fullReset,
+      top: () => {
+        state.mode = state.mode === 'top' ? 'iso' : 'top';
+        if (topBtn) topBtn.setAttribute('aria-pressed', String(state.mode === 'top'));
+        resetView(); renderScene();
+        say(state.mode === 'top' ? t('map.statusTop', 'Вид сверху.') : t('map.statusIso', 'Объёмный вид.'));
+      },
+    };
+    document.querySelectorAll('[data-campus-action]').forEach((btn) => {
+      btn.addEventListener('click', () => { if (state.base && ACTIONS[btn.dataset.campusAction]) ACTIONS[btn.dataset.campusAction](); });
+    });
+    const retry = $m('[data-campus-retry]');
+    if (retry) retry.addEventListener('click', () => load());
+    if (scene) {
+      const pickFrom = (target) => {
+        const label = target.closest('.campus-building-label');
+        const g = target.closest('.campus-block');
+        const node = label || g;
+        return node ? Number(node.dataset.buildingId) : null;
+      };
+      scene.addEventListener('click', (event) => {
+        if (dragMoved) { dragMoved = false; return; }
+        const id = pickFrom(event.target);
+        if (id == null) return;
+        const slab = event.target.closest('.campus-slab');
+        if (slab && id === state.buildingId) {
+          state.floor = Number(slab.dataset.floor);
+          state.roomId = null; state.foundId = null; showCard(null);
+          syncAll();
+          return;
+        }
+        if (id !== state.buildingId) selectBuilding(id);
+      });
+      scene.addEventListener('keydown', (event) => {
+        if (!state.base) return;
+        const g = event.target.closest && event.target.closest('.campus-block');
+        if (g && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          selectBuilding(Number(g.dataset.buildingId));
+          return;
+        }
+        const step = event.shiftKey ? 2 : 1;
+        const keys = {
+          ArrowUp: () => pan(0, -step), ArrowDown: () => pan(0, step), ArrowLeft: () => pan(-step, 0), ArrowRight: () => pan(step, 0),
+          '+': () => zoom(1.25), '=': () => zoom(1.25), '-': () => zoom(0.8), '_': () => zoom(0.8),
+        };
+        if (keys[event.key]) { event.preventDefault(); keys[event.key](); return; }
+        if (event.code === 'KeyR' && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); fullReset(); }
+      });
+      scene.addEventListener('pointerdown', (event) => {
+        if (!state.base || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, cx: state.cx, cy: state.cy, captured: false };
+        dragMoved = false;
+      });
+      scene.addEventListener('pointermove', (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        if (!drag.captured) {
+          if (Math.hypot(dx, dy) < 6) return;
+          drag.captured = true; dragMoved = true;
+          scene.setPointerCapture(event.pointerId);
+          scene.classList.add('is-dragging');
+        }
+        const m = screenMap();
+        state.cx = drag.cx - dx / m.s; state.cy = drag.cy - dy / m.s;
+        clampView(); applyViewBox();
+      });
+      const endDrag = (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        if (drag.captured) say(t('map.statusPan', 'Карта перемещена.'));
+        drag = null;
+        scene.classList.remove('is-dragging');
+      };
+      scene.addEventListener('pointerup', endDrag);
+      scene.addEventListener('pointercancel', endDrag);
+      if (window.ResizeObserver) new ResizeObserver(() => placeLabels()).observe(scene);
+    }
+
+    /* --- старт и deep link ?q= / ?room= / ?building= -------------------------- */
+    const params = new URLSearchParams(window.location.search);
+    const initialQ = params.get('q') || params.get('room');
+    const initialB = Number(params.get('building'));
+    if (initialQ && input) input.value = initialQ;
+    load().then((ok) => {
+      if (!ok) return;
+      /* deep link: без прокрутки — корпус и плита этажа видны на схеме сразу */
+      if (initialQ) runSearch(initialQ, false);
+      else if (initialB && building(initialB)) selectBuilding(initialB, { focus: true });
+    });
   }
 
   /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */

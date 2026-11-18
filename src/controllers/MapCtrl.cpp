@@ -68,11 +68,12 @@ void MapCtrl::mapPage(const HttpRequestPtr& req,
     // /v1/map/rooms — 02 §5.2); query ?q= страница читает на клиенте
     // (location.search) и сразу выполняет поиск при загрузке. Состояния
     // 03 §5 — в шаблоне и static/js/app.js.
-    // 5.18 (шаг 3): каркас — словарь из view-данных (Р-16); тело экрана —
-    // по-русски (вторичный экран, вне охвата шага 3 — журнал 5.18).
+    // 5.18: каркас и тело экрана — словарь из view-данных (Р-16).
     HttpViewData data;
-    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
-    data.insert("pageTitle", std::string("Карта корпусов · Пара"));
+    const auto lang = i18n::resolveRequestLang(req);
+    i18n::insertUiStrings(data, lang);
+    // v3 (шаг 5): тело экрана переведено (map.*), заголовок вкладки — из словаря.
+    data.insert("pageTitle", i18n::pageTitleOf("campus.map", lang));
     // Экран НЕ таб (03 §3.1 — вход из профиля/профиля человека,
     // 03 §4.9.6/5.16): пустой activeTab — ни один пункт таб-бара не
     // получает aria-current.

@@ -1,113 +1,121 @@
 <%c++
-/* Карта корпусов — поиск кабинета (Э7, экран «Карта» 3 из 4;
-   03 §4.9.6/5.16, design-drafts/map.html). Страница НЕ содержит данных:
-   корпуса и кабинеты грузит клиент — fetch GET /v1/map/buildings и GET
-   /v1/map/rooms (query q/building_id — ТЕ ЖЕ JSON-роуты MapCtrl, что
-   стоят за API, 02 §5.2; паттерн views/library.csp). Контент строит
-   static/js/app.js (только createElement/textContent — 02 §6.4).
-   Два пути (03 §4.9.6 «список корпусов → чипы этажей → кабинеты; поиск
-   „1207" → „корпус Б · этаж 2 · лаборатория"»):
-     — обзор: чипы корпусов (name; GET /v1/map/buildings) → чипы этажей
-       выбранного корпуса (distinct floor из GET /v1/map/rooms?
-       building_id=N) → кабинеты этажа плитками .map-plan/.map-room
-       (номер + тип caption; floor/kind nullable — пустое не рисуется);
-     — поиск: строка «Номер кабинета» → GET /v1/map/rooms?q= → карточки
-       «номер · корпус · этаж · тип» (формат черновика map.html).
-   Страница читает ?q= из location.search при загрузке (сюда ведут
-   ссылки кабинета из профилей людей через алиас GET /map/rooms → 303
-   /map?q=…): поле предзаполняется, поиск выполняется сразу; новый поиск
-   подменяет адрес history.replaceState — ссылка остаётся шареной.
-   Пустой результат поиска — «Ничего не нашлось»; этаж без кабинетов —
-   «На этом этаже кабинеты ещё не добавлены. Выберите другой этаж.»
-   (дословно черновик map.html #map-empty).
-   Состояния (03 §5): скелетоны секций — только если ответ дольше
-   300 мс (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить»
-   (повторный fetch, 03 §5.3); офлайн — баннер каркаса (topbar +
-   applyOffline, 03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
-   «Карта» — НЕ таб (03 §3.1): MapCtrl::mapPage ставит пустой activeTab.
-   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) — строк-данных в
-   шаблон не вставляется, страница статична. htmx не нужен (без
-   сегментов) — только app.js (defer, локальный путь — AGENTS: без
-   npm/CDN). */
+/* Карта кампуса — дизайн v3 (design-drafts/v3/pages/map.html), Р-32: вместо 3D Three.js
+   и OSM-контуров эталона — интерактивная SVG-схема кампуса, которую строит
+   static/js/app.js из прод-данных GET /v1/map/buildings + GET /v1/map/rooms
+   (только createElement/createElementNS/textContent — 02 §6.4). Страница данных не
+   содержит. Разметка эталона: section.campus-explorer (__head, campus-view-switch,
+   campus-scene, campus-controls, campus-pan-control, campus-map-meta,
+   campus-building-picker, __bottom) + campus-source-note + map-layout «Найти
+   аудиторию → корпус → этаж → план этажа → карточка помещения».
+   Компас и поворот эталона не переносятся: схема не ориентирована по сторонам света.
+   Deep link: ?q= (алиас /map/rooms?q= → 303 /map?q=), ?room= (синоним эталона),
+   ?building=<id>. Состояния: скелетон сцены (> 300 мс), пусто, ошибка с «Повторить»,
+   офлайн — баннер каркаса + disabled поиск (data-network-action). Строки — словарь
+   map.* (5.18). */
 %>
 <%view head %>
-<!-- Каркасный head.csp подключает только CSS: app.js подключает страница
-     (defer; htmx на этом экране не используется). -->
 <script defer src="/static/js/app.js"></script>
 <body data-page="map">
 <%view topbar %>
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Профиль</a>
-      <h1>Найдём нужный кабинет</h1>
-      <p>Корпус → этаж → кабинет — или поиск по номеру</p>
+      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.nav.profile"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.campus.map"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.map.subtitle"); %></p>
     </div>
   </div>
-  <div class="content-narrow">
 
-    <!-- Поиск кабинета (черновик map.html: форма с q) -->
-    <form class="field" data-map-form>
-      <label for="map-q">Номер кабинета</label>
-      <input id="map-q" type="search" placeholder="1207 или Б-204" data-map-q autocomplete="off">
-      <p class="caption">Например, «1207» — покажем корпус, этаж и тип помещения.</p>
-    </form>
-
-    <!-- Результат поиска: карточки «номер · корпус · этаж · тип»
-         (строит app.js из GET /v1/map/rooms?q=) -->
-    <section class="section" aria-labelledby="map-search-title" data-search-section hidden>
-      <div class="section-title"><h2 id="map-search-title">Нашли по запросу</h2></div>
-      <div class="stack" data-search-loading hidden aria-busy="true" aria-label="Ищем">
-        <div class="skeleton card"></div>
-        <div class="skeleton card"></div>
+  <section class="campus-explorer" aria-labelledby="campus-title">
+    <div class="campus-explorer__head">
+      <div><h2 id="campus-title"><%c++ $$ << @@.get<std::string>("t.map.campusTitle"); %></h2><p><%c++ $$ << @@.get<std::string>("t.map.campusSub"); %></p></div>
+      <div class="campus-view-switch">
+        <button class="button" type="button" data-campus-action="top" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.map.viewTop"); %></button>
+        <button class="button" type="button" data-campus-action="reset"><%c++ $$ << @@.get<std::string>("t.map.viewReset"); %></button>
       </div>
-      <div class="surface" data-search-empty hidden>
-        <div class="empty">
-          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8.5 11h5"/></svg></div>
-          <h2>Ничего не нашлось</h2>
-          <p>Проверьте номер — например, 1207 или Б-204.</p>
+    </div>
+    <div class="campus-scene-shell">
+      <div class="campus-scene" data-campus-scene tabindex="0" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.map.sceneLabel"); %>" aria-describedby="campus-controls-help campus-keys-help">
+        <div class="campus-loading campus-state" data-campus-loading hidden role="status">
+          <div class="skeleton block campus-skeleton" aria-hidden="true"></div>
+          <span><%c++ $$ << @@.get<std::string>("t.map.loading"); %></span>
+        </div>
+        <div class="campus-loading campus-state" data-campus-error hidden role="alert">
+          <h3><%c++ $$ << @@.get<std::string>("t.map.errorLoad"); %></h3>
+          <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+          <button class="button" type="button" data-campus-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+        </div>
+        <div class="campus-loading campus-state" data-campus-empty hidden>
+          <h3><%c++ $$ << @@.get<std::string>("t.map.emptyTitle"); %></h3>
+          <p class="muted"><%c++ $$ << @@.get<std::string>("t.map.emptyText"); %></p>
         </div>
       </div>
-      <section class="section flow" data-search-error hidden role="alert">
-        <h3>Не получилось выполнить поиск</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-search-retry>Повторить</button>
-      </section>
-      <div data-search-results hidden></div>
-    </section>
-
-    <!-- Обзор: корпуса → этажи → кабинеты -->
-    <section class="section" aria-labelledby="map-buildings-title">
-      <div class="section-title"><h2 id="map-buildings-title">Корпуса</h2></div>
-      <div class="chips" role="group" aria-label="Корпуса" data-building-chips></div>
-      <section class="section flow" data-buildings-error hidden role="alert">
-        <h3>Не получилось загрузить корпуса</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-buildings-retry>Повторить</button>
-      </section>
-
-      <div data-floors-section hidden>
-        <p class="caption" data-building-address></p>
-        <div class="chips section" role="group" aria-label="Этажи" data-floor-chips></div>
-        <div class="stack" data-rooms-loading hidden aria-busy="true" aria-label="Загружаем этаж">
-          <div class="skeleton card"></div>
-          <div class="skeleton card"></div>
-        </div>
-        <div class="empty" data-rooms-empty hidden>
-          <h2>На этом этаже кабинеты ещё не добавлены</h2>
-          <p>Выберите другой этаж.</p>
-        </div>
-        <section class="section flow" data-rooms-error hidden role="alert">
-          <h3>Не получилось загрузить кабинеты</h3>
-          <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-          <button class="button" type="button" data-rooms-retry>Повторить</button>
-        </section>
-        <div class="map-plan" data-rooms-grid hidden></div>
+      <div class="campus-controls" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.map.zoomGroup"); %>">
+        <button type="button" data-campus-action="zoom-in" aria-label="<%c++ $$ << @@.get<std::string>("t.map.zoomIn"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.zoomIn"); %>">+</button>
+        <button type="button" data-campus-action="zoom-out" aria-label="<%c++ $$ << @@.get<std::string>("t.map.zoomOut"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.zoomOut"); %>">−</button>
       </div>
-    </section>
+      <div class="campus-pan-control" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.map.panGroup"); %>">
+        <button type="button" data-campus-action="pan-up" aria-label="<%c++ $$ << @@.get<std::string>("t.map.panUp"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.panUp"); %>">↑</button>
+        <button type="button" data-campus-action="pan-left" aria-label="<%c++ $$ << @@.get<std::string>("t.map.panLeft"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.panLeft"); %>">←</button>
+        <button type="button" data-campus-action="pan-down" aria-label="<%c++ $$ << @@.get<std::string>("t.map.panDown"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.panDown"); %>">↓</button>
+        <button type="button" data-campus-action="pan-right" aria-label="<%c++ $$ << @@.get<std::string>("t.map.panRight"); %>" title="<%c++ $$ << @@.get<std::string>("t.map.panRight"); %>">→</button>
+      </div>
+      <div class="campus-map-meta" data-campus-selection><strong><%c++ $$ << @@.get<std::string>("t.map.sceneLabel"); %></strong><span><%c++ $$ << @@.get<std::string>("t.map.metaHint"); %></span></div>
+    </div>
+    <div class="campus-building-picker">
+      <label for="campus-building-picker"><%c++ $$ << @@.get<std::string>("t.map.showBuilding"); %></label>
+      <select id="campus-building-picker" data-campus-picker>
+        <option value=""><%c++ $$ << @@.get<std::string>("t.map.wholeCampus"); %></option>
+      </select>
+    </div>
+    <div class="campus-explorer__bottom">
+      <div>
+        <p data-campus-status role="status" aria-live="polite"><%c++ $$ << @@.get<std::string>("t.map.loading"); %></p>
+        <p class="campus-keyboard-help" id="campus-controls-help"><%c++ $$ << @@.get<std::string>("t.map.helpPointer"); %></p>
+        <p class="campus-keyboard-help" id="campus-keys-help"><%c++ $$ << @@.get<std::string>("t.map.helpKeys"); %></p>
+      </div>
+    </div>
+  </section>
+  <p class="campus-source-note"><%c++ $$ << @@.get<std::string>("t.map.sourceNote"); %></p>
 
-    <p class="notice section">Схематичный план вымышленного кампуса.</p>
-
+  <div class="map-layout section">
+    <div class="flow">
+      <form id="room-search-form" data-map-form>
+        <label for="room-search"><%c++ $$ << @@.get<std::string>("t.map.findRoom"); %></label>
+        <div class="row">
+          <input id="room-search" name="q" type="search" placeholder="<%c++ $$ << @@.get<std::string>("t.map.searchPlaceholder"); %>" autocomplete="off" required data-map-q>
+          <button class="icon-button" type="submit" aria-label="<%c++ $$ << @@.get<std::string>("t.map.findRoom"); %>" data-network-action><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        </div>
+        <p class="caption" id="map-search-result" role="status" data-search-status></p>
+        <div class="chips map-search-results" data-search-results hidden></div>
+        <button class="button" type="button" data-search-retry data-network-action hidden><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+      </form>
+      <div class="field">
+        <label for="map-building"><%c++ $$ << @@.get<std::string>("t.map.building"); %></label>
+        <select id="map-building" data-map-building>
+          <option value=""><%c++ $$ << @@.get<std::string>("t.map.chooseBuilding"); %></option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="map-floor"><%c++ $$ << @@.get<std::string>("t.map.floor"); %></label>
+        <select id="map-floor" data-map-floor disabled></select>
+      </div>
+      <p class="notice"><%c++ $$ << @@.get<std::string>("t.map.planNote"); %></p>
+    </div>
+    <div>
+      <div class="section-title"><h2 id="map-location" data-map-location><%c++ $$ << @@.get<std::string>("t.map.chooseBuilding"); %></h2></div>
+      <div class="map-plan map-plan--floor" data-rooms-grid hidden></div>
+      <p class="notice section" data-rooms-hint><%c++ $$ << @@.get<std::string>("t.map.planHint"); %></p>
+      <p class="notice section" data-rooms-empty hidden></p>
+      <div class="surface section flow" id="room-detail" data-room-detail>
+        <span class="overline"><%c++ $$ << @@.get<std::string>("t.map.roomCard"); %></span>
+        <h2 id="room-detail-title" data-room-title><%c++ $$ << @@.get<std::string>("t.map.roomPick"); %></h2>
+        <p class="small muted" data-room-body><%c++ $$ << @@.get<std::string>("t.map.roomPickHint"); %></p>
+        <div class="actions" data-room-actions hidden>
+          <a class="button primary" href="/rooms"><%c++ $$ << @@.get<std::string>("t.map.book"); %></a>
+        </div>
+      </div>
+    </div>
   </div>
 </main>
 <%view tabbar %>
