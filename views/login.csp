@@ -24,54 +24,82 @@
 <!-- Каркасный head.csp подключает только CSS: app.js подключает сама страница
      (defer, локальный путь — AGENTS: без npm/CDN; как в design-drafts). -->
 <script defer src="/static/js/app.js"></script>
-<body data-page="login">
+<!-- v3 (fe_rebuild шаг 5, экран 1 «Вход»): композиция entry-page эталона
+     design-drafts/v3/pages/login.html — сцена вымышленного «Университета
+     Меридиан» (эмблема static/img/meridian-emblem.png — уменьшенная копия из
+     эталона, 600px) + панель входа. Механика прода без изменений: форма
+     #login-form (POST /v1/auth/login, app.js — JSON-вход, ошибка под кнопкой,
+     офлайн-подпись data-offline-label), демо-доступы data-demo-login (пароль
+     НЕ подставляется — AGENTS §5.2). Строки — t.<key> (Р-16). -->
+<body class="entry-page" data-page="login">
 <a class="skip" href="#main"><%c++ $$ << @@.get<std::string>("t.a11y.skipToContent"); %></a>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.brandHome"); %>"><svg aria-hidden="true" class="para-wordmark" fill="none" focusable="false" viewBox="0 0 306 120" xmlns="http://www.w3.org/2000/svg">
+<g aria-hidden="true" class="para-wordmark__guides" opacity=".38" stroke="currentColor" stroke-width=".75">
+<path d="M10 27H296M10 88H296M20 14V112M89 14V101M104 14V101M160 14V101M177 14V101M226 14V101M242 14V101M291 14V101" stroke-dasharray="2 5"></path>
+<path d="M40 22H75M33 57V76M53 93H76M104 57V77M114 23H147M179 32H211M235 22H275M237 57V76"></path>
+</g>
+<g class="para-wordmark__letters" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" stroke-width="7">
+<path d="M22 108V29M23 57C23 17 85 17 85 57S23 97 23 57Z"></path>
+<path d="M157 30V87M157 57C157 17 103 17 103 57S157 97 157 57Z"></path>
+<path d="M181 87V29M181 55C181 34 196 26 215 30"></path>
+<path d="M288 30V87M288 57C288 17 234 17 234 57S288 97 288 57Z"></path>
+</g>
+<g aria-hidden="true" class="para-wordmark__nodes" stroke="currentColor" stroke-width="1.2">
+<rect height="6" width="6" x="19" y="26"></rect><rect height="6" width="6" x="19" y="105"></rect>
+<circle cx="54" cy="27" r="2.8"></circle><circle cx="85" cy="57" r="2.8"></circle><circle cx="54" cy="87" r="2.8"></circle>
+<circle cx="103" cy="57" r="2.8"></circle><circle cx="130" cy="27" r="2.8"></circle><rect height="6" width="6" x="154" y="84"></rect>
+<rect height="6" width="6" x="178" y="26"></rect><circle cx="215" cy="30" r="2.8"></circle>
+<circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
+</g>
+</svg></a>
+    <p class="entry-university-name"><strong><%c++ $$ << @@.get<std::string>("t.login.uniName"); %></strong><%c++ $$ << @@.get<std::string>("t.login.uniSub"); %></p>
+  </div>
+</header>
 <div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>
 <main id="main" class="shell">
-  <div class="login-layout">
-    <header class="login-intro">
-      <p class="brand"><span class="brand-symbol" aria-hidden="true"></span>пара</p>
-      <p class="muted small"><%c++ $$ << @@.get<std::string>("t.login.tagline"); %></p>
-      <p class="eyebrow"><%c++ $$ << @@.get<std::string>("t.login.subtitle"); %></p>
-      <h1 class="serif"><%c++ $$ << @@.get<std::string>("t.login.heading"); %></h1>
-      <p class="muted small"><%c++ $$ << @@.get<std::string>("t.login.lead"); %></p>
-    </header>
-    <form id="login-form" class="surface" method="post" action="/v1/auth/login">
-      <h2><%c++ $$ << @@.get<std::string>("t.login.formTitle"); %></h2>
-      <div class="field">
-        <label for="login"><%c++ $$ << @@.get<std::string>("t.login.loginLabel"); %></label>
-        <input id="login" name="login" type="text" autocomplete="username" required>
-      </div>
-      <div class="field">
-        <label for="password"><%c++ $$ << @@.get<std::string>("t.login.passwordLabel"); %></label>
-        <div class="password-wrap">
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button type="button" class="icon-button" id="toggle-password" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.showPassword"); %>" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
-        </div>
-      </div>
-      <!-- data-offline-label — helper-текст офлайна на самой кнопке
-           (03 §5.4: «Нужна сеть для входа»), ставит/снимает applyOffline -->
-      <button class="button primary full section" type="submit" data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.login.offlineHint"); %>"><%c++ $$ << @@.get<std::string>("t.login.submit"); %></button>
-      <!-- Текст ошибки — только при ответе сервера (03 §4.1: под кнопкой,
-           поля не очищаются; для invalid_credentials фокус переводится в
-           пароль). Заполняет static/js/app.js. -->
-      <p id="login-error" class="field-error" role="alert" hidden></p>
-    </form>
-    <!-- Карточка «Демо-доступы для жюри» (03 §4.1). Тап по строке подставляет
-         логин в поле (static/js/app.js, data-demo-login); пароль НЕ
-         подставляется: единый демо-пароль публикуется в комментарии к работе,
-         в репозитории и разметке его нет (AGENTS.md §5.2). -->
-    <section class="section" aria-labelledby="demo-access-title">
-      <div class="section-title"><h2 id="demo-access-title"><%c++ $$ << @@.get<std::string>("t.login.demoTitle"); %></h2></div>
-      <div class="login-roles">
-        <button type="button" class="role-button" data-demo-login="anya.demo" aria-pressed="false"><div><strong>anya.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="oleg.demo" aria-pressed="false"><div><strong>oleg.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="mark.demo" aria-pressed="false"><div><strong>mark.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="dina.demo" aria-pressed="false"><div><strong>dina.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-        <button type="button" class="role-button" data-demo-login="dean.demo" aria-pressed="false"><div><strong>dean.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStaff"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-      </div>
-      <p class="caption"><%c++ $$ << @@.get<std::string>("t.login.demoCaption"); %></p>
+  <div class="entry-composition">
+    <section class="university-stage" aria-label="<%c++ $$ << @@.get<std::string>("t.login.uniName"); %>">
+      <div class="university-stage-meta"><span><%c++ $$ << @@.get<std::string>("t.login.uniName"); %></span><span><%c++ $$ << @@.get<std::string>("t.login.uniMotto"); %></span></div>
+      <span class="university-display" aria-hidden="true"><%c++ $$ << @@.get<std::string>("t.login.uniDisplay"); %></span>
+      <img class="university-emblem" src="/static/img/meridian-emblem.png" width="600" height="600" alt="<%c++ $$ << @@.get<std::string>("t.login.emblemAlt"); %>" fetchpriority="high">
+      <div class="university-stage-bottom"><p><%c++ $$ << @@.get<std::string>("t.login.lead"); %></p><span><%c++ $$ << @@.get<std::string>("t.shell.semester"); %></span></div>
     </section>
+    <div class="entry-panel">
+      <div class="entry-panel-heading">
+        <p class="eyebrow"><%c++ $$ << @@.get<std::string>("t.login.subtitle"); %></p>
+        <h1><%c++ $$ << @@.get<std::string>("t.login.formTitle"); %></h1>
+        <p><%c++ $$ << @@.get<std::string>("t.login.heading"); %><br><%c++ $$ << @@.get<std::string>("t.login.leadSecond"); %></p>
+      </div>
+      <form id="login-form" class="surface" method="post" action="/v1/auth/login">
+        <div class="field">
+          <label for="login"><%c++ $$ << @@.get<std::string>("t.login.loginLabel"); %></label>
+          <input id="login" name="login" type="text" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password"><%c++ $$ << @@.get<std::string>("t.login.passwordLabel"); %></label>
+          <div class="password-wrap">
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button type="button" class="icon-button" id="toggle-password" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.showPassword"); %>" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <button class="button primary full section" type="submit" data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.login.offlineHint"); %>"><%c++ $$ << @@.get<std::string>("t.login.submit"); %></button>
+        <p id="login-error" class="field-error" role="alert" hidden></p>
+      </form>
+      <details class="entry-role-picker" open>
+        <summary><%c++ $$ << @@.get<std::string>("t.login.demoTitle"); %></summary>
+        <div class="login-roles">
+          <button type="button" class="role-button" data-demo-login="anya.demo" aria-pressed="false"><span class="avatar" aria-hidden="true">AN</span><div><strong>anya.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+          <button type="button" class="role-button" data-demo-login="oleg.demo" aria-pressed="false"><span class="avatar" aria-hidden="true">OL</span><div><strong>oleg.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM1"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+          <button type="button" class="role-button" data-demo-login="mark.demo" aria-pressed="false"><span class="avatar" aria-hidden="true">MA</span><div><strong>mark.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentM4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+          <button type="button" class="role-button" data-demo-login="dina.demo" aria-pressed="false"><span class="avatar" aria-hidden="true">DI</span><div><strong>dina.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStudentF4"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+          <button type="button" class="role-button" data-demo-login="dean.demo" aria-pressed="false"><span class="avatar" aria-hidden="true">DE</span><div><strong>dean.demo</strong><span><%c++ $$ << @@.get<std::string>("t.login.roleStaff"); %></span></div><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        </div>
+        <p class="caption"><%c++ $$ << @@.get<std::string>("t.login.demoCaption"); %></p>
+      </details>
+      <p class="entry-institution-note"><%c++ $$ << @@.get<std::string>("t.login.noteFictional"); %><br><%c++ $$ << @@.get<std::string>("t.login.noteDemo"); %></p>
+    </div>
   </div>
 </main>
 <%view footer %>
