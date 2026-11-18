@@ -345,6 +345,53 @@
       av.textContent = ini.toUpperCase();
     });
   })();
+  /* Быстрый поиск «Куда перейти?» (эталон v3): фильтр серверного списка разделов по
+     словам подписи/описания (ё→е, грубая основа слова — как в эталоне), Ctrl/⌘+K,
+     ↓ — к первой ссылке, Enter — открыть первую. */
+  (() => {
+    const dlg = document.querySelector('[data-search-dialog]');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    const input = dlg.querySelector('[data-search-input]');
+    const items = Array.from(dlg.querySelectorAll('[data-search-item]'));
+    const empty = dlg.querySelector('[data-search-empty]');
+    const count = dlg.querySelector('[data-search-count]');
+    const stem = (w) => w.toLowerCase().replace(/ё/g, 'е').replace(/(ами|ями|ого|ему|ов|ев|ия|ии|ую|а|ы|и|у|е)$/u, '');
+    const plural = (n) => {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return count.dataset.one;
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return count.dataset.few;
+      return count.dataset.many;
+    };
+    const render = () => {
+      const terms = input.value.trim().split(/\s+/).filter(Boolean).map(stem);
+      let n = 0;
+      items.forEach((li) => {
+        const words = li.textContent.toLowerCase().split(/[\s,·]+/).map(stem);
+        const ok = terms.every((t) => words.some((w) => w.indexOf(t) !== -1));
+        li.hidden = !ok; if (ok) n += 1;
+      });
+      if (empty) empty.hidden = n > 0;
+      if (count) count.textContent = n + ' ' + plural(n);
+    };
+    let prevFocus = null;
+    const open = () => { prevFocus = document.activeElement; input.value = ''; render(); dlg.showModal(); input.focus(); };
+    document.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('[data-search-open]')) open();
+      else if (e.target.closest && e.target.closest('[data-search-close]')) dlg.close();
+      else if (e.target === dlg) dlg.close();
+    });
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', (e) => {
+      const first = items.find((li) => !li.hidden);
+      const link = first && first.querySelector('a');
+      if (e.key === 'ArrowDown' && link) { e.preventDefault(); link.focus(); }
+      if (e.key === 'Enter' && link) { e.preventDefault(); link.click(); }
+    });
+    dlg.addEventListener('close', () => { if (prevFocus && prevFocus.isConnected) prevFocus.focus(); });
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (dlg.open) dlg.close(); else open(); }
+    });
+  })();
   document.querySelectorAll('[data-campus-link]').forEach((a) => {
     const href = a.getAttribute('href');
     if (href && (location.pathname === href || location.pathname.indexOf(href + '/') === 0)) {

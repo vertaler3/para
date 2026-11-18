@@ -56,6 +56,8 @@ FIXES = '''.ob-footer .button{white-space:nowrap}
 .htmx-indicator.skeleton{display:none}
 .htmx-request .htmx-indicator.skeleton,.htmx-request.htmx-indicator.skeleton{display:block;opacity:1}
 a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:none}
+.para-error-art__grid{stroke:var(--border)}
+.para-error-art__nodes,.para-error-art__handles path+path{fill:var(--surface)}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}

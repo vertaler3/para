@@ -50,6 +50,7 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
 <%c++ } %>
     <div class="workspace-label"><span><%c++ $$ << @@.get<std::string>("t.shell.workspace"); %></span><span class="workspace-period"><%c++ $$ << @@.get<std::string>("t.shell.semester"); %></span></div>
     <div class="header-actions">
+      <button type="button" class="icon-button workspace-search" data-search-open aria-label="<%c++ $$ << @@.get<std::string>("t.search.aria"); %>" aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span class="workspace-search-label"><%c++ $$ << @@.get<std::string>("t.search.button"); %></span></button>
       <span class="header-date" data-header-date></span>
       <a class="icon-button" href="/notifications" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.notifications"); %>">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
@@ -68,4 +69,34 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
     </nav>
   </div>
 </header>
+<%c++
+/* v3: быстрый поиск «Куда перейти?» эталона (в прототипе — JS-инъекция в шапку; здесь —
+   серверная разметка: список разделов прода с подписями словаря, фильтрует app.js
+   [data-search-*], Ctrl/⌘+K). Данных пользователя нет — только навигация. */
+%>
+<dialog class="quick-search" data-search-dialog aria-labelledby="quick-search-title">
+  <div class="dialog-title"><h2 id="quick-search-title"><%c++ $$ << @@.get<std::string>("t.search.title"); %></h2><button type="button" class="icon-button" data-search-close aria-label="<%c++ $$ << @@.get<std::string>("t.search.close"); %>">×</button></div>
+  <label class="sr-only" for="quick-search-input"><%c++ $$ << @@.get<std::string>("t.search.label"); %></label>
+  <input type="search" id="quick-search-input" data-search-input placeholder="<%c++ $$ << @@.get<std::string>("t.search.placeholder"); %>" autocomplete="off">
+  <p class="caption" id="quick-search-count" aria-live="polite" data-search-count data-one="<%c++ $$ << @@.get<std::string>("t.search.countOne"); %>" data-few="<%c++ $$ << @@.get<std::string>("t.search.countFew"); %>" data-many="<%c++ $$ << @@.get<std::string>("t.search.countMany"); %>"></p>
+  <ul id="quick-search-results" class="quick-search-results" data-search-list>
+    <li data-search-item><a href="/"><strong><%c++ $$ << @@.get<std::string>("t.nav.today"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dToday"); %></span></a></li>
+    <li data-search-item><a href="/schedule"><strong><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dSchedule"); %></span></a></li>
+    <li data-search-item><a href="/schedule?segment=week"><strong><%c++ $$ << @@.get<std::string>("t.schedule.weekStrip"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dSchedule"); %></span></a></li>
+    <li data-search-item><a href="/grades"><strong><%c++ $$ << @@.get<std::string>("t.nav.grades"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dGrades"); %></span></a></li>
+    <li data-search-item><a href="/gradebook"><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dGradebook"); %></span></a></li>
+    <li data-search-item><a href="/rating"><strong><%c++ $$ << @@.get<std::string>("t.profile.rating"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dRating"); %></span></a></li>
+    <li data-search-item><a href="/applications"><strong><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dApps"); %></span></a></li>
+    <li data-search-item><a href="/applications/new"><strong><%c++ $$ << @@.get<std::string>("t.apps.formTitle"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNewApp"); %></span></a></li>
+    <li data-search-item><a href="/rooms"><strong><%c++ $$ << @@.get<std::string>("t.campus.rooms"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dRooms"); %></span></a></li>
+    <li data-search-item><a href="/map"><strong><%c++ $$ << @@.get<std::string>("t.campus.map"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dMap"); %></span></a></li>
+    <li data-search-item><a href="/library"><strong><%c++ $$ << @@.get<std::string>("t.campus.library"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dLibrary"); %></span></a></li>
+    <li data-search-item><a href="/canteens"><strong><%c++ $$ << @@.get<std::string>("t.campus.canteen"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dCanteen"); %></span></a></li>
+    <li data-search-item><a href="/notifications"><strong><%c++ $$ << @@.get<std::string>("t.notif.title"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNotif"); %></span></a></li>
+    <li data-search-item><a href="/profile"><strong><%c++ $$ << @@.get<std::string>("t.nav.profile"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dProfile"); %></span></a></li>
+    <li data-search-item><a href="/people"><strong><%c++ $$ << @@.get<std::string>("t.profile.people"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dPeople"); %></span></a></li>
+    <li class="search-no-results" data-search-empty hidden><%c++ $$ << @@.get<std::string>("t.search.empty"); %></li>
+  </ul>
+  <p class="caption search-hint"><%c++ $$ << @@.get<std::string>("t.search.hint"); %></p>
+</dialog>
 <div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>

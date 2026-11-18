@@ -7,6 +7,7 @@
 
 #include "filters/CsrfCheck.h"
 #include "filters/SecurityHeaders.h"
+#include "utils/NotFoundPage.h"
 #include "services/MigrationRunner.h"
 #include "services/NotifyDispatcher.h"
 #include "services/ReminderService.h"
@@ -113,6 +114,8 @@ int main(int argc, char* argv[]) {
     // Referrer-Policy. Advice на СОЗДАНИЕ ответа — единственная точка
     // на процесс, контроллеры не трогаются (SecurityHeaders.h).
     para::SecurityHeaders::registerAdvice();
+    // Страница «не найдено» v3 для SSR-путей (API — JSON-404 ниже).
+    para::registerNotFoundPage();
 
     // Неизвестные пути API — единый формат ошибок 02 §5.1 (находка
     // Э1-404-HTML «Неизвестные /v1-пути отвечают HTML-404 Drogon», закрыта
