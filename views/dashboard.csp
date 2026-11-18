@@ -50,6 +50,7 @@
       <h1 class="serif"><span data-greeting><%c++ $$ << @@.get<std::string>("t.dash.greetingAfternoon"); %></span><span data-greeting-tail hidden>, <span data-account-short></span></span>.</h1>
       <p><%c++ $$ << @@.get<std::string>("t.dash.heading"); %></p>
     </div>
+    <div class="greeting-note"><%c++ $$ << @@.get<std::string>("t.dash.noteLine1"); %><br><%c++ $$ << @@.get<std::string>("t.dash.noteLine2"); %></div>
   </div>
   <!-- ==== Онбординг С5 (Э7 «Профиль», 03 §4.7/§4.9.4): чеклист «4 шага»
        поверх «Сейчас важно» при незавершённом onboarding_json — показывает
@@ -103,6 +104,7 @@ if (@@.get<std::string>("staffEntry") == "1") {
         <p class="overline"><%c++ $$ << @@.get<std::string>("t.dash.nextClass"); %></p>
         <div data-next-loading aria-hidden="true"><div class="skeleton block"></div></div>
         <a class="next-class" href="/schedule" data-next-body hidden>
+          <div class="paper-corner" aria-hidden="true"><svg fill="none" stroke="currentColor" stroke-width="1.4" viewBox="0 0 40 40"><path d="M12 7h19v25H9V10l3-3Z"/><path d="M14 14h12M14 19h12M14 24h7"/></svg></div>
           <div class="next-top">
             <p class="next-meta"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span data-next-meta><%c++ $$ << @@.get<std::string>("t.dash.nextSoon"); %></span></p>
             <span class="badge outline" data-next-kind hidden></span>
@@ -128,7 +130,7 @@ if (@@.get<std::string>("staffEntry") == "1") {
            срочности (03 §4.2: норма --border, ≤3 дней --warning-text,
            завтра --danger-text) ==== -->
       <section class="section" data-widget="deadlines">
-        <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.dash.deadlines"); %></h2><a href="/grades"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div class="section-title"><h2 class="side-title"><%c++ $$ << @@.get<std::string>("t.dash.deadlines"); %></h2><a href="/grades"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-deadlines-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div></div>
         <ul class="deadline-list" data-deadlines-body hidden></ul>
         <p class="muted small" data-deadlines-empty hidden><%c++ $$ << @@.get<std::string>("t.dash.emptyDeadlines"); %></p>
@@ -136,7 +138,7 @@ if (@@.get<std::string>("staffEntry") == "1") {
       </section>
       <!-- ==== Заявки → /applications/{id}: последние активные ==== -->
       <section class="section" data-widget="applications">
-        <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></h2><a href="/applications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div class="section-title"><h2 class="side-title"><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></h2><a href="/applications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-applications-loading aria-hidden="true"><div class="skeleton"></div><div class="mini-progress"><span class="done"></span><span class="done"></span><span></span></div></div>
         <div data-applications-body hidden></div>
         <div class="widget-empty" data-applications-empty hidden>
@@ -149,7 +151,7 @@ if (@@.get<std::string>("staffEntry") == "1") {
            ночью заголовок меняется на «За ночь: N событий» (03 §4.2,
            переставляет app.js) ==== -->
       <section class="section" data-widget="news">
-        <div class="section-title"><h2 data-news-title><%c++ $$ << @@.get<std::string>("t.dash.whatsNew"); %></h2><a href="/notifications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div class="section-title"><h2 class="side-title" data-news-title><%c++ $$ << @@.get<std::string>("t.dash.whatsNew"); %></h2><a href="/notifications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-news-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div></div>
         <div data-news-body hidden></div>
         <p class="muted small" data-news-empty hidden><%c++ $$ << @@.get<std::string>("t.dash.emptyNews"); %></p>
