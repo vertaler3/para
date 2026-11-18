@@ -1,39 +1,43 @@
 <%inc
 #include <json/json.h>
+#include <drogon/utils/Utilities.h>
 #include <cmath>
 #include <memory>
 #include <string>
 %>
 <%c++
-/* Экран дисциплины (Э7; 03 §4.9.3, design-drafts/discipline.html) — цель
-   тапа по карточке дисциплины в успеваемости (03 §4.4). Полная страница:
-   partials каркаса; pageTitle/activeTab — view-переменные
+/* Экран дисциплины (Э7; 03 §4.9.3) — дизайн v3: design-drafts/v3/pages/
+   discipline.html (+ discipline-english.html — закрытая дисциплина).
+   Полная страница: partials каркаса; pageTitle/activeTab — view-переменные
    GradesCtrl::disciplinePage. Контент — SSR: тела GradesService::list/
    summary/exams — те же методы, что за JSON API 02 §5.2 (SQL в шаблоне
    нет, AGENTS §5.5) — приходят сериализованными строками listJson/
-   summaryJson/examsJson; строки дисциплины фильтруются по
-   disciplineId (path-id роута; контроллер уже ответил 404 not_found,
-   если среди СВОИХ оценок пользователя нет ни одной с таким
-   discipline_id — владение через выборку по user_id сессии, guard для
-   path-id СТРОК оценки здесь неприменим, решение — в шапке GradesCtrl.h).
-   Пользовательские строки выводит HttpViewData::htmlTranslate (02 §6.4,
-   Р-16); сырой вывод — только серверные константы и числа.
-   Состав экрана (03 §4.9.3): шапка «78 / 82» (score_sum / max_sum, tnum),
-   бейджи типа контроля (03 §4.4: экзамен info / зачёт success /
-   дифзачёт neutral) и статуса («В процессе» / «Порог достигнут» —
-   выведен из missing, честно по демо-арифметике сервиса); предупреждение
-   «до допуска не хватает N» при missing>0; баллы по компонентам
-   (score/max_score, attempt, дата, бар с пороговыми цветами 03 §4.4);
-   комментарий преподавателя — при наличии, в кавычках (03 §4.9.3);
-   события сессии по дисциплине (kind/дата/аудитория), пересдача —
-   акцент danger; тап по событию → «Сессия» (/grades#session).
-   Ссылка «добрать баллы» → /grades#session — блок «Сессия» экрана
-   успеваемости; страницы дедлайн-радара (03 §4.9.2) ещё нет, тап туда
-   отложен (зафиксировано в комментарии и журнале сессии Э7).
-   Состояния: data — карточка дисциплины; error — сбой БД/разбора
-   (failed=1 от контроллера) — блок «Повторить» ([data-grades-retry] —
-   app.js); офлайн — баннер каркаса (03 §5.4); скелетона нет — страница
-   целиком SSR. */
+   summaryJson/examsJson; строки дисциплины фильтруются по disciplineId
+   (контроллер уже ответил 404, если среди СВОИХ оценок нет ни одной с
+   таким discipline_id — решение в шапке GradesCtrl.h).
+   Строки интерфейса — словарь t.<key> (5.18, Р-16); пользовательские
+   строки (дисциплина, компоненты, аудитории, комментарии) выводит
+   HttpViewData::htmlTranslate.
+   Состав (эталон → прод):
+     шапка .study-summary — код, дисциплина, score_sum / max_sum (прод
+       честнее «/ 100» эталона), бейджи типа контроля и статуса
+       («В процессе» / «Порог достигнут» / «Зачёт получен» — из missing);
+     notice.danger «до допуска не хватает N. Порог допуска — max_sum»
+       (демо-правило сервиса: порог = Σmax выставленных компонентов,
+       GradesService.h) или notice «порог набран» при missing == 0;
+     «Из чего сложились N баллов» — .list-row компонентов (component,
+       graded_at, attempt, score/max_score); плановых (невыставленных)
+       компонентов в схеме нет — не рисуются;
+     «План до допуска» — ползунки по ПРОД-компонентам с score < max_score,
+       диапазон [score..max_score]; итог считает app.js (aria-live), подпись
+       «прогноз, не ведомость» — ничего никуда не отправляется;
+     «Сдать работу» эталона НЕ переносится (загрузки на BE нет) — честная
+       заметка «работы сдаются в учебном кабинете курса»;
+     «Сессия» — пересдача notice.danger с «Показать кабинет» → /map?q=,
+       прочие события — a.exam-row → /grades#session.
+   Состояния: data; error — failed=1/сбой разбора — «Повторить»
+   ([data-grades-retry] — app.js); офлайн — баннер каркаса; скелетона нет —
+   страница целиком SSR. */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js — сама страница
@@ -44,20 +48,31 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
-      <h1>Баллы по дисциплине</h1>
+      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.discipline.title"); %></h1>
     </div>
   </div>
 <%c++
 const std::string failed = @@.get<std::string>("failed");
+const std::string uiLang = @@.get<std::string>("lang");
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
+// Подстановка {name} в строку словаря (шаблоны ×3 с разным порядком слов)
+const auto fill = [](std::string s, const std::string& k,
+                     const std::string& v) {
+    const auto pos = s.find(k);
+    if (pos != std::string::npos) s.replace(pos, k.size(), v);
+    return s;
+};
 if (failed == "1") {
 %>
   <!-- Состояние «Ошибка» (03 §5.3): «Повторить» — перезагрузка страницы. -->
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить дисциплину</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-grades-retry>Повторить</button>
+      <h3><%c++ $$ << vstr("discipline.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << vstr("error.checkInternet"); %></p>
+      <button class="button" type="button" data-grades-retry><%c++ $$ << vstr("common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -96,8 +111,7 @@ Json::Value exams(Json::arrayValue);
     if (examsRoot.isMember("exams") && examsRoot["exams"].isArray())
         exams = examsRoot["exams"];
 }
-// Свои оценки этой дисциплины — по времени выставления (порядок списка,
-// GradesService::list): «баллы по модулям в карточке — в этом порядке»
+// Свои оценки этой дисциплины — в порядке выставления (GradesService::list)
 Json::Value rows(Json::arrayValue);
 for (const auto& g : grades)
     if (g["discipline_id"].asInt64() == disciplineId)
@@ -110,7 +124,7 @@ if (summary.isMember("disciplines") && summary["disciplines"].isArray())
             ds = d;
             break;
         }
-// События сессии по этой дисциплине (03 §4.9.3 «СВЯЗАННЫЕ СОБЫТИЯ»)
+// События сессии по этой дисциплине
 Json::Value examRows(Json::arrayValue);
 for (const auto& e : exams)
     if (e["discipline_id"].asInt64() == disciplineId)
@@ -118,21 +132,26 @@ for (const auto& e : exams)
 
 const bool ready = !broken && ds.isMember("discipline_id") && rows.size() > 0;
 
-// --- серверные константы и форматирование (как в views/grades.csp) ------
+// --- форматирование (как в views/grades.csp) -----------------------------
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
 };
-const auto plural = [](int n, const char* one, const char* few,
-                       const char* many) {
+const auto pluralForm = [](int n, const std::string& one,
+                           const std::string& few,
+                           const std::string& many) -> const std::string& {
     const int m10 = n % 10, m100 = n % 100;
     if (m10 == 1 && m100 != 11) return one;
     if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
     return many;
 };
-static const char* kMonths[] = {"января",   "февраля", "марта",    "апреля",
-                                "мая",      "июня",    "июля",     "августа",
-                                "сентября", "октября", "ноября",   "декабря"};
-const auto dayMonthOf = [](const std::string& iso) -> std::string {
+const std::string ptOne = vstr("plural.pointOne");
+const std::string ptFew = vstr("plural.pointFew");
+const std::string ptMany = vstr("plural.pointMany");
+const auto points = [&](int n) -> const std::string& {
+    return pluralForm(n, ptOne, ptFew, ptMany);
+};
+// «2026-11-18T10:00:00Z» → «18 ноября» / "18 November" / «11月18日»
+const auto dayMonthOf = [&uiLang, &vstr](const std::string& iso) -> std::string {
     if (iso.size() < 10) return "";
     int d = 0, m = 0;
     try {
@@ -142,37 +161,33 @@ const auto dayMonthOf = [](const std::string& iso) -> std::string {
         return "";
     }
     if (m < 1 || m > 12) return "";
-    return std::to_string(d) + " " + kMonths[m - 1];
+    if (uiLang == "zh")
+        return std::to_string(m) + "月" + std::to_string(d) + "日";
+    return std::to_string(d) + " " +
+           vstr((std::string("month.") + (m < 10 ? "0" : "") +
+                 std::to_string(m)).c_str());
 };
 const auto timeOf = [](const std::string& iso) {
     return iso.size() >= 16 ? iso.substr(11, 5) : std::string("--:--");
 };
-const auto examKindLabel = [](const std::string& k) -> const char* {
-    if (k == "consultation") return "Консультация";
-    if (k == "exam") return "Экзамен";
-    if (k == "credit") return "Зачёт";
-    if (k == "retake") return "Пересдача";
+const auto examKindLabel = [&vstr](const std::string& k) -> std::string {
+    if (k == "consultation") return vstr("exam.consultation");
+    if (k == "exam") return vstr("exam.exam");
+    if (k == "credit") return vstr("exam.credit");
+    if (k == "retake") return vstr("exam.retake");
     return "";
 };
-const auto controlBadge = [&esc](const std::string& ct) -> std::string {
-    if (ct == "exam") return "<span class=\"badge info\">Экзамен</span>";
-    if (ct == "credit") return "<span class=\"badge success\">Зачёт</span>";
+// Тип контроля — словарь CHECK 0002; бейджи 03 §4.4
+const auto controlBadge = [&esc, &vstr](const std::string& ct) -> std::string {
+    if (ct == "exam")
+        return "<span class=\"badge info\">" + vstr("control.exam") + "</span>";
+    if (ct == "credit")
+        return "<span class=\"badge success\">" + vstr("control.credit") +
+               "</span>";
     if (ct == "graded_credit")
-        return "<span class=\"badge\">Дифзачёт</span>";
+        return "<span class=\"badge\">" + vstr("control.gradedCredit") +
+               "</span>";
     return "<span class=\"badge\">" + esc(ct) + "</span>";
-};
-const auto progressClass = [](int percent) -> const char* {
-    if (percent >= 60) return "ok";
-    if (percent >= 40) return "warn";
-    return "risk";
-};
-// Статус дисциплины — выведен из missing (демо-правило сервиса: порог
-// допуска = Σ max_score компонентов с оценками, GradesService.h):
-// «В процессе» / «Порог достигнут» — 03 §4.9.3 (бейдж рядом с типом)
-const auto statusBadge = [](int missing) -> std::string {
-    if (missing > 0)
-        return "<span class=\"badge\">В процессе</span>";
-    return "<span class=\"badge success\">Порог достигнут</span>";
 };
 %>
 <%c++
@@ -182,87 +197,145 @@ if (!ready) {
 %>
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить дисциплину</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-grades-retry>Повторить</button>
+      <h3><%c++ $$ << vstr("discipline.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << vstr("error.checkInternet"); %></p>
+      <button class="button" type="button" data-grades-retry><%c++ $$ << vstr("common.retry"); %></button>
     </section>
   </div>
 <%c++
 } else {
     const int missing = ds["missing"].asInt();
+    const int scoreSum = static_cast<int>(ds["score_sum"].asInt64());
+    const int maxSum = static_cast<int>(ds["max_sum"].asInt64());
+    const std::string controlType = ds["control_type"].asString();
 %>
   <div class="content-narrow">
-    <!-- Шапка карточки (03 §4.9.3): баллы tnum, бейджи типа контроля и
-         статуса; порог допуска = max_sum (демо-арифметика Э4: 78/82) -->
+    <!-- Шапка (эталон discipline.html): overline — код дисциплины (профиля
+         во view нет, аудит D1), баллы tnum, бейджи типа и статуса -->
     <div class="study-summary">
       <div>
         <p class="overline"><%c++ $$ << esc(ds["code"].asString()); %></p>
         <h2><%c++ $$ << esc(ds["discipline"].asString()); %></h2>
-        <p class="metric"><span class="tnum"><%c++ $$ << ds["score_sum"].asInt64(); %></span><span class="caption"> / <%c++ $$ << ds["max_sum"].asInt64(); %></span></p>
+        <p class="metric"><span class="tnum"><%c++ $$ << scoreSum; %></span><span class="caption"> / <%c++ $$ << maxSum; %></span></p>
       </div>
       <div class="badge-col">
 <%c++
-        $$ << controlBadge(ds["control_type"].asString());
-        $$ << statusBadge(missing);
+        $$ << controlBadge(controlType);
+        // Статус из missing: «Зачёт получен» (эталон discipline-english,
+        // зачёт без недобора, E1) / «Порог достигнут» / «В процессе»
+        if (missing > 0)
+            $$ << "<span class=\"badge\">" << vstr("discipline.inProgress")
+               << "</span>";
+        else
+            $$ << "<span class=\"badge success\">"
+               << vstr(controlType == "credit" ? "grades.creditPassed"
+                                               : "grades.thresholdReached")
+               << "</span>";
 %>
       </div>
     </div>
 <%c++
     if (missing > 0)
     {
-        // «до допуска не хватает N» (03 §4.9.3: warning-текст; демо: 4)
-        $$ << "<div class=\"notice danger section\"><p>До допуска не хватает "
-           << missing << " "
-           << plural(missing, "балл", "балла", "баллов")
-           << ". Порог допуска — " << ds["max_sum"].asInt64() << ".</p>";
-        // «добрать баллы» → блок «Сессия» экрана успеваемости; страницы
-        // дедлайн-радара (03 §4.9.2) ещё нет — тап туда отложен
-        // (см. журнал сессии Э7 экрана)
-        $$ << "<a class=\"button\" href=\"/grades#session\">Как добрать баллы</a></div>";
+        // notice.danger эталона: «До допуска не хватает N. Порог — M».
+        // Подсказки «завершите модуль 3» нет — плановых компонентов в
+        // данных нет (D3); вместо неё — путь к событиям сессии.
+        $$ << "<div class=\"notice danger section\"><p>"
+           << vstr("grades.missingPrefix") << (uiLang == "zh" ? "" : " ")
+           << missing << (uiLang == "zh" ? "" : " ") << points(missing)
+           << ". "
+           << fill(vstr("discipline.thresholdIs"), "{m}", std::to_string(maxSum))
+           << "</p><a class=\"button ghost\" href=\"/grades#session\">"
+           << vstr("discipline.howToRecover") << "</a></div>";
+    }
+    else
+    {
+        // Закрытая дисциплина (discipline-english.html, E4)
+        $$ << "<p class=\"notice section\">"
+           << fill(fill(vstr("discipline.closedNote"), "{n}",
+                        std::to_string(scoreSum)),
+                   "{m}", std::to_string(maxSum))
+           << "</p>";
     }
 %>
     <section class="section">
-      <div class="section-title"><h2>Баллы</h2></div>
+      <div class="section-title"><h2><%c++ $$ << fill(fill(vstr("discipline.breakdown"), "{n}", std::to_string(scoreSum)), "{pts}", points(scoreSum)); %></h2></div>
       <div class="grade-list">
 <%c++
+        // .list-row эталона: компонент + «Выставлено {дата} · попытка N»,
+        // справа score / max_score (D4). Пересдача — attempt > 1.
         for (const auto& g : rows)
         {
-            const int maxScore = static_cast<int>(g["max_score"].asInt64());
-            const int score = static_cast<int>(g["score"].asInt64());
-            // Тот же расчёт, что roundedPercent в GradesService (llround):
-            // бар компонента согласован с процентами сводки (25/60 → 42)
-            const int rowPercent =
-                maxScore > 0
-                    ? static_cast<int>(std::llround(100.0 * score / maxScore))
-                    : 0;
-            $$ << "<div class=\"grade-component\">";
-            $$ << "<div class=\"row\"><div><strong>"
-               << esc(g["component"].asString())
-               << "</strong><p class=\"caption\">"
-               << esc(dayMonthOf(g["graded_at"].asString()));
-            if (g["attempt"].asInt64() > 1)
-                $$ << " · попытка " << g["attempt"].asInt64();
-            $$ << "</p></div><strong class=\"tnum\">" << score << " / "
-               << maxScore << "</strong></div>";
-            $$ << "<div class=\"progress " << progressClass(rowPercent)
-               << "\" style=\"--value:" << rowPercent << "%\"></div>";
-            if (g["attempt"].asInt64() > 1)
-                $$ << "<p class=\"small grade-retake\">Пересдача</p>";
-            $$ << "</div>";
+            const int64_t attempt = g["attempt"].asInt64();
+            $$ << "<div class=\"list-row\"><div><strong>"
+               << esc(g["component"].asString()) << "</strong><p>"
+               << fill(vstr("discipline.gradedOn"), "{date}",
+                       esc(dayMonthOf(g["graded_at"].asString())));
+            if (attempt > 1)
+                $$ << " · <span class=\"red\">"
+                   << fill(vstr("discipline.attempt"), "{n}",
+                           std::to_string(attempt))
+                   << "</span>";
+            $$ << "</p></div><strong class=\"tnum\">"
+               << g["score"].asInt64() << " / " << g["max_score"].asInt64()
+               << "</strong></div>";
         }
 %>
       </div>
     </section>
 <%c++
-    // Комментарий преподавателя — при наличии, в кавычках (03 §4.9.3);
-    // комментарий может быть у любого компонента — с атрибуцией
+    // «План до допуска» (эталон: section.enh-panel с ползунками). Только
+    // при недоборе и только по ПРОД-компонентам с score < max_score:
+    // ползунок [score..max_score], итог считает app.js. Ничего не
+    // сохраняется и не отправляется — прогноз, не ведомость (D6).
+    if (missing > 0)
+    {
+%>
+    <section class="section enh-panel" aria-labelledby="admission-title" data-admission-plan data-plan-score="<%c++ $$ << scoreSum; %>" data-plan-threshold="<%c++ $$ << maxSum; %>">
+      <div class="section-title"><h2 id="admission-title"><%c++ $$ << vstr("discipline.planTitle"); %></h2><span class="enh-demo-label"><%c++ $$ << vstr("discipline.planBadge"); %></span></div>
+      <p class="small muted"><%c++ $$ << fill(fill(vstr("discipline.planHint"), "{n}", std::to_string(scoreSum)), "{pts}", points(scoreSum)); %></p>
+<%c++
+        int idx = 0;
+        for (const auto& g : rows)
+        {
+            const int64_t score = g["score"].asInt64();
+            const int64_t maxScore = g["max_score"].asInt64();
+            ++idx;
+            if (score >= maxScore)
+                continue;
+            const std::string fid = "plan-" + std::to_string(idx);
+            $$ << "<div class=\"field\"><label for=\"" << fid << "\">"
+               << esc(g["component"].asString()) << ": <output id=\"" << fid
+               << "-value\" for=\"" << fid << "\">" << score << "</output> "
+               << vstr("discipline.planOf") << " " << maxScore
+               << "</label><input id=\"" << fid << "\" type=\"range\" min=\""
+               << score << "\" max=\"" << maxScore << "\" step=\"1\" value=\""
+               << score << "\" data-plan-base=\"" << score << "\"></div>";
+        }
+%>
+      <p class="notice danger" id="admission-result" role="status" aria-live="polite"><%c++
+        $$ << fill(fill(vstr("discipline.planTotal"), "{n}", std::to_string(scoreSum)), "{m}", std::to_string(maxSum))
+           << " "
+           << fill(fill(vstr("discipline.planLeft"), "{n}", std::to_string(missing)), "{pts}", points(missing));
+%></p>
+    </section>
+<%c++
+    }
+%>
+    <!-- «Сдать работу» эталона не переносится: загрузки на BE нет, файл
+         никуда бы не ушёл (инвариант честности данных, D8) -->
+    <p class="notice section" id="assignment"><%c++ $$ << vstr("discipline.worksNote"); %></p>
+<%c++
+    // Комментарий преподавателя — при наличии, в кавычках (03 §4.9.3)
     std::string comments;
+    const std::string qOpen = uiLang == "ru" ? "«" : (uiLang == "zh" ? "“" : "“");
+    const std::string qClose = uiLang == "ru" ? "»" : "”";
     for (const auto& g : rows)
     {
         if (g.isMember("comment") && !g["comment"].isNull())
         {
-            comments += "<p class=\"small\">«" +
-                        esc(g["comment"].asString()) + "» — " +
+            comments += "<p class=\"small\">" + qOpen +
+                        esc(g["comment"].asString()) + qClose + " — " +
                         esc(g["component"].asString()) + "</p>";
         }
     }
@@ -270,40 +343,58 @@ if (!ready) {
     {
 %>
     <section class="section">
-      <div class="section-title"><h2>Комментарий преподавателя</h2></div>
+      <div class="section-title"><h2><%c++ $$ << vstr("discipline.teacherComment"); %></h2></div>
       <div class="notice"><%c++ $$ << comments; %></div>
     </section>
 <%c++
     }
     if (examRows.size() > 0)
     {
-        // События сессии по дисциплине; пересдача — акцент danger
-        // (03 §4.9.3); тап по событию → «Сессия» (/grades#session)
 %>
-    <section class="section">
-      <div class="section-title"><h2>Сессия по дисциплине</h2></div>
-      <div class="grade-list">
+    <section class="section" id="session">
+      <div class="section-title"><h2><%c++ $$ << vstr("grades.session"); %></h2></div>
 <%c++
+        // Пересдача — notice.danger эталона (#retake) с «Показать кабинет»
+        // → /map?q=<аудитория> (map.csp понимает ?q=, D10)
+        bool hasOther = false;
         for (const auto& e : examRows)
         {
-            const std::string kind = e["kind"].asString();
-            const bool isRetake = kind == "retake";
-            $$ << "<a class=\"exam-row\" href=\"/grades#session\"><div><strong>";
-            if (isRetake)
-                $$ << "<span class=\"exam-kind-retake\">";
-            $$ << examKindLabel(kind);
-            if (isRetake)
-                $$ << "</span>";
-            $$ << "</strong><p class=\"caption\">ауд. "
-               << esc(e["room"].asString()) << "</p></div>";
-            $$ << "<strong class=\"tnum exam-when\">"
-               << esc(dayMonthOf(e["starts_at"].asString())) << " · "
-               << esc(timeOf(e["starts_at"].asString())) << "</strong></a>";
+            if (e["kind"].asString() != "retake") { hasOther = true; continue; }
+            const std::string room = e["room"].asString();
+            $$ << "<div class=\"notice danger retake-block\" id=\"retake\"><strong>"
+               << esc(ds["discipline"].asString()) << " · "
+               << vstr("exam.retake") << "</strong><p>"
+               << esc(dayMonthOf(e["starts_at"].asString())) << ", "
+               << esc(timeOf(e["starts_at"].asString()));
+            if (!room.empty())
+                $$ << " · " << vstr("grades.roomShort") << " " << esc(room);
+            $$ << "</p>";
+            if (!room.empty())
+                $$ << "<a class=\"button ghost\" href=\"/map?q="
+                   << esc(drogon::utils::urlEncodeComponent(room)) << "\">"
+                   << vstr("discipline.showRoom") << "</a>";
+            $$ << "</div>";
+        }
+        if (hasOther)
+        {
+            $$ << "<div class=\"grade-list\">";
+            for (const auto& e : examRows)
+            {
+                const std::string kind = e["kind"].asString();
+                if (kind == "retake") continue;
+                $$ << "<a class=\"exam-row\" href=\"/grades#session\"><div><strong>"
+                   << examKindLabel(kind) << "</strong><p class=\"caption\">"
+                   << vstr("grades.roomShort") << " "
+                   << esc(e["room"].asString()) << "</p></div>";
+                $$ << "<strong class=\"tnum exam-when\">"
+                   << esc(dayMonthOf(e["starts_at"].asString())) << " · "
+                   << esc(timeOf(e["starts_at"].asString())) << "</strong></a>";
+            }
+            $$ << "</div>";
         }
 %>
-      </div>
       <div class="actions">
-        <a class="button" href="/grades#session">Все события сессии</a>
+        <a class="button" href="/grades#session"><%c++ $$ << vstr("discipline.allSessionEvents"); %></a>
       </div>
     </section>
 <%c++

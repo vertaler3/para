@@ -704,6 +704,50 @@
     if (gradesRetry) gradesRetry.addEventListener('click', () => window.location.reload());
   }
 
+  /* ---------- «План до допуска» (views/grades_discipline.csp; эталон
+     discipline.html #admission-result) ---------- */
+  /* Ползунки — по прод-компонентам с недобором, диапазон [score..max]
+     (сервер кладёт data-plan-base). Итог = score_sum + Σ(значение − base),
+     порог — max_sum сводки (демо-правило GradesService). Только прогноз на
+     клиенте: ничего не сохраняется и не отправляется. Текст — словарь
+     discipline.plan* (aria-live — в разметке). */
+  const admissionPlan = document.querySelector('[data-admission-plan]');
+  if (admissionPlan) {
+    const result = admissionPlan.querySelector('#admission-result');
+    const base = Number(admissionPlan.dataset.planScore) || 0;
+    const threshold = Number(admissionPlan.dataset.planThreshold) || 0;
+    const pluralPts = (n) => {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return t('plural.pointOne', 'балл');
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return t('plural.pointFew', 'балла');
+      return t('plural.pointMany', 'баллов');
+    };
+    const fill = (s, map) => Object.keys(map).reduce((acc, k) => acc.replace('{' + k + '}', String(map[k])), s);
+    const calculate = () => {
+      let total = base;
+      admissionPlan.querySelectorAll('input[type=range][data-plan-base]').forEach((input) => {
+        const v = Number(input.value);
+        total += v - Number(input.dataset.planBase);
+        const out = admissionPlan.querySelector('#' + input.id + '-value');
+        if (out) out.textContent = String(v);
+      });
+      const left = Math.max(0, threshold - total);
+      const head = fill(t('discipline.planTotal', 'Итого {n} из {m}.'), { n: total, m: threshold });
+      const tail = left > 0
+        ? fill(t('discipline.planLeft', 'До допуска ещё {n} {pts}.'), { n: left, pts: pluralPts(left) })
+        : t('discipline.planReached', 'Порог допуска достигнут — прогноз положительный.');
+      if (result) {
+        result.textContent = head + ' ' + tail;
+        result.classList.toggle('danger', left > 0);
+        result.classList.toggle('success', left === 0);
+      }
+    };
+    admissionPlan.addEventListener('input', (e) => {
+      if (e.target.matches('input[type=range][data-plan-base]')) calculate();
+    });
+    calculate();
+  }
+
   /* ---------- экран «Сегодня» (views/dashboard.csp; 03 §4.2, §5) ---------- */
   /* Данные — один fetch GET /v1/dashboard (контракт DashboardService.h):
      виджеты «Следующая пара»/«Сегодня» (ScheduleService), «Дедлайны»

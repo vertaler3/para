@@ -980,3 +980,11 @@ button.change-detail{display:inline-flex;align-items:center;min-height:44px;padd
 .grade-tags{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .75rem}
 .discipline-row .small.red{margin-top:.4rem}
 .discipline-row .row strong{white-space:nowrap}
+input[type=range]{min-height:44px!important;padding:0!important;border:0!important;background:none!important;accent-color:var(--primary);cursor:pointer}
+.field label output{font-weight:600;font-variant-numeric:tabular-nums}
+[data-admission-plan] .field label{display:block;margin-bottom:.25rem}
+.notice.danger .button,.retake-block .button{margin-top:.75rem}
+.retake-block p{margin-top:.25rem}
+#session .actions{margin-top:1rem}
+.notice.danger>p+.button{display:inline-flex}
+#assignment+section,.content-narrow>.notice.section+section{margin-top:2rem}
