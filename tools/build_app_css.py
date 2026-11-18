@@ -58,6 +58,9 @@ FIXES = '''.ob-footer .button{white-space:nowrap}
 a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:none}
 .para-error-art__grid{stroke:var(--border)}
 .para-error-art__nodes,.para-error-art__handles path+path{fill:var(--surface)}
+@media(min-width:1100px){body:not(.entry-page):not([data-page="not-found"])>.footer{color:var(--on-chrome);border-top-color:var(--chrome-hover);margin-top:1.5rem}
+body:not(.entry-page):not([data-page="not-found"])>.footer .lang-switch button,body:not(.entry-page):not([data-page="not-found"])>.footer .lang-switch span{color:var(--on-chrome)}
+body:not(.entry-page):not([data-page="not-found"])>.footer .lang-switch button[aria-pressed=true]{color:var(--on-chrome);text-decoration:underline;text-underline-offset:4px}}
 .schedule-skeleton{display:none}
 .schedule-skeleton.htmx-request{display:grid;gap:.75rem;margin-bottom:1.5rem}
 .lesson[data-event]{cursor:pointer}
