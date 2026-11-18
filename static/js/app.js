@@ -254,7 +254,9 @@
     authedSettings = true;
     if (s.theme) applyTheme(s.theme);
     markFooterTheme(s.theme || 'system');
-    markLang(s.lang);
+    /* активный язык — тот, на котором сервер отрисовал страницу (<html lang>: cookie
+       para_lang → Accept-Language → ru), а не сохранённый в настройках */
+    markLang(document.documentElement.lang || s.lang);
   });
 
   /* ---------- язык интерфейса (5.18): сегмент в профиле + компактный
@@ -290,7 +292,7 @@
       location.href = '/lang?lang=' + lang + '&next=' + encodeURIComponent(next);
     });
   });
-  markLang(paraLang());
+  markLang(document.documentElement.lang || paraLang());
 
   /* ---------- каркас v3 (fe_rebuild шаг 4, Р-31): тема в footer, дата недели,
      аватар, активный пункт «В кампусе» ---------- */
@@ -3843,7 +3845,7 @@
       if (from && typeof q.from === 'string') from.value = q.from;
       if (to && typeof q.to === 'string') to.value = q.to;
       if (s.theme) { applyTheme(s.theme); markTheme(s.theme); }
-      markLang(s.lang);
+      markLang(document.documentElement.lang || s.lang);
       show('[data-settings-body]', true);
       show('[data-theme-group]', true);
       show('[data-lang-group]', true);
