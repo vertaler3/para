@@ -122,6 +122,9 @@ input[type=range]{min-height:44px!important;padding:0!important;border:0!importa
 .notice.danger .button,.retake-block .button{margin-top:.75rem}
 .retake-block p{margin-top:.25rem}
 #session .actions{margin-top:1rem}
+.ranking-row:focus{outline:2px solid var(--primary);outline-offset:2px}
+#rating-root .enh-toolbar{align-items:flex-end}
+#rating-root .enh-toolbar>.caption{max-width:320px}
 .notice.danger>p+.button{display:inline-flex}
 #assignment+section,.content-narrow>.notice.section+section{margin-top:2rem}
 '''

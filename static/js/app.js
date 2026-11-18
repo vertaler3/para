@@ -732,6 +732,46 @@
     filter();
   }
 
+  /* ---------- поиск и «Моя строка» в рейтинге (views/rating.csp; эталон
+     ranking.html #ranking-search/#find-my-rank) ---------- */
+  /* Фильтр уже отрендеренных строк .ranking-row по тексту (место или
+     маскированное имя — Р-15: ищем только по тому, что пришло с сервера);
+     статус #ranking-status — aria-live в разметке. «Моя строка»: сброс
+     поиска, прокрутка к .ranking-row.self (smooth, при reduced motion —
+     мгновенно) и фокус (у строк tabindex=-1). */
+  const rankingSearch = document.getElementById('ranking-search');
+  if (rankingSearch) {
+    const rows = Array.from(document.querySelectorAll('.ranking-row'));
+    const status = document.getElementById('ranking-status');
+    const filter = () => {
+      const q = rankingSearch.value.trim().toLocaleLowerCase(LANG);
+      let visible = 0;
+      rows.forEach((row) => {
+        row.hidden = !!q && !row.textContent.toLocaleLowerCase(LANG).includes(q);
+        if (!row.hidden) visible += 1;
+      });
+      if (!status) return;
+      if (!q) { status.textContent = ''; return; }
+      status.textContent = visible
+        ? t('rating.shown', 'Показано: {n} из {m}').replace('{n}', String(visible)).replace('{m}', String(rows.length))
+        : t('rating.searchNone', 'По запросу никого не нашли. Попробуйте фамилию без инициалов.');
+    };
+    rankingSearch.addEventListener('input', filter);
+    const findMine = document.getElementById('find-my-rank');
+    if (findMine) {
+      findMine.addEventListener('click', () => {
+        const mine = document.querySelector('.ranking-row.self');
+        if (!mine) return;
+        rankingSearch.value = '';
+        filter();
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        mine.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+        mine.focus({ preventScroll: true });
+      });
+    }
+    filter();
+  }
+
   /* ---------- «План до допуска» (views/grades_discipline.csp; эталон
      discipline.html #admission-result) ---------- */
   /* Ползунки — по прод-компонентам с недобором, диапазон [score..max]
