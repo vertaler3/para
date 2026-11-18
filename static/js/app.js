@@ -475,6 +475,7 @@
       const login = $('#login');
       if (!login) return;
       login.value = button.getAttribute('data-demo-login');
+      login.dispatchEvent(new Event('input')); // снять «Введите логин»
       const password = $('#password');
       if (password) password.focus();
       document.querySelectorAll('[data-demo-login]').forEach((x) => {
@@ -492,20 +493,22 @@
       const show = password.type === 'password';
       password.type = show ? 'text' : 'password';
       togglePassword.setAttribute('aria-pressed', String(show));
-      togglePassword.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+      togglePassword.setAttribute('aria-label', show ? t('a11y.hidePassword', 'Скрыть пароль') : t('a11y.showPassword', 'Показать пароль'));
     });
   }
 
   /* ---------- форма входа (views/login.csp; 03 §4.1, §5.1/§5.3) ---------- */
   /* POST /v1/auth/login JSON {login,password} (02 §5.2, Content-Type:
-     application/json). Успех 200 — редирект на «Сегодня» (/). Ошибка —
-     сообщение у формы из {error:{code,message}} (02 §5.1):
-     invalid_credentials — нейтральный текст без деталей, что именно
-     неверно (фокус в пароль, поля не очищаются — 03 §5.3);
+     application/json). Успех 200 — редирект на «Сегодня» (/). Ошибки —
+     по полям эталона v3 (login-states.html, шаг 6): пустые логин/пароль —
+     до запроса, под полем + aria-invalid; по коду {error:{code}} (02 §5.1):
+     invalid_credentials — под паролем, нейтральный текст без деталей, что
+     именно неверно (фокус в пароль, поля не очищаются — 03 §5.3);
      too_many_attempts — блокировка входа (03 §4.1/§5.3): паузу ведёт
      сервер (LoginLimiter 15→30→60… с), клиент читает Retry-After и
      показывает отсчёт на disabled-кнопке «Подождите N с» до её
-     разблокировки; прочие — message из ответа. Пока идёт запрос —
+     разблокировки (текст — #form-error под кнопкой); прочие — строка
+     словаря со статусом (message сервера русский). Пока идёт запрос —
      кнопка disabled «Входим…» (03 §5.1: кнопка с async-действием в
      состоянии loading). Офлайн-кнопка — helper «Нужна сеть для входа»
      (03 §5.4, через applyOffline + data-offline-label). Сетевой сброс —
@@ -515,8 +518,36 @@
   if (loginForm) {
     const loginInput = $('#login');
     const passwordInput = $('#password');
-    const formError = $('#login-error');
+    const formError = $('#form-error');
     const submitButton = loginForm.querySelector('button[type="submit"]');
+    const submitLabel = () => t('login.submit', 'Войти');
+    const fmtN = (key, fallback, n) => t(key, fallback).replace('{n}', String(n));
+    /* ошибки по полям (login-states.html, L-1): текст в p.field-error под
+       полем, aria-invalid на поле (aria-describedby уже связывает их в
+       разметке). input снимает ошибку своего поля. */
+    const fieldErrorEl = (input) => input && $('#' + input.id + '-error');
+    const setFieldError = (input, text) => {
+      const el = fieldErrorEl(input);
+      if (!input || !el) return;
+      el.textContent = text;
+      el.hidden = false;
+      input.setAttribute('aria-invalid', 'true');
+    };
+    const clearFieldError = (input) => {
+      const el = fieldErrorEl(input);
+      if (!input || !el) return;
+      el.textContent = '';
+      el.hidden = true;
+      input.removeAttribute('aria-invalid');
+    };
+    const clearErrors = () => {
+      clearFieldError(loginInput);
+      clearFieldError(passwordInput);
+      if (formError) { formError.textContent = ''; formError.hidden = true; }
+    };
+    [loginInput, passwordInput].forEach((input) => {
+      if (input) input.addEventListener('input', () => clearFieldError(input));
+    });
     const showFormError = (text) => {
       if (!formError) return;
       formError.textContent = text;
@@ -538,13 +569,13 @@
       /* если офлайн-режим уже владеет подписью (data-was-label стоит,
          helper-текст на кнопке) — тики и старт отсчёта её не перебивают */
       if (!submitButton.hasAttribute('data-was-label')) {
-        submitButton.textContent = 'Подождите ' + remain + ' с';
+        submitButton.textContent = fmtN('login.wait', 'Подождите {n} с', remain);
       }
       countdownTimer = setInterval(() => {
         remain -= 1;
         if (remain > 0) {
           if (!submitButton.hasAttribute('data-was-label')) {
-            submitButton.textContent = 'Подождите ' + remain + ' с';
+            submitButton.textContent = fmtN('login.wait', 'Подождите {n} с', remain);
           }
           return;
         }
@@ -556,14 +587,15 @@
              Record ОБНОВЛЯЕТСЯ на «Войти» — иначе восстановится
              устаревший текст отсчёта, захваченный applyOffline в момент
              offline-события (гонка раунда 2 ревью, 03 §5.4) */
-          submitButton.setAttribute('data-was-label', 'Войти');
+          submitButton.setAttribute('data-was-label', submitLabel());
           submitButton.setAttribute('data-was-disabled', '0');
           if (!offlineOwnsLabel) {
-            submitButton.textContent = 'Войти';
+            submitButton.textContent = submitLabel();
           }
           return;
         }
-        submitButton.textContent = 'Войти';
+        if (formError) { formError.textContent = ''; formError.hidden = true; }
+        submitButton.textContent = submitLabel();
         submitButton.disabled = false;
       }, 1000);
     };
@@ -575,7 +607,17 @@
         applyOffline(true);
         return;
       }
-      if (formError) formError.hidden = true;
+      clearErrors();
+      /* пустые поля — до запроса (L-1), фокус на первое ошибочное */
+      const emptyLogin = !loginInput || !loginInput.value.trim();
+      const emptyPassword = !passwordInput || !passwordInput.value;
+      if (emptyLogin) setFieldError(loginInput, t('login.errLoginEmpty', 'Введите логин'));
+      if (emptyPassword) setFieldError(passwordInput, t('login.errPasswordEmpty', 'Введите пароль'));
+      if (emptyLogin || emptyPassword) {
+        const first = emptyLogin ? loginInput : passwordInput;
+        if (first) first.focus();
+        return;
+      }
       const previousLabel = submitButton ? submitButton.textContent : '';
       let wentOffline = false; // сетевой сброс во время запроса (03 §5.4)
       let blockedFor = 0;      // Retry-After из 429 (03 §4.1/§5.3)
@@ -597,23 +639,23 @@
           return;
         }
         let code = '';
-        let message = 'Ошибка ' + resp.status;
         try {
           const body = await resp.json();
-          if (body && body.error) {
-            code = body.error.code || '';
-            if (body.error.message) message = body.error.message;
-          }
+          if (body && body.error) code = body.error.code || '';
         } catch (e) { /* тело не JSON — остаётся текст со статусом */ }
         if (code === 'invalid_credentials') {
-          message = 'Неверный логин или пароль';
+          /* под паролем (login-states.html «Ошибка»): текст нейтральный —
+             не раскрывает, какое из полей неверно (03 §5.3) */
+          setFieldError(passwordInput, t('login.errInvalid', 'Неверный логин или пароль'));
           if (passwordInput) passwordInput.focus();
-        } else if (code === 'too_many_attempts') {
+        } else if (code === 'too_many_attempts' || resp.status === 429) {
           const raw = parseInt(resp.headers.get('Retry-After'), 10);
           blockedFor = Number.isFinite(raw) && raw > 0 ? raw : 15; // стартовая пауза 03 §4.1
-          message = 'Слишком много попыток входа. Подождите ' + blockedFor + ' секунд и попробуйте снова.';
+          showFormError(fmtN('login.errTooMany', 'Слишком много попыток входа. Подождите {n} с и попробуйте снова.', blockedFor));
+        } else {
+          /* message сервера — по-русски (02 §5.1): на en/zh — словарь со статусом */
+          showFormError(fmtN('login.errStatus', 'Не получилось войти (ошибка {n}). Попробуйте ещё раз.', resp.status));
         }
-        showFormError(message);
       } catch (e) {
         wentOffline = true;
         if (submitButton) {

@@ -28,9 +28,14 @@
      design-drafts/v3/pages/login.html — сцена вымышленного «Университета
      Меридиан» (эмблема static/img/meridian-emblem.png — уменьшенная копия из
      эталона, 600px) + панель входа. Механика прода без изменений: форма
-     #login-form (POST /v1/auth/login, app.js — JSON-вход, ошибка под кнопкой,
-     офлайн-подпись data-offline-label), демо-доступы data-demo-login (пароль
-     НЕ подставляется — AGENTS §5.2). Строки — t.<key> (Р-16). -->
+     #login-form (POST /v1/auth/login, app.js — JSON-вход, офлайн-подпись
+     data-offline-label), демо-доступы data-demo-login (пароль
+     НЕ подставляется — AGENTS §5.2). Строки — t.<key> (Р-16).
+     Шаг 6 (login-states.html): ошибки по полям эталона — #login-error под
+     логином (пусто), #password-error под паролем (пусто / invalid_credentials),
+     #form-error под кнопкой (429 «Подождите N с», прочие коды); aria-invalid
+     ставит app.js; novalidate — валидация своя, не браузерная. Демо-подсказка
+     эталона «подойдёт любой пароль» не переносится: в проде это неправда. -->
 <body class="entry-page" data-page="login">
 <a class="skip" href="#main"><%c++ $$ << @@.get<std::string>("t.a11y.skipToContent"); %></a>
 <header class="site-header">
@@ -72,20 +77,22 @@
         <h1><%c++ $$ << @@.get<std::string>("t.login.formTitle"); %></h1>
         <p><%c++ $$ << @@.get<std::string>("t.login.heading"); %><br><%c++ $$ << @@.get<std::string>("t.login.leadSecond"); %></p>
       </div>
-      <form id="login-form" class="surface" method="post" action="/v1/auth/login">
+      <form id="login-form" class="surface" method="post" action="/v1/auth/login" novalidate>
         <div class="field">
           <label for="login"><%c++ $$ << @@.get<std::string>("t.login.loginLabel"); %></label>
-          <input id="login" name="login" type="text" autocomplete="username" required>
+          <input id="login" name="login" type="text" autocomplete="username" spellcheck="false" autocapitalize="none" aria-describedby="login-error">
+          <p id="login-error" class="field-error" role="alert" hidden></p>
         </div>
         <div class="field">
           <label for="password"><%c++ $$ << @@.get<std::string>("t.login.passwordLabel"); %></label>
           <div class="password-wrap">
-            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <input id="password" name="password" type="password" autocomplete="current-password" aria-describedby="password-error">
             <button type="button" class="icon-button" id="toggle-password" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.showPassword"); %>" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
+          <p id="password-error" class="field-error" role="alert" hidden></p>
         </div>
-        <button class="button primary full section" type="submit" data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.login.offlineHint"); %>"><%c++ $$ << @@.get<std::string>("t.login.submit"); %></button>
-        <p id="login-error" class="field-error" role="alert" hidden></p>
+        <button class="button primary full section" type="submit" data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.login.offlineHint"); %>" aria-describedby="form-error"><%c++ $$ << @@.get<std::string>("t.login.submit"); %></button>
+        <p id="form-error" class="field-error" role="alert" hidden></p>
       </form>
       <details class="entry-role-picker" open>
         <summary><%c++ $$ << @@.get<std::string>("t.login.demoTitle"); %></summary>
