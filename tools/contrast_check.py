@@ -20,6 +20,12 @@ pairs += [(s+'-text','surface') for s in ('success','warning','danger')]
 pairs += [('primary-soft-text','surface'),('text','primary-soft-bg'),('text-2','primary-soft-bg'),('bg','text'),('primary','primary-soft-bg')]
 pairs += [(t,'danger-bg') for t in ('text','text-2','primary')]
 pairs += [('danger-text','bg')]
+# v3 (Р-31): новые токены прототипа и пары каркаса — ссылки, тёплая поверхность входа,
+# сайдбар ≥1100px (текст --on-primary на --primary/--primary-hover, активный пункт
+# --primary на --primary-soft-bg), бейдж уведомлений (--on-primary на --danger-text).
+pairs += [('link',b) for b in ('bg','surface','surface-2')] + [('link-hover',b) for b in ('bg','surface')]
+pairs += [(t,'surface-warm') for t in ('text','text-2','primary','link')]
+pairs += [('on-primary','danger-text'),('primary-soft-text','surface-2'),('danger-text','surface-2')]
 failed=0
 print('WCAG: c=sRGB/255; c_lin=c/12.92 if c<=0.04045 else ((c+0.055)/1.055)^2.4; L=0.2126R+0.7152G+0.0722B; CR=(Lmax+0.05)/(Lmin+0.05). All text threshold 4.5:1 (including large).')
 for theme,source in [('light',light),('dark',dark)]:
