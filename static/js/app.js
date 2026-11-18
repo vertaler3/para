@@ -70,7 +70,7 @@
       banner.hidden = !offline;
       if (offline && bannerText) {
         bannerText.textContent = lastSyncAt
-          ? t('offline.bannerStale', 'Нет сети. Показываем данные на момент ') + lastSyncAt
+          ? t('offline.bannerStale', 'Нет сети. Показываем данные на момент').trimEnd() + ' ' + lastSyncAt
           : t('offline.banner', 'Нет сети. Проверьте подключение — и попробуйте ещё раз.');
       }
     }
@@ -1289,11 +1289,11 @@
      раз в ~10 с и по visibilitychange (hidden) — ТОЛЬКО пока статус
      draft; ответ 409 (статус ушёл с черновика) — АВТОСОХРАНЕНИЕ МОЛЧА
      ПРЕКРАЩАЕТСЯ, без всплывающих ошибок (постановка Э7; try/catch).
-     «Отправить заявку» → POST {submit:true} → редирект на карточку;
-     ошибка — inline «Заявка не отправилась…» (03 §5.3). Автосохранённый
-     черновик при подаче остаётся в списке черновиков — у студента нет
-     эндпоинта submit существующей строки (02 §5.2: submit — только при
-     POST-создании) — решение задокументировано в журнале сессии.
+     «Отправить заявку»: есть сохранённый черновик — PUT /v1/applications/{id}
+     {payload_json, submit:true} (8.i, Р-29: подача существующего черновика
+     одним вызовом, fe_rebuild шаг 5); черновика нет (или 409 — уже не
+     черновик) — POST {submit:true}; затем редирект на карточку; ошибка —
+     inline «Заявка не отправилась…» (03 §5.3).
      Вставка — только createElement/textContent (02 §6.4); innerHTML —
      НИКОГДА для данных сервера, только статические svg-константы ниже. */
   if (document.body.dataset.page === 'application-form') {
@@ -1612,8 +1612,24 @@
         if (!navigator.onLine) { applyOffline(true); return; }
         busy(submitBtn, true, t('toast.sending', 'Отправляем…'));
         try {
-          if (state.draftId && !state.draftStopped) await autosaveNow(); /* синк лучшего усилия */
-          const resp = await fetch('/v1/applications', {
+          /* 8.i (Р-29): есть живой черновик — подаём ЕГО одним PUT {payload_json,
+             submit:true} (синк полей + переход draft→submitted, без дубля-черновика);
+             409 «уже не черновик» — черновика больше нет, подаём новой POST-строкой. */
+          let resp = null;
+          if (state.draftId && !state.draftStopped) {
+            resp = await fetch('/v1/applications/' + state.draftId, {
+              method: 'PUT',
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ payload_json: JSON.stringify(collectPayload()), submit: true })
+            });
+            if (resp.ok) {
+              stopTimer();
+              window.location.href = '/applications/' + state.draftId;
+              return;
+            }
+            if (resp.status === 409 || resp.status === 404) { state.draftStopped = true; stopTimer(); resp = null; }
+          }
+          if (!resp) resp = await fetch('/v1/applications', {
             method: 'POST',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: JSON.stringify({

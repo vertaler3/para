@@ -40,14 +40,17 @@
   <div class="page-heading">
     <div>
       <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.apps.title"); %></a>
+      <div class="document-symbol" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M14 2H5v20h14V7L14 2ZM14 2v6h5M8 12h8M8 16h6"></path></svg></div>
       <h1><%c++ $$ << @@.get<std::string>("t.apps.formTitle"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.apps.formSubtitle"); %></p>
     </div>
+    <p class="form-intro"><%c++ $$ << @@.get<std::string>("t.apps.formSubtitle"); %></p>
   </div>
-  <div class="content-form flow">
+  <!-- v3 (fe_rebuild шаг 5, экран 5): «бумажная» форма эталона application-form.html —
+       document-symbol, form-intro, paper-form, applicant-summary; механика 8.i прежняя. -->
+  <div class="content-form flow paper-form">
     <!-- Профиль: автозаполнение из GET /v1/me (read-only); сбой — карточка
          скрыта, форму не блокирует (решение в шапке шаблона) -->
-    <div class="notice" data-profile-card hidden>
+    <div class="notice applicant-summary" data-profile-card hidden>
       <strong data-profile-fio></strong>
       <p data-profile-meta></p>
       <p class="caption"><%c++ $$ << @@.get<std::string>("t.apps.profileNote"); %></p>
