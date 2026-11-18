@@ -34,46 +34,63 @@
 <body data-page="schedule">
 <%view topbar %>
 <main id="main" class="shell">
+<%c++
+/* v3 (fe_rebuild шаги 3–4): заголовок страницы зависит от сегмента — «День»:
+   «Расписание», «Неделя»: «Учебная неделя» (эталон schedule-week.html); при
+   htmx-обмене сегмента app.js переносит data-heading/data-lead корня
+   #schedule-segment в h1/p. */
+const std::string seg = @@.get<std::string>("segment");
+const bool weekSeg = seg == "week";
+%>
   <div class="page-heading">
     <div>
-      <h1><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.schedule.subtitle"); %></p>
+      <h1 data-schedule-heading><%c++ $$ << @@.get<std::string>(weekSeg ? "t.schedule.weekTitle" : "t.nav.schedule"); %></h1>
+      <p data-schedule-lead><%c++ $$ << @@.get<std::string>(weekSeg ? "t.schedule.weekLead" : "t.schedule.subtitle"); %></p>
     </div>
   </div>
-  <div id="schedule-indicator" class="skeleton block htmx-indicator" aria-hidden="true"></div>
-<%c++
-const std::string seg = @@.get<std::string>("segment");
-if (seg == "week") {
-%>
+  <!-- Состояние «Загрузка» (schedule-states.html#loading): скелетон —
+       hx-indicator всех сегментных запросов (видим только под .htmx-request). -->
+  <div id="schedule-indicator" class="htmx-indicator schedule-skeleton" aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.common.loading"); %>">
+    <div class="skeleton title"></div><div class="skeleton block"></div><div class="skeleton short"></div><div class="skeleton block"></div>
+  </div>
+<%c++ if (weekSeg) { %>
 <%view schedule_week %>
 <%c++ } else { %>
 <%view schedule_today %>
 <%c++ } %>
-  <!-- Состояние «Ошибка» (03 §5.3, schedule-states.html#error): показывает
-       app.js по htmx:afterRequest (!successful) / htmx:sendError; «Повторить»
+  <!-- Состояние «Ошибка» (schedule-states.html#error): показывает app.js по
+       htmx:afterRequest (!successful) / htmx:sendError; «Повторить»
        перезапускает запрос элемента, на котором он оборвался. -->
   <section class="section flow" id="schedule-error" hidden role="alert">
     <h3><%c++ $$ << @@.get<std::string>("t.error.loadSchedule"); %></h3>
     <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
     <button class="button" type="button" data-schedule-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
   </section>
-  <!-- Sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet). Поля
-       заполняет app.js из data-атрибутов карточки (только textContent —
-       02 §6.4); имя преподавателя — GET /v1/people/{teacher_id+1000}
-       (Э6а, Р-15), страница /people/{id} — следующий экран Э7, ссылка
-       ведёт туда уже сейчас; «Подписка на календарь» — экран приватной
-       ссылки ICS в профиле (С6, 03 §4.3). Закрытие — кнопка/Esc
-       (нативный <dialog>). -->
-  <dialog id="lesson-sheet" class="lesson-sheet" aria-labelledby="lesson-sheet-title">
-    <h2 id="lesson-sheet-title" data-sheet-title><%c++ $$ << @@.get<std::string>("t.schedule.sheetTitle"); %></h2>
-    <p class="caption" data-sheet-kind></p>
-    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetWhen"); %></span><span data-sheet-when></span></div>
-    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetRoom"); %></span><span data-sheet-room></span></div>
-    <div class="sheet-row" data-sheet-change-row hidden><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetChange"); %></span><span data-sheet-change></span></div>
-    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetStatus"); %></span><span data-sheet-status></span></div>
-    <div class="sheet-row"><span class="sheet-label"><%c++ $$ << @@.get<std::string>("t.schedule.sheetTeacher"); %></span><span><a class="lesson-teacher" data-sheet-teacher hidden href="/profile"></a><span class="muted small" data-sheet-teacher-empty>—</span></span></div>
-    <div class="actions">
-      <a class="button" href="/profile"><%c++ $$ << @@.get<std::string>("t.schedule.calendarSub"); %></a>
+  <!-- Диалог занятия (эталон .lesson-dialog + .detail-list; schedule-change.html
+       — блок «было → стало» внутри диалога). Поля заполняет app.js из
+       data-атрибутов карточки (только textContent — 02 §6.4); ФИО
+       преподавателя — GET /v1/people/{teacher_id+1000} (Р-15). Закрытие —
+       × / «Закрыть» / Esc, фокус возвращается на кнопку-инициатор. -->
+  <dialog id="lesson-sheet" class="lesson-dialog" aria-labelledby="lesson-dialog-title">
+    <div class="dialog-title">
+      <h2 id="lesson-dialog-title" data-sheet-title><%c++ $$ << @@.get<std::string>("t.schedule.sheetTitle"); %></h2>
+      <button class="icon-button" type="button" data-sheet-close aria-label="<%c++ $$ << @@.get<std::string>("t.common.close"); %>"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p class="lesson-dialog-time" data-sheet-time></p>
+    <dl class="detail-list">
+      <div><dt><%c++ $$ << @@.get<std::string>("t.schedule.sheetWhen"); %></dt><dd data-sheet-when></dd></div>
+      <div><dt><%c++ $$ << @@.get<std::string>("t.schedule.sheetRoom"); %></dt><dd><span data-sheet-room></span> <a data-sheet-map href="/map"><%c++ $$ << @@.get<std::string>("t.schedule.onMap"); %></a></dd></div>
+      <div><dt><%c++ $$ << @@.get<std::string>("t.schedule.sheetKind"); %></dt><dd data-sheet-kind></dd></div>
+      <div><dt><%c++ $$ << @@.get<std::string>("t.schedule.sheetStatus"); %></dt><dd data-sheet-status></dd></div>
+      <div><dt><%c++ $$ << @@.get<std::string>("t.schedule.sheetTeacher"); %></dt><dd><a data-sheet-teacher hidden href="/people"></a><span class="muted" data-sheet-teacher-empty>—</span></dd></div>
+    </dl>
+    <div class="change-block" data-sheet-change-row hidden>
+      <span class="change-label" data-sheet-change-label></span>
+      <div class="change-route" data-sheet-change></div>
+      <p class="caption" data-sheet-change-note></p>
+    </div>
+    <div class="actions section">
+      <a class="button" href="/profile#calendar"><%c++ $$ << @@.get<std::string>("t.profile.icsAdd"); %></a>
       <button class="button ghost" type="button" data-sheet-close><%c++ $$ << @@.get<std::string>("t.common.close"); %></button>
     </div>
   </dialog>

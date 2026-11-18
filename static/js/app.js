@@ -1177,63 +1177,175 @@
       cancelled: t('lesson.cancelled', 'Отменена'),
       substituted: t('lesson.substituted', 'Замена')
     };
+    const segment = () => document.getElementById('schedule-segment');
 
-    /* --- sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet;
-       <dialog> в views/schedule.csp, закрытие — кнопка/Esc). Имя
-       преподавателя — GET /v1/people/{teacher_id+1000} (Э6а, Р-15);
-       страница /people/{id} — следующий экран Э7, ссылка уже ведёт
-       туда; без teacher_id (или если профиль не отвечает) — ссылка
-       «Открыть профиль» скрыта/нейтральна, «—» в строке. --- */
-    const setField = (sel, text) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.textContent = text; };
-    const showRow = (sel, on) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.hidden = !on; };
-    const openSheet = async (card) => {
+    /* --- диалог занятия (эталон .lesson-dialog/.detail-list, v3 шаг 3).
+       Источник — data-атрибуты карточки [data-event] (сервер); вставка —
+       только textContent/createElement (02 §6.4). Блок «было → стало» —
+       эквивалент schedule-change.html (отдельной страницы в проде нет).
+       Имя преподавателя — GET /v1/people/{teacher_id+1000} (Р-15). --- */
+    const sheetPart = (sel) => (sheet ? sheet.querySelector(sel) : null);
+    const setField = (sel, text) => { const n = sheetPart(sel); if (n) n.textContent = text; };
+    const withBuilding = (room, building) => (building ? room + ' · ' + building : room);
+    let sheetOpener = null;
+    let sheetSeq = 0;
+    const openSheet = async (card, opener) => {
       if (!sheet) return;
+      const d = card.dataset;
+      const seq = ++sheetSeq;
+      sheetOpener = opener || null;
       const subject = card.querySelector('.lesson-subject');
-      setField('[data-sheet-title]', subject ? subject.textContent : t('lesson.title', 'Пара'));
-      setField('[data-sheet-kind]', KIND[card.dataset.kind] || '');
-      setField('[data-sheet-when]', [card.dataset.date, card.dataset.start, card.dataset.end].filter(Boolean).join(' · '));
-      setField('[data-sheet-room]', t('dash.roomLabel', 'аудитория') + ' ' + (card.dataset.room || '—'));
-      const changed = [];
-      if (card.dataset.prevRoom) changed.push(t('dash.roomLabel', 'аудитория') + ' ' + card.dataset.prevRoom + ' → ' + (card.dataset.room || '—'));
-      if (card.dataset.prevStart && card.dataset.prevStart !== card.dataset.start) changed.push(t('schedule.timeLabel', 'время') + ' ' + card.dataset.prevStart + ' → ' + card.dataset.start);
-      showRow('[data-sheet-change-row]', changed.length > 0);
-      if (changed.length) setField('[data-sheet-change]', t('schedule.wasToLabel', 'было → стало:') + ' ' + changed.join(' · '));
-      setField('[data-sheet-status]', STATUS[card.dataset.status] || card.dataset.status || '');
-      const link = sheet.querySelector('[data-sheet-teacher]');
-      const fallback = sheet.querySelector('[data-sheet-teacher-empty]');
-      const teacherId = parseInt(card.dataset.teacherId || '', 10);
+      setField('[data-sheet-title]', subject ? subject.textContent.trim() : t('lesson.title', 'Пара'));
+      setField('[data-sheet-time]', [d.start, d.end].filter(Boolean).join('–'));
+      setField('[data-sheet-when]', d.dateLabel || d.date || '');
+      setField('[data-sheet-room]', withBuilding(d.room || '—', d.building));
+      const map = sheetPart('[data-sheet-map]');
+      if (map) {
+        map.href = '/map?q=' + encodeURIComponent(d.room || '');
+        map.hidden = !d.room || d.status === 'cancelled';
+      }
+      setField('[data-sheet-kind]', KIND[d.kind] || '—');
+      setField('[data-sheet-status]', STATUS[d.status] || d.status || '');
+      /* «было → стало» */
+      const changeRow = sheetPart('[data-sheet-change-row]');
+      const route = sheetPart('[data-sheet-change]');
+      const changed = d.status === 'moved' || d.status === 'cancelled' || d.status === 'substituted';
+      if (changeRow) changeRow.hidden = !changed;
+      if (changed && route) {
+        route.replaceChildren();
+        const sameTime = !d.prevStart || (d.prevStart === d.start && !d.prevDateLabel);
+        let label = t('schedule.changeSub', 'Замена преподавателя');
+        let note = (d.start || '') + '–' + (d.end || '');
+        if (d.status === 'moved') {
+          label = sameTime ? t('schedule.changeRoomMoved', 'Перенос аудитории') : t('schedule.changeClassMoved', 'Перенос занятия');
+          if (d.prevRoom && d.prevRoom !== d.room) {
+            const was = document.createElement('s');
+            was.textContent = withBuilding(d.prevRoom, d.prevBuilding);
+            const arrow = document.createElement('span');
+            arrow.setAttribute('aria-hidden', 'true');
+            arrow.textContent = '→';
+            route.append(was, arrow);
+          }
+          const now = document.createElement('a');
+          now.href = '/map?q=' + encodeURIComponent(d.room || '');
+          now.textContent = withBuilding(d.room || '—', d.building);
+          route.append(now);
+          note = sameTime
+            ? t('schedule.changeSameTime', 'Время прежнее') + ' · ' + note
+            : t('schedule.changeWas', 'Было:') + ' ' + [d.prevDateLabel, d.prevStart].filter(Boolean).join(', ');
+        } else if (d.status === 'cancelled') {
+          label = t('schedule.changeCancelled', 'Занятие отменено');
+          const was = document.createElement('s');
+          was.textContent = withBuilding(d.room || '—', d.building);
+          route.append(was);
+        }
+        route.hidden = route.childNodes.length === 0;
+        setField('[data-sheet-change-label]', label);
+        setField('[data-sheet-change-note]', note);
+      }
+      const link = sheetPart('[data-sheet-teacher]');
+      const fallback = sheetPart('[data-sheet-teacher-empty]');
+      const teacherId = parseInt(d.teacherId || '', 10);
+      if (!sheet.open) sheet.showModal();
       if (link && Number.isFinite(teacherId)) {
-        const href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
-        link.href = href;
+        link.href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
         link.textContent = t('common.loading', 'Загрузка…');
         link.hidden = false;
         if (fallback) fallback.hidden = true;
         const person = await fetchJSON('/v1/people/' + (teacherId + PEOPLE_ID_OFFSET));
-        link.textContent = person && person.person && person.person.fio ? person.person.fio : t('common.openProfile', 'Открыть профиль');
+        if (seq !== sheetSeq) return; // открыт уже другой урок
+        /* GET /v1/people/{id} отдаёт карточку плоско ({fio, …}); прежнее
+           чтение person.person.fio всегда давало «Открыть профиль» */
+        const fio = person && (person.fio || (person.person && person.person.fio));
+        link.textContent = fio || t('common.openProfile', 'Открыть профиль');
       } else if (link && fallback) {
         link.hidden = true;
         fallback.hidden = false;
       }
-      sheet.showModal();
     };
-    /* делегирование: контейнер сегмента перерисовывается htmx —
-       слушатель на документе переживает обмен */
+    /* делегирование (сегмент перерисовывается htmx — слушатель на документе
+       переживает обмен): кнопка .lesson-open, «Подробнее» блока изменения
+       ([data-open-event]) или клик по карточке мимо ссылок. Ссылки внутри
+       карточки (аудитория → карта) не перехватываются. */
     document.addEventListener('click', (event) => {
-      const card = event.target.closest('[data-event]');
-      if (card && sheet) {
-        event.preventDefault();
-        openSheet(card);
+      const target = event.target;
+      if (!(target instanceof Element) || !sheet) return;
+      const more = target.closest('[data-open-event]');
+      if (more) {
+        const box = segment();
+        const card = box ? box.querySelector('[data-event][data-event-id="' + CSS.escape(more.dataset.openEvent) + '"]') : null;
+        if (card) openSheet(card, more);
+        return;
       }
+      if (target.closest('a')) return;
+      const card = target.closest('[data-event]');
+      if (!card) return;
+      const opener = card.querySelector('.lesson-open') || card;
+      openSheet(card, opener);
     });
-    const sheetClose = sheet ? sheet.querySelector('[data-sheet-close]') : null;
-    if (sheetClose) sheetClose.addEventListener('click', () => sheet.close());
+    if (sheet) {
+      sheet.querySelectorAll('[data-sheet-close]').forEach((b) => b.addEventListener('click', () => sheet.close()));
+      sheet.addEventListener('close', () => {
+        if (sheetOpener && sheetOpener.isConnected) sheetOpener.focus();
+        sheetOpener = null;
+      });
+      /* клик по подложке закрывает диалог */
+      sheet.addEventListener('click', (e) => { if (e.target === sheet) sheet.close(); });
+    }
 
-    /* --- состояния сегмента (03 §5.3/§5.4) ---------------------------- */
+    /* --- выбор дня: «Дата занятия» (input[type=date]) — htmx-обмен сегмента
+       на выбранный день + адрес /schedule?date=… в истории; вне окна
+       min/max — сообщение словаря. «Выбрать день» пустого дня — фокус в
+       поле даты. --- */
+    const loadDay = (ymd) => {
+      if (!window.htmx) { window.location.href = '/schedule?date=' + ymd; return; }
+      window.htmx.ajax('GET', '/schedule/segment?segment=today&date=' + encodeURIComponent(ymd), {
+        target: '#schedule-segment', swap: 'outerHTML', indicator: '#schedule-indicator'
+      }).then(() => {
+        history.pushState({}, '', '/schedule?date=' + ymd);
+        const input = document.getElementById('schedule-date');
+        if (input) input.focus();
+      });
+    };
+    document.addEventListener('change', (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || !input.matches('[data-schedule-date]')) return;
+      input.setCustomValidity('');
+      if (!input.value || !input.checkValidity()) {
+        input.setCustomValidity(input.dataset.invalidMessage || t('schedule.dateInvalid', 'Выберите дату в пределах четырёх недель от текущей.'));
+        input.reportValidity();
+        return;
+      }
+      loadDay(input.value);
+    });
+    document.addEventListener('input', (event) => {
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-schedule-date]')) event.target.setCustomValidity('');
+    });
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element ? event.target.closest('[data-focus-date]') : null;
+      if (!btn) return;
+      const input = document.getElementById('schedule-date');
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      if (typeof input.showPicker === 'function') { try { input.showPicker(); } catch (e) { /* без жеста — просто фокус */ } }
+    });
+
+    /* --- заголовок страницы следует за сегментом (День/Неделя) --- */
+    const syncHeading = () => {
+      const box = segment();
+      if (!box) return;
+      const h1 = document.querySelector('[data-schedule-heading]');
+      const lead = document.querySelector('[data-schedule-lead]');
+      if (h1 && box.dataset.heading) h1.textContent = box.dataset.heading;
+      if (lead && box.dataset.lead) lead.textContent = box.dataset.lead;
+    };
+
+    /* --- состояния сегмента (schedule-states.html) --------------------- */
     /* Ошибка (ответ не 2xx или сеть) — блок «Не получилось загрузить
        расписание» с «Повторить», перезапускающим запрос исходного
-       элемента (03 §5.3: «Повторить» всегда реально перезапрашивает);
-       офлайн — баннер каркаса; истёкшая сессия (фильтр отвечает 303 →
-       /login, XHR следует редиректу) — браузерный переход на вход. */
+       элемента; офлайн — баннер каркаса; истёкшая сессия (фильтр отвечает
+       303 → /login, XHR следует редиректу) — браузерный переход на вход. */
     let retryElt = null;
     document.body.addEventListener('htmx:afterRequest', (e) => {
       if (!errBox) return;
@@ -1261,26 +1373,23 @@
     const scheduleRetry = document.querySelector('[data-schedule-retry]');
     if (scheduleRetry) {
       scheduleRetry.addEventListener('click', () => {
-        if (retryElt) retryElt.click();
+        if (retryElt && retryElt.isConnected && retryElt.matches('[hx-get]')) retryElt.click();
         else window.location.reload();
       });
     }
 
-    /* --- сегмент «Неделя» (03 §4.3): автоскролл к сегодняшнему дню и
-       свайп влево/вправо = ‹/› неделя. Скролл — к .day-group.is-today,
-       только если он вне вьюпорта; при reduced-motion — без анимации.
-       Свайп — тап-жест по контейнеру сегмента: |dX| ≥ 56px и горизонтальнее
-       вертикали, иначе это скролл страницы; кнопки-стрелки сами disabled
-       на границе окна [-4..4].
-       ВАЖНО: контейнер #schedule-segment свапается htmx ЦЕЛИКОМ
-       (hx-swap="outerHTML" в партиалах), поэтому ссылку на него нельзя
-       кэшировать в замыкании — после первого же обмена она указывала бы
-       на отсоединённый узел (свайп умер бы, автоскролл искал бы в старом
-       дереве). getElementById перезапрашивается в каждом обработчике. --- */
+    /* --- сегмент «Неделя»: автоскролл к сегодняшнему дню (только когда
+       дни идут стопкой, <1200px — на сетке вся неделя видна) и свайп
+       влево/вправо = ‹/› неделя. Стрелки ищутся по data-week-prev/next
+       (не по aria-label: он переводится, 5.18). Контейнер
+       #schedule-segment свапается htmx целиком — ссылка на него
+       перезапрашивается в каждом обработчике. --- */
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const gridWeek = window.matchMedia('(min-width: 1200px)');
     const scrollTodayIntoView = () => {
-      const segBox = document.getElementById('schedule-segment');
-      const todayGroup = segBox ? segBox.querySelector('.day-group.is-today') : null;
+      if (gridWeek.matches) return;
+      const box = segment();
+      const todayGroup = box ? box.querySelector('.day-group.is-today') : null;
       if (!todayGroup) return;
       const r = todayGroup.getBoundingClientRect();
       if (r.top >= 0 && r.bottom <= window.innerHeight) return;
@@ -1288,29 +1397,28 @@
     };
     scrollTodayIntoView();
     document.body.addEventListener('htmx:afterSwap', () => {
+      syncHeading();
       setTimeout(scrollTodayIntoView, 0);
     });
     let touchX = 0, touchY = 0, swipeArmed = false;
     document.addEventListener('touchstart', (e) => {
-      const segBox = document.getElementById('schedule-segment');
-      swipeArmed = Boolean(segBox) && segBox.contains(e.target) && !(sheet && sheet.open);
+      const box = segment();
+      swipeArmed = Boolean(box) && box.contains(e.target) && !(sheet && sheet.open);
       if (!swipeArmed) return;
-      const t = e.touches[0];
-      touchX = t.clientX;
-      touchY = t.clientY;
+      const p = e.touches[0];
+      touchX = p.clientX;
+      touchY = p.clientY;
     }, { passive: true });
     document.addEventListener('touchend', (e) => {
       if (!swipeArmed) return;
       swipeArmed = false;
-      const segBox = document.getElementById('schedule-segment');
-      if (!segBox) return;
-      const t = e.changedTouches[0];
-      const dX = t.clientX - touchX;
-      const dY = t.clientY - touchY;
+      const box = segment();
+      if (!box) return;
+      const p = e.changedTouches[0];
+      const dX = p.clientX - touchX;
+      const dY = p.clientY - touchY;
       if (Math.abs(dX) < 56 || Math.abs(dY) >= Math.abs(dX)) return;
-      const arrow = segBox.querySelector(dX < 0
-        ? '[aria-label="Следующая неделя"]'
-        : '[aria-label="Предыдущая неделя"]');
+      const arrow = box.querySelector(dX < 0 ? '[data-week-next]' : '[data-week-prev]');
       if (arrow && !arrow.disabled) arrow.click();
     }, { passive: true });
   }

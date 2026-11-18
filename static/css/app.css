@@ -922,3 +922,10 @@ button.chip{font:inherit;cursor:pointer}
 a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:none}
 .para-error-art__grid{stroke:var(--border)}
 .para-error-art__nodes,.para-error-art__handles path+path{fill:var(--surface)}
+.schedule-skeleton{display:none}
+.schedule-skeleton.htmx-request{display:grid;gap:.75rem;margin-bottom:1.5rem}
+.lesson[data-event]{cursor:pointer}
+.lesson.moved{box-shadow:none}
+.lesson.moved .lesson-detail{color:var(--text-2)}
+button.change-detail{display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:var(--clear);font:inherit;font-size:.875rem;color:var(--danger-text);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.lesson-dialog .change-block{margin-top:1rem}

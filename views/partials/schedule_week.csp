@@ -261,7 +261,7 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
       <button type="button" aria-pressed="false"
         hx-get="/schedule/segment?segment=today" hx-target="#schedule-segment"
         hx-swap="outerHTML" hx-push-url="/schedule?segment=today"
-        hx-indicator="#schedule-indicator" hx-disabled-elt="this"><%c++ $$ << @@.get<std::string>("t.nav.today"); %></button>
+        hx-indicator="#schedule-indicator" hx-disabled-elt="this"><%c++ $$ << @@.get<std::string>("t.schedule.day"); %></button>
       <button type="button" aria-pressed="true"
         hx-get="/schedule/segment?segment=week&amp;offset=0"
         hx-target="#schedule-segment" hx-swap="outerHTML"
@@ -280,10 +280,10 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
 // Стрелки ±1 (03 §4.3, тап ≥44px): на границе окна [-4..4] — disabled.
 // aria — словарь (t.a11y.prevWeek/nextWeek, Р-16).
 if (offset - 1 < -4)
-    $$ << "<button type=\"button\" class=\"icon-button\" disabled aria-label=\""
+    $$ << "<button type=\"button\" class=\"icon-button\" data-week-prev disabled aria-label=\""
        << vstr("a11y.prevWeek") << "\">";
 else
-    $$ << "<button type=\"button\" class=\"icon-button\" aria-label=\""
+    $$ << "<button type=\"button\" class=\"icon-button\" data-week-prev data-network-action aria-label=\""
        << vstr("a11y.prevWeek")
        << "\" hx-get=\"/schedule/segment?segment=week&amp;offset=" << (offset - 1)
        << "\" hx-target=\"#schedule-segment\" hx-swap=\"outerHTML\" hx-push-url=\"/schedule?segment=week&amp;offset=" << (offset - 1)
@@ -293,10 +293,10 @@ $$ << "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"
       <span class="muted small" data-week-range><%c++ $$ << esc(weekRange(from, to)); %></span>
 <%c++
 if (offset + 1 > 4)
-    $$ << "<button type=\"button\" class=\"icon-button\" disabled aria-label=\""
+    $$ << "<button type=\"button\" class=\"icon-button\" data-week-next disabled aria-label=\""
        << vstr("a11y.nextWeek") << "\">";
 else
-    $$ << "<button type=\"button\" class=\"icon-button\" aria-label=\""
+    $$ << "<button type=\"button\" class=\"icon-button\" data-week-next data-network-action aria-label=\""
        << vstr("a11y.nextWeek")
        << "\" hx-get=\"/schedule/segment?segment=week&amp;offset=" << (offset + 1)
        << "\" hx-target=\"#schedule-segment\" hx-swap=\"outerHTML\" hx-push-url=\"/schedule?segment=week&amp;offset=" << (offset + 1)

@@ -360,7 +360,8 @@ void ScheduleCtrl::page(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+        [cb, q, dayIso, realToday = today,
+         lang = i18n::resolveRequestLang(req)](
             const Json::Value& body,
             const Json::Value& changes) mutable {
             // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера
@@ -371,6 +372,10 @@ void ScheduleCtrl::page(const HttpRequestPtr& req,
             data.insert("activeTab", std::string("schedule"));
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
+            // Реальное «сегодня» (UTC проекта) отдельно от показанного дня:
+            // aria-current="date" полосы недели — выбранный день (todayIso),
+            // точка «сегодня» и колонка «Сегодня» — реальный день (v3, шаг 3).
+            data.insert("realTodayIso", realToday);
             data.insert("bodyJson", toJson(body));
             data.insert("changesJson", toJson(changes));
             cb(HttpResponse::newHttpViewResponse("schedule",
@@ -402,7 +407,8 @@ void ScheduleCtrl::segment(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+        [cb, q, dayIso, realToday = today,
+         lang = i18n::resolveRequestLang(req)](
             const Json::Value& body,
             const Json::Value& changes) mutable {
             // 5.18 (шаг 3): htmx-фрагмент несёт те же словарные строки
@@ -412,6 +418,10 @@ void ScheduleCtrl::segment(const HttpRequestPtr& req,
             i18n::insertUiStrings(data, lang);
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
+            // Реальное «сегодня» (UTC проекта) отдельно от показанного дня:
+            // aria-current="date" полосы недели — выбранный день (todayIso),
+            // точка «сегодня» и колонка «Сегодня» — реальный день (v3, шаг 3).
+            data.insert("realTodayIso", realToday);
             data.insert("bodyJson", toJson(body));
             data.insert("changesJson", toJson(changes));
             // Имя шаблона — класс сгенерированного партиала (файл без
