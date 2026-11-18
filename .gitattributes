@@ -11,3 +11,6 @@
 *.png binary
 *.ico binary
 *.pdf binary
+
+# Эталон v3 — побайтная копия прототипа (CRLF внутри), не нормализовать
+design-drafts/v3/prototype-bundle.html -text
