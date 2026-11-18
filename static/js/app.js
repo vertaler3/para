@@ -337,10 +337,14 @@
   })();
   /* Аватар — инициалы ФИО из GET /v1/me (гость/ошибка — кружок пустой,
      ссылка на профиль работает). */
+  /* GET /v1/me — один запрос на страницу: аватар каркаса и подзаголовок
+     «Сегодня» (группа) читают общий промис. */
+  let meRequest = null;
+  const getMe = () => meRequest || (meRequest = fetchJSON('/v1/me'));
   (() => {
     const av = document.querySelector('[data-avatar]');
     if (!av) return;
-    fetchJSON('/v1/me').then((me) => {
+    getMe().then((me) => {
       const fio = me && me.profile && me.profile.fio ? String(me.profile.fio) : '';
       const parts = fio.trim().split(/\s+/).filter(Boolean);
       const ini = parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2);
@@ -740,8 +744,30 @@
     }
     const dateEl = $$('[data-today-date]');
     if (dateEl) {
-      dateEl.textContent = new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' });
+      /* эталон v3: «Среда, 18 ноября 2026» — с годом, день недели с заглавной */
+      const full = new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      const clean = full.replace(/\s*г\.$/u, ''); // ru: «… 2026 г.» → «… 2026», как в эталоне
+      dateEl.textContent = clean.charAt(0).toUpperCase() + clean.slice(1);
     }
+    /* подзаголовок эталона «1-ФМО · всё важное на сегодня» — группа из
+       GET /v1/me (profile.group); у сотрудника профиля нет — остаётся
+       серверная строка dash.heading */
+    const metaEl = $$('[data-dash-meta]');
+    if (metaEl) {
+      getMe().then((me) => {
+        const group = me && me.profile && me.profile.group ? String(me.profile.group) : '';
+        if (group) metaEl.textContent = group + ' · ' + t('dash.headingTail', 'всё важное на сегодня');
+      });
+    }
+    /* aria-busy секции виджета на время загрузки (dashboard-states.html:
+       скелетон с aria-busy); снимается при отрисовке данных/ошибки */
+    const setBusy = (name, on) => {
+      const w = $$('[data-widget="' + name + '"]');
+      if (!w) return;
+      if (on) w.setAttribute('aria-busy', 'true');
+      else w.removeAttribute('aria-busy');
+    };
+    const BUSY_WIDGETS = ['next-class', 'today', 'deadlines', 'applications', 'news'];
 
     /* словари-константы словарей CHECK DDL (0002/0003/0004) — метки FE */
     /* метки словарей CHECK DDL — из словаря 5.18 (t: бандл сервера);
@@ -834,19 +860,36 @@
     const updateNextMeta = (next) => {
       const meta = $$('[data-next-meta]');
       if (!meta) return;
+      /* эталон v3: «Следующая пара · через 25 минут» — подпись внутри next-meta */
+      const lead = t('dash.nextClass', 'Следующая пара') + ' · ';
       const started = new Date(next.starts_at).getTime() <= Date.now();
       if (started) {
-        meta.textContent = t('dash.inProgressNow', 'идёт сейчас') + ' · ' + t('dash.until', 'до') + ' ' + timeOf(next.ends_at);
+        meta.textContent = lead + t('dash.inProgressNow', 'идёт сейчас') + ' · ' + t('dash.until', 'до') + ' ' + timeOf(next.ends_at);
         return;
       }
       const mins = minutesUntil(next.starts_at);
-      meta.textContent = mins >= 1
+      meta.textContent = lead + (mins >= 1
         ? t('dash.inMinutes', 'через {n}').replace('{n}', mins + ' ' + plural(mins, t('plural.minuteOne', 'минуту'), t('plural.minuteFew', 'минуты'), t('plural.minuteMany', 'минут')))
-        : t('dash.lessMinute', 'меньше минуты');
+        : t('dash.lessMinute', 'меньше минуты'));
     };
+    /* ФИО «Фамилия Имя Отчество» → «И. О. Фамилия» (эталон teacher-line) и
+       инициалы аватара «ИФ» (как аватар каркаса) */
+    const shortFio = (fio) => {
+      const parts = String(fio || '').trim().split(/\s+/).filter(Boolean);
+      return parts.length === 3 ? parts[1][0] + '. ' + parts[2][0] + '. ' + parts[0] : parts.join(' ');
+    };
+    const initialsOf = (fio) => {
+      const parts = String(fio || '').trim().split(/\s+/).filter(Boolean);
+      return (parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2)).toUpperCase();
+    };
+    const mapHref = (room) => '/map?q=' + encodeURIComponent(room || '');
+    const withBuilding = (room, building) => (building ? room + ' · ' + building : room);
+    const PEOPLE_OFFSET = 1000; // профиль человека = teacher_id + 1000 (Р-15)
+    let teacherSeq = 0;
     const renderNext = (next, failed) => {
       show('[data-next-loading]', false);
       show('[data-next-error]', Boolean(failed));
+      setBusy('next-class', false);
       stopCountdown();
       const widget = $$('[data-widget="next-class"]');
       const body = $$('[data-next-body]');
@@ -867,8 +910,42 @@
       if (time) time.textContent = timeOf(next.starts_at) + '–' + timeOf(next.ends_at);
       const discipline = $$('[data-next-discipline]');
       if (discipline) discipline.textContent = next.discipline || '';
+      /* next-location эталона: «Аудитория 1207» + корпус (этажа в данных
+         нет — не выводится) + «На карте» → /map?q=<аудитория> */
       const room = $$('[data-next-room]');
-      if (room) room.textContent = next.room || '—';
+      if (room) room.textContent = t('dash.roomTitle', 'Аудитория {room}').replace('{room}', next.room || '—');
+      const building = $$('[data-next-building]');
+      if (building) {
+        building.textContent = next.building || '';
+        building.hidden = !next.building;
+      }
+      const map = $$('[data-next-map]');
+      if (map) {
+        map.hidden = !next.room;
+        map.href = mapHref(next.room);
+      }
+      const sched = $$('[data-next-schedule]');
+      if (sched) sched.href = dateOf(next.starts_at) ? '/schedule?date=' + dateOf(next.starts_at) : '/schedule';
+      /* teacher-line: ФИО из GET /v1/people/{teacher_id+1000} (как диалог
+         расписания; ответ плоский — fio на верхнем уровне). Нет teacher_id
+         или запрос не удался — строка скрыта. */
+      const teacher = $$('[data-next-teacher]');
+      if (!teacher) return;
+      teacher.hidden = true;
+      const tid = parseInt(next.teacher_id, 10);
+      if (!Number.isFinite(tid)) return;
+      const seq = ++teacherSeq;
+      fetchJSON('/v1/people/' + (tid + PEOPLE_OFFSET)).then((person) => {
+        if (seq !== teacherSeq) return;
+        const fio = person && (person.fio || (person.person && person.person.fio));
+        if (!fio) return;
+        teacher.href = '/people/' + (tid + PEOPLE_OFFSET);
+        const name = teacher.querySelector('[data-next-teacher-name]');
+        if (name) name.textContent = shortFio(fio);
+        const ini = teacher.querySelector('[data-next-teacher-initials]');
+        if (ini) ini.textContent = initialsOf(fio);
+        teacher.hidden = false;
+      });
     };
 
     /* --- виджет «Сегодня»: все пары дня, прошедшие — приглушённы,
@@ -876,6 +953,7 @@
     const renderToday = (events, failed) => {
       show('[data-today-loading]', false);
       show('[data-today-error]', Boolean(failed));
+      setBusy('today', false);
       const body = $$('[data-today-body]');
       const title = $$('[data-today-title]');
       if (!body) return;
@@ -895,35 +973,94 @@
       body.hidden = false;
       body.replaceChildren();
       events.forEach((e) => {
-        const row = el('a', 'lesson');
-        /* тап → объект: обычная пара — /schedule; перенос/отмена — день
-           расписания с этим переносом (канон deep_link фикстур Э6;
-           карточка изменения §4.9.1 — экран Э7, который ещё не собран) */
-        row.href = e.status && e.status !== 'normal' && dateOf(e.starts_at)
-          ? '/schedule?date=' + dateOf(e.starts_at)
-          : '/schedule';
+        /* эталон v3: div.lesson (+ .moved/.cancelled/.substituted), предмет —
+           ссылка на день расписания, аудитория — a.lesson-room → карта с
+           корпусом в <small>; изменение — span.event-change «· Перенос» */
+        const status = e.status === 'moved' || e.status === 'cancelled' || e.status === 'substituted' ? e.status : '';
+        const row = el('div', 'lesson' + (status ? ' ' + status : ''));
         if (timeOf(e.ends_at) && new Date(e.ends_at).getTime() < Date.now()) row.classList.add('is-past');
         const time = el('div', 'lesson-time');
         time.append(el('strong', null, timeOf(e.starts_at)));
         if (timeOf(e.ends_at)) time.append(el('span', null, timeOf(e.ends_at)));
         const mid = el('div');
-        mid.append(el('div', 'lesson-subject', e.discipline || ''));
+        const subject = el('div', 'lesson-subject');
+        const subjectLink = el('a', null, e.discipline || '');
+        subjectLink.href = dateOf(e.starts_at) ? '/schedule?date=' + dateOf(e.starts_at) : '/schedule';
+        subject.append(subjectLink);
+        mid.append(subject);
         const detail = el('p', 'lesson-detail', LESSON_KIND[e.kind] || '');
-        if (e.status === 'moved') detail.append(' ', el('span', 'badge', 'Перенос'));
-        if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+        const CHANGE = {
+          moved: t('schedule.sheetChange', 'Перенос'),
+          cancelled: t('lesson.cancelled', 'Отменена'),
+          substituted: t('lesson.substituted', 'Замена')
+        };
+        if (status) detail.append(' ', el('span', 'event-change', '· ' + CHANGE[status]));
         mid.append(detail);
-        const room = el('div', 'lesson-room');
-        if (e.status === 'cancelled') {
+        let room;
+        if (status === 'cancelled') {
+          room = el('span', 'lesson-room');
           room.append(el('s', null, e.room || '—'));
-          room.append(el('small', null, 'отменена'));
-        } else if (e.status === 'moved' && e.prev_room) {
-          room.append(el('s', null, e.prev_room));
-          room.append(document.createTextNode(' → ' + (e.room || '—')));
         } else {
-          room.append(el('span', null, e.room || '—'));
+          room = el('a', 'lesson-room', e.room || '—');
+          room.href = mapHref(e.room);
         }
+        if (e.building) room.append(el('small', null, e.building));
         row.append(time, mid, room);
         body.append(row);
+      });
+    };
+
+    /* --- «Что изменилось» (эталон v3 change-block): события дня со
+       статусом moved/cancelled/substituted из data.today. Причины переноса
+       в данных нет — не выводится; «Подробнее» → день расписания (там
+       диалог пары; отдельной страницы изменения в проде нет). --------- */
+    const dayShort = (iso) => {
+      const d = new Date(iso);
+      const s = d.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    };
+    const renderChanges = (events, failed) => {
+      const sec = $$('[data-widget="changes"]');
+      const body = $$('[data-changes-body]');
+      if (!sec || !body) return;
+      body.replaceChildren();
+      const changed = failed ? [] : events.filter((e) => e.status === 'moved' || e.status === 'cancelled' || e.status === 'substituted');
+      sec.hidden = !changed.length;
+      changed.forEach((e) => {
+        const box = el('div', 'change-block');
+        box.setAttribute('data-change-block', '');
+        box.append(el('h3', null, timeOf(e.starts_at) + ' · ' + (e.discipline || '')));
+        const span = timeOf(e.starts_at) + '–' + timeOf(e.ends_at);
+        let label = t('schedule.changeSub', 'Замена преподавателя');
+        let caption = span;
+        const route = el('div', 'change-route');
+        if (e.status === 'moved') {
+          const prev = e.prev_starts_at || '';
+          const sameTime = !prev || (dateOf(prev) === dateOf(e.starts_at) && timeOf(prev) === timeOf(e.starts_at));
+          label = sameTime ? t('schedule.changeRoomMoved', 'Перенос аудитории') : t('schedule.changeClassMoved', 'Перенос занятия');
+          if (e.prev_room && e.prev_room !== e.room) {
+            const arrow = el('span', null, '→');
+            arrow.setAttribute('aria-hidden', 'true');
+            route.append(el('s', null, withBuilding(e.prev_room, e.prev_building)), arrow);
+          }
+          const now = el('a', null, withBuilding(e.room || '—', e.building));
+          now.href = mapHref(e.room);
+          now.setAttribute('data-change-room', '');
+          route.append(now);
+          caption = sameTime
+            ? t('schedule.changeSameTime', 'Время прежнее') + ' · ' + span
+            : t('schedule.changeWas', 'Было:') + ' ' + (dateOf(prev) !== dateOf(e.starts_at) ? dayShort(prev) + ', ' : '') + timeOf(prev);
+        } else if (e.status === 'cancelled') {
+          label = t('schedule.changeCancelled', 'Занятие отменено');
+          route.append(el('s', null, withBuilding(e.room || '—', e.building)));
+        }
+        box.append(el('span', 'change-label', label));
+        if (route.childNodes.length) box.append(route);
+        box.append(el('p', 'caption', caption));
+        const more = el('a', 'change-detail', e.status === 'moved' ? t('schedule.changeMore', 'Подробнее о переносе') : t('schedule.changeMoreAny', 'Подробнее об изменении'));
+        more.href = dateOf(e.starts_at) ? '/schedule?date=' + dateOf(e.starts_at) : '/schedule';
+        box.append(more);
+        body.append(box);
       });
     };
 
@@ -931,6 +1068,7 @@
     const renderDeadlines = (items, failed) => {
       show('[data-deadlines-loading]', false);
       show('[data-deadlines-error]', Boolean(failed));
+      setBusy('deadlines', false);
       const body = $$('[data-deadlines-body]');
       if (!body) return;
       if (failed) { body.hidden = true; return; }
@@ -939,24 +1077,32 @@
       show('[data-deadlines-empty]', false);
       body.hidden = false;
       body.replaceChildren();
+      /* эталон v3: срочный (сегодня/завтра) — p.deadline-time без .calm
+         (CSS красит строку красной плашкой), остальные — .calm; подпись —
+         вид события сессии и аудитория (заданий в данных нет: это
+         session_plan — экзамены, зачёты, консультации, пересдачи) */
       future.forEach((d) => {
         const diff = dayDiff(d.starts_at);
-        const urgency = diff <= 1 ? 'dot-danger' : diff <= 3 ? 'dot-warn' : 'dot-ok';
         const row = el('li');
-        const link = el('a');
+        const link = el('a', null, d.discipline || '');
         link.href = '/grades';
-        link.append(el('span', 'deadline-dot ' + urgency));
-        link.append(document.createTextNode((EXAM_KIND[d.kind] || '') + ' · ' + (d.discipline || '')));
-        const time = el('p', 'deadline-time calm', dayLabel(d.starts_at) + (timeOf(d.starts_at) ? ' · ' + timeOf(d.starts_at) : ''));
+        const when = dayLabel(d.starts_at);
+        const time = el('p', 'deadline-time' + (diff <= 1 ? '' : ' calm'),
+          when.charAt(0).toUpperCase() + when.slice(1) + (timeOf(d.starts_at) ? ' · ' + timeOf(d.starts_at) : ''));
+        const kind = EXAM_KIND[d.kind] || '';
+        const caption = [kind, d.room ? t('dash.roomLabel', 'аудитория') + ' ' + d.room : ''].filter(Boolean).join(' · ');
         row.append(link, time);
+        if (caption) row.append(el('p', 'caption', caption));
         body.append(row);
       });
     };
 
     /* --- виджет «Заявки»: активные → /applications/{id} ----------------- */
+    const STAGE_OF = { submitted: 1, accepted: 2, in_progress: 3, need_info: 3, ready: 4, issued: 5 };
     const renderApplications = (items, failed) => {
       show('[data-applications-loading]', false);
       show('[data-applications-error]', Boolean(failed));
+      setBusy('applications', false);
       const body = $$('[data-applications-body]');
       if (!body) return;
       if (failed) { body.hidden = true; return; }
@@ -970,7 +1116,20 @@
         link.href = '/applications/' + a.id;
         const status = APP_STATUS[a.status] || a.status || '';
         const stamp = shortStamp(a.updated_at);
-        row.append(link, el('p', 'caption', status + (stamp ? ' · ' + stamp : '')));
+        row.append(link);
+        /* mini-progress эталона: 5 этапов заявки по status (issued в виджет
+           не попадает — только активные); need_info — этап «В работе» +
+           красная строка «Требуется ответ» (текста вопроса в списке нет) */
+        const stage = STAGE_OF[a.status] || 0;
+        if (stage) {
+          const bar = el('div', 'mini-progress');
+          bar.setAttribute('role', 'img');
+          bar.setAttribute('aria-label', t('apps.stagesPrefix', 'Пройдено этапов:') + ' ' + stage + ' ' + t('apps.stagesTotal', 'из 5'));
+          for (let i = 1; i <= 5; i += 1) bar.append(el('span', i <= stage ? 'done' : null));
+          row.append(bar);
+        }
+        if (a.status === 'need_info') row.append(el('p', 'small red', t('dash.needReply', 'Требуется ответ') + (stamp ? ' · ' + stamp : '')));
+        else row.append(el('p', 'caption', status + (stamp ? ' · ' + stamp : '')));
         body.append(row);
       });
     };
@@ -989,6 +1148,7 @@
     const renderNews = (items, failed, unreadCount, freshNews) => {
       show('[data-news-loading]', false);
       show('[data-news-error]', Boolean(failed));
+      setBusy('news', false);
       const body = $$('[data-news-body]');
       const title = $$('[data-news-title]');
       if (!body) return;
@@ -1009,21 +1169,21 @@
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
         link.href = '/notifications?segment=news';
-        const caption = el('p', 'caption', (NEWS_CATEGORY[n.category] || t('news.one', 'Новость')) + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
-        row.append(link, caption);
+        const caption = el('span', 'caption', (NEWS_CATEGORY[n.category] || t('news.one', 'Новость')) + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
+        row.append(caption, link); // эталон: подпись (дата · источник) над заголовком
         body.append(row);
       });
       items.forEach((n) => {
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
         link.href = '/notifications';
-        const caption = el('p', 'caption', (NEWS_TYPE[n.type] || '') + (n.created_at ? ' · ' + shortStamp(n.created_at) : ''));
+        const caption = el('span', 'caption', (NEWS_TYPE[n.type] || '') + (n.created_at ? ' · ' + shortStamp(n.created_at) : ''));
         if (!n.read_at) {
           const dot = el('span', 'unread-mark');
           dot.setAttribute('aria-hidden', 'true');
           caption.append(' ', dot);
         }
-        row.append(link, caption);
+        row.append(caption, link);
         body.append(row);
       });
     };
@@ -1068,8 +1228,8 @@
         const mid = el('div');
         mid.append(el('div', 'lesson-subject', r.title));
         const detail = el('p', 'lesson-detail', EXAM_KIND[r.kind] || LESSON_KIND[r.kind] || '');
-        if (r.status === 'moved') detail.append(' ', el('span', 'badge', t('schedule.sheetChange', 'Перенос')));
-        if (r.status === 'cancelled') detail.append(' ', el('span', 'badge danger', t('lesson.cancelled', 'Отменена')));
+        if (r.status === 'moved') detail.append(' ', el('span', 'event-change', '· ' + t('schedule.sheetChange', 'Перенос')));
+        if (r.status === 'cancelled') detail.append(' ', el('span', 'event-change', '· ' + t('lesson.cancelled', 'Отменена')));
         mid.append(detail);
         row.append(time, mid);
         body.append(row);
@@ -1105,6 +1265,7 @@
     const widgetErrors = ['[data-next-error]', '[data-today-error]', '[data-deadlines-error]', '[data-applications-error]', '[data-news-error]'];
     const loadDashboard = async () => {
       loaders.forEach((sel) => show(sel, true));
+      BUSY_WIDGETS.forEach((w) => setBusy(w, true));
       show('[data-tomorrow-loading]', true);
       widgetErrors.forEach((sel) => show(sel, false));
       show('[data-dashboard-error]', false);
@@ -1114,6 +1275,7 @@
       ['[data-today-body]', '[data-tomorrow-body]', '[data-deadlines-body]', '[data-applications-body]', '[data-news-body]'].forEach((sel) => { const n = $$(sel); if (n) { n.hidden = true; n.replaceChildren(); } });
       show('[data-next-body]', false);
       show('[data-today-empty]', false);
+      show('[data-widget="changes"]', false);
       show('[data-deadlines-empty]', false);
       show('[data-applications-empty]', false);
       show('[data-news-empty]', false);
@@ -1124,6 +1286,7 @@
         /* офлайн (баннер уже показал каркас) или ошибка API — экранная
            ошибка с «Повторить»; скелетоны скрыть (03 §5.3) */
         loaders.forEach((sel) => show(sel, false));
+        BUSY_WIDGETS.forEach((w) => setBusy(w, false));
         show('[data-dashboard-error]', true);
         return;
       }
@@ -1139,6 +1302,7 @@
       const hit = (k) => degraded.indexOf(k) !== -1;
       renderNext(data.next_class || null, hit('next_class'));
       renderToday(Array.isArray(data.today) ? data.today : [], hit('today'));
+      renderChanges(Array.isArray(data.today) ? data.today : [], hit('today'));
       renderDeadlines(Array.isArray(data.deadlines) ? data.deadlines : [], hit('deadlines'));
       renderApplications(Array.isArray(data.applications) ? data.applications : [], hit('applications'));
       /* 5.17: свежие новости для «Что нового» — отдельный GET /v1/news

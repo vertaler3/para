@@ -972,3 +972,8 @@ button.change-detail{display:inline-flex;align-items:center;min-height:44px;padd
 .map-search-results{margin-top:.5rem;flex-wrap:wrap}
 #room-search-form .row input{flex:1;min-width:0}
 @media(min-width:1200px){.week-board .lesson{grid-row:var(--event-row)/span var(--event-span,3)}.week-board .day-group.is-today .schedule-list{border:0;border-radius:0}.week-changes{max-width:600px}}
+.lesson-subject a{color:inherit;text-decoration:none}
+.lesson-subject a:hover{text-decoration:underline;text-underline-offset:4px}
+.next-schedule{display:inline-flex;align-items:center;gap:.35rem;min-height:44px;margin-top:.5rem;font-size:.8rem;font-weight:550;color:var(--link);text-decoration:none}
+.next-schedule .icon{width:16px;height:16px}
+.next-schedule:hover{text-decoration:underline;text-underline-offset:4px}
