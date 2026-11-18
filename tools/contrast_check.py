@@ -25,6 +25,7 @@ pairs += [('danger-text','bg')]
 # --primary на --primary-soft-bg), бейдж уведомлений (--on-primary на --danger-text).
 pairs += [('link',b) for b in ('bg','surface','surface-2')] + [('link-hover',b) for b in ('bg','surface')]
 pairs += [(t,'surface-warm') for t in ('text','text-2','primary','link')]
+pairs += [('on-chrome','chrome'),('on-chrome','chrome-hover'),('chrome-active-text','chrome-active-bg')]
 pairs += [('on-primary','danger-text'),('primary-soft-text','surface-2'),('danger-text','surface-2')]
 failed=0
 print('WCAG: c=sRGB/255; c_lin=c/12.92 if c<=0.04045 else ((c+0.055)/1.055)^2.4; L=0.2126R+0.7152G+0.0722B; CR=(Lmax+0.05)/(Lmin+0.05). All text threshold 4.5:1 (including large).')

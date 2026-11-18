@@ -9,7 +9,10 @@
    --on-primary, тени e1/e2 гасятся; все пары — tools/contrast_check.py,
    FAIL: 0 (расчёт — журнал docs/agents-log/2026-11-18-дизайн-v3-каркас.md).
    Тёмная тема: системная (prefers-color-scheme) + ручная [data-theme=dark];
-   переключение — только замена переменных. */
+   переключение — только замена переменных.
+   --chrome*: рамка навигации (шапка на мобильном, сайдбар ≥1100px). В эталоне она
+   красится --primary; инверсия --primary в тёмной теме дала бы светло-лавандовый
+   сайдбар — поэтому рамка вынесена в свои токены (Р-31(а)): в тёмной она темнее фона. */
 :root {
  color-scheme:light;
  --bg:#F5F7FB; --surface:#FFFFFF; --surface-2:#EAF0FA;
@@ -17,6 +20,8 @@
  --primary:#162256; --primary-hover:#101A43; --primary-pressed:#0C1435;
  --on-primary:#FFFFFF; --primary-soft-bg:#EAF0FA; --primary-soft-text:#18478D;
  --link:#18478D; --link-hover:#12366E; --surface-warm:#F8F5EE;
+ /* рамка навигации v3 (шапка 360px, сайдбар ≥1100px): в светлой = primary-палитра эталона */
+ --chrome:#162256; --on-chrome:#FFFFFF; --chrome-hover:#101A43; --chrome-active-bg:#EAF0FA; --chrome-active-text:#162256;
  --danger-text:#BD2436; --danger-bg:#FFF0F2;
  --success-text:#18478D; --success-bg:#EAF0FA;
  --warning-text:#BD2436; --warning-bg:#FFF0F2;
@@ -40,6 +45,7 @@
  --primary:#A9BCF2; --primary-hover:#C3D1F7; --primary-pressed:#96ABE6; --on-primary:#111A3A;
  --primary-soft-bg:#202A44; --primary-soft-text:#BCCBF5;
  --link:#A9C4F5; --link-hover:#C6D8FA; --surface-warm:#1A2030;
+ --chrome:#080C17; --on-chrome:#E9EDF7; --chrome-hover:#1A2338; --chrome-active-bg:#202A44; --chrome-active-text:#C3D1F7;
  --danger-text:#FFA5B0; --danger-bg:#3A1D28; --warning-text:#FFA5B0; --warning-bg:#3A1D28;
  --success-text:#BCCBF5; --success-bg:#202A44; --border:#2F3B58; --control-border:#7F8CAA;
  --overlay:rgba(2,6,20,.7); --e1:none; --e2:none; --e3:0 12px 32px rgba(2,6,20,.35);
@@ -50,6 +56,7 @@
  --primary:#A9BCF2; --primary-hover:#C3D1F7; --primary-pressed:#96ABE6; --on-primary:#111A3A;
  --primary-soft-bg:#202A44; --primary-soft-text:#BCCBF5;
  --link:#A9C4F5; --link-hover:#C6D8FA; --surface-warm:#1A2030;
+ --chrome:#080C17; --on-chrome:#E9EDF7; --chrome-hover:#1A2338; --chrome-active-bg:#202A44; --chrome-active-text:#C3D1F7;
  --danger-text:#FFA5B0; --danger-bg:#3A1D28; --warning-text:#FFA5B0; --warning-bg:#3A1D28;
  --success-text:#BCCBF5; --success-bg:#202A44; --border:#2F3B58; --control-border:#7F8CAA;
  --overlay:rgba(2,6,20,.7); --e1:none; --e2:none; --e3:0 12px 32px rgba(2,6,20,.35);

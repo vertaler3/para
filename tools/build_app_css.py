@@ -34,7 +34,28 @@ def parse(s, ctx=''):
         i = k
     return out
 
+CHROME_SEL = ('body:not(.entry-page)', '.site-header', '.header-actions .icon-button',
+              '.header-date', '.staff-nav a', '.campus-nav')
+
+def chrome(css):
+    """Рамка навигации (шапка 360px, сайдбар ≥1100px) — токены --chrome* вместо
+    --primary/--on-primary (Р-31(а): иначе тёмная тема инвертирует сайдбар в светлый).
+    Вход (body[data-page=login], .entry-page) не трогается."""
+    def fix(m):
+        sel, body = m.group(1), m.group(2)
+        if not any(k in sel for k in CHROME_SEL) or 'data-page=login' in sel or sel.lstrip().startswith('.entry-page'):
+            return m.group(0)
+        if '[aria-current]' in sel and 'primary-soft-bg' in body:
+            body = body.replace('var(--primary-soft-bg)', 'var(--chrome-active-bg)').replace('color:var(--primary)', 'color:var(--chrome-active-text)')
+        body = (body.replace('var(--on-primary)', 'var(--on-chrome)').replace('var(--primary-hover)', 'var(--chrome-hover)')
+                    .replace('background:var(--primary)', 'background:var(--chrome)').replace('border-bottom-color:var(--primary)', 'border-bottom-color:var(--chrome)'))
+        return sel + '{' + body + '}'
+    return re.sub(r'([^{}@]+)\{([^{}]*)\}', fix, css)
+
 FIXES = '''.ob-footer .button{white-space:nowrap}
+.htmx-indicator.skeleton{display:none}
+.htmx-request .htmx-indicator.skeleton,.htmx-request.htmx-indicator.skeleton{display:block;opacity:1}
+a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:none}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}
@@ -50,6 +71,7 @@ def main():
     proto = proto.replace("content:'МОЁ ПРОСТРАНСТВО'", 'content:attr(data-heading)')
     proto = proto.replace("content:'УЧЕБНЫЙ ОФИС'", 'content:attr(data-heading)')
     proto = proto.replace('[href="profile.html"]', '[data-nav=profile]')
+    proto = chrome(proto)
     assert 'МОЁ' not in proto and 'profile.html' not in proto
     # 2) прод-дополнения
     extra = []
