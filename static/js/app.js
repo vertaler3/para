@@ -704,6 +704,34 @@
     if (gradesRetry) gradesRetry.addEventListener('click', () => window.location.reload());
   }
 
+  /* ---------- поиск в зачётной книжке (views/gradebook.csp; эталон
+     recordbook.html #recordbook-search) ---------- */
+  /* Фильтр уже отрендеренных строк [data-grade-row] по тексту (дисциплина
+     и код), регистр — по языку страницы; счётчик #recordbook-count —
+     aria-live в разметке. Семестра в данных нет — фильтра семестра нет. */
+  const recordbookSearch = document.getElementById('recordbook-search');
+  if (recordbookSearch) {
+    const rows = Array.from(document.querySelectorAll('[data-grade-row]'));
+    const count = document.getElementById('recordbook-count');
+    const filter = () => {
+      const q = recordbookSearch.value.trim().toLocaleLowerCase(LANG);
+      let visible = 0;
+      rows.forEach((row) => {
+        row.hidden = !!q && !row.textContent.toLocaleLowerCase(LANG).includes(q);
+        if (!row.hidden) visible += 1;
+      });
+      const list = document.querySelector('[data-grade-list]');
+      if (list) list.hidden = visible === 0;
+      if (!count) return;
+      if (!q) { count.textContent = ''; return; }
+      count.textContent = visible
+        ? t('gradebook.searchShown', 'Дисциплин: {n} из {m}').replace('{n}', String(visible)).replace('{m}', String(rows.length))
+        : t('gradebook.searchNone', 'По этому запросу дисциплин нет');
+    };
+    recordbookSearch.addEventListener('input', filter);
+    filter();
+  }
+
   /* ---------- «План до допуска» (views/grades_discipline.csp; эталон
      discipline.html #admission-result) ---------- */
   /* Ползунки — по прод-компонентам с недобором, диапазон [score..max]
