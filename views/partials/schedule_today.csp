@@ -1,5 +1,6 @@
 <%inc
 #include <json/json.h>
+#include <array>
 #include <memory>
 #include <string>
 %>
@@ -194,7 +195,62 @@ const auto dataAttr = [&esc, &timeOf, &dateOf](const Json::Value& e) {
     return a;
 };
 %>
-<%c++ $$ << "<div id=\"schedule-segment\" class=\"content-narrow\" data-state=\"" << (hasEvents ? "data" : "empty") << "\">"; %>
+<%c++
+/* v3 (fe_rebuild шаг 5, экран 3): календарная раскладка эталона
+   design-drafts/v3/pages/schedule.html — слева calendar-side (месяц, полоса
+   текущей учебной недели с отметкой сегодня, легенда, подписка на календарь),
+   справа calendar-agenda с прежним содержимым сегмента. Даты недели —
+   арифметика days-from-civil (как weekdayOf выше) от todayIso; подписи —
+   словарь (monthNom.NN, weekdayShort.NN). Пилюли дней — подписи, не ссылки:
+   выбор произвольного дня прод не поддерживает (сегмент «Сегодня» — только
+   текущий день; вся неделя — сегмент «Неделя»). */
+const auto civilFromDays = [](long z) {
+    z += 719468;
+    const long era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const long y = static_cast<long>(yoe) + era * 400;
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const unsigned mp = (5 * doy + 2) / 153;
+    const unsigned d = doy - (153 * mp + 2) / 5 + 1;
+    const unsigned m = mp < 10 ? mp + 3 : mp - 9;
+    return std::array<long, 3>{y + (m <= 2), static_cast<long>(m), static_cast<long>(d)};
+};
+int tY = 0, tM = 0, tD = 0;
+long tDays = 0;
+if (todayIso.size() >= 10) {
+    try {
+        tY = std::stoi(todayIso.substr(0, 4));
+        tM = std::stoi(todayIso.substr(5, 2));
+        tD = std::stoi(todayIso.substr(8, 2));
+        tDays = daysFromCivil(tY, tM, tD);
+    } catch (...) { tM = 0; }
+}
+const int tW = tM ? weekdayOf(todayIso) : -1;
+$$ << "<div id=\"schedule-segment\" class=\"calendar-layout\" data-state=\"" << (hasEvents ? "data" : "empty") << "\">";
+%>
+  <aside class="calendar-side" aria-label="<%c++ $$ << @@.get<std::string>("t.schedule.pickDay"); %>">
+<%c++
+if (tM >= 1 && tM <= 12) {
+    const std::string mk = std::string("monthNom.") + (tM < 10 ? "0" : "") + std::to_string(tM);
+    $$ << "<p class=\"calendar-month\">" << vstr(mk.c_str()) << " <span>" << tY << "</span></p>";
+} %>
+<%c++ if (tW >= 0) { %>
+    <div class="week-strip" role="list" aria-label="<%c++ $$ << @@.get<std::string>("t.schedule.weekStrip"); %>">
+<%c++
+for (int i = 0; i < 7; ++i) {
+        const auto ymd = civilFromDays(tDays - tW + i);
+        const std::string wk = "weekdayShort.0" + std::to_string(i + 1);
+        $$ << "<span class=\"day-pill\" role=\"listitem\"" << (i == tW ? " aria-current=\"date\"" : "") << "><span>"
+           << vstr(wk.c_str()) << "</span><strong>" << ymd[2] << "</strong>"
+           << (i == tW ? "<span class=\"today-dot\" aria-hidden=\"true\"></span>" : "") << "</span>";
+} %>
+    </div>
+<%c++ } %>
+    <div class="calendar-key"><span><i></i><%c++ $$ << @@.get<std::string>("t.schedule.keyLesson"); %></span><span class="red"><i></i><%c++ $$ << @@.get<std::string>("t.schedule.keyChange"); %></span></div>
+    <a class="button ghost full" href="/profile#calendar"><%c++ $$ << @@.get<std::string>("t.schedule.calendarSub"); %></a>
+  </aside>
+  <section class="calendar-agenda" aria-label="<%c++ $$ << @@.get<std::string>("t.schedule.agenda"); %>">
   <div class="calendar-toolbar">
     <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.schedulePeriod"); %>">
       <button type="button" aria-pressed="true"
@@ -268,7 +324,5 @@ else
 }
 %>
   </div>
-  <div class="actions section">
-    <a class="button" href="/profile"><%c++ $$ << @@.get<std::string>("t.schedule.calendarSub"); %></a>
-  </div>
+  </section>
 <%c++ $$ << "</div>"; %>
