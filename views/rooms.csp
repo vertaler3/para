@@ -1,46 +1,23 @@
 <%c++
-/* Бронь аудитории (Э7, экран 2 из 4; 03 §4.9.5, design-drafts/rooms.html и
-   rooms-states.html). Страница НЕ содержит данных: каталог аудиторий
-   (GET /v1/rooms, query ?capacity=), сетка слотов дня выбранной аудитории
+/* Бронь аудитории (Э7; дизайн v3 — design-drafts/v3/pages/rooms.html и
+   rooms-states.html, fe_rebuild шаг 18). Страница НЕ содержит данных:
+   каталог аудиторий (GET /v1/rooms?capacity=), сетка слотов дня
    (GET /v1/rooms/{id}/slots?date=) и «Мои брони» (GET
-   /v1/room-bookings?upcoming=1) грузит клиент — те же JSON-роуты
-   RoomsCtrl (02 §5.2), значения каталога не дублируются сервером
-   (паттерн views/application_form.csp). Контент строит static/js/app.js
-   (только createElement/textContent — 02 §6.4).
-   Поток брони — три шага 03 §4.9.5 («Три шага: каталог → сетка слотов
-   дня → подтверждение»): тап свободного слота ТОЛЬКО выбирает его
-   (aria-pressed), POST /v1/rooms/{id}/bookings уходит по primary-кнопке
-   карточки подтверждения «Забронировать HH:MM–HH:MM» (data-booking-
-   card по образцу .booking-summary design-drafts/rooms.html; features/
-   вместимость — из каталога GET /v1/rooms, слотовый ответ features не
-   отдаёт). Исходы POST (постановка Э7): 201 → success-тост
-   «Ауд. …, HH:MM–HH:MM — забронировано» с действием «Мои брони»
-   (дословно 03 §4.9.5) + перерисовка сетки (слот стал mine) и «Моих
-   брони»; 400 slot_taken → inline «Слот только что заняли» + перерисовка
-   сетки; 409 conflict/blocked → inline с текстом {error:{message}} +
-   перерисовка сетки (данные могли устареть). Отмена брони — danger-диалог
-   (<dialog> как sheet «Детали пары»: .lesson-sheet → bottom-sheet на
-   <600px): подтверждение danger-button, 03 §2.8/§6.4; повторная отмена
-   (409) — inline у списка. Слоты — кнопки ≥44px (сетка черновика
-   .room-grid/.room-slot из app.css): free — активна, booked — disabled
-   «Занято», mine — disabled «Ваша бронь» (акцент восстанавливает
-   .room-slot.mine:disabled в app.css); отмена — в «Моих брони» (id брони
-   в сетке слотов не отдаётся — 02 §5.2).
-   В разметке — состояния (03 §5):
-     скелетон — начальное состояние секций (03 §5.1: скелетон по формам
-                контента: чипы-«таблетки», сетка слотов, строки брони);
-     пусто    — сетка: «На эту дату слотов нет» + «Выберите другую дату
-                или аудиторию» + primary «Каталог аудиторий» (якорь к
-                каталогу на этой же странице; 03 §4.9.5, текст
-                rooms-states.html#empty); «Мои брони»: «Броней нет»
-                (постановка экрана);
-     ошибка   — своя на секцию с «Повторить» ([data-*-retry] — повторный
-                fetch, 03 §5.3: «Повторить всегда реально перезапрашивает»);
-     офлайн   — баннер каркаса (topbar + app.js applyOffline, 03 §5.4).
-   Синтаксис drogon v1.9.14: {{}} НЕ существует (Р-16) — страница статична,
-   строк-данных в шаблон не вставляется вовсе. htmx не нужен (без
-   сегментов) — только app.js (defer, локальный путь — AGENTS: без
-   npm/CDN). */
+   /v1/room-bookings?upcoming=1) грузит static/js/app.js (только
+   createElement/textContent — 02 §6.4).
+   Раскладка эталона: .calendar-toolbar (select аудитории «1207 · Корпус Б ·
+   24 места» — 50 аудиторий чипами тяжелы; вместимость; дата брони), под
+   ним подпись «корпус · мест · оборудование» и ссылка «На карте»
+   (/map?q=<номер>); .room-layout — сетка слотов слева, итог
+   .booking-summary справа (sticky на ≥1024px — правило app.css).
+   Поток брони — три шага 03 §4.9.5: тап свободного слота только выбирает
+   его, POST /v1/rooms/{id}/bookings — по primary итога. Свой слот (mine)
+   — кнопка: тап открывает danger-диалог отмены (бронь находится в «Моих
+   бронях» по room_id + starts_at), как в эталоне. Состояния — по
+   rooms-states.html: скелетон, пусто «На эту дату слотов нет» с
+   «Выбрать аудиторию», ошибка с «Повторить», офлайн — баннер каркаса и
+   data-network-action на кнопках подтверждения. Все строки — словарь
+   rooms.* ×3 (5.18). */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js подключает страница
@@ -51,136 +28,121 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/schedule"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Расписание</a>
-      <h1>Аудитории</h1>
-      <p>Забронируйте аудиторию для встречи или подготовки — слоты по 60 минут</p>
+      <a class="back" href="/schedule"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.rooms.title"); %></h1>
+      <p><%c++ $$ << @@.get<std::string>("t.rooms.subtitle"); %></p>
     </div>
   </div>
-  <div class="content-narrow">
 
-    <!-- Каталог аудиторий (03 §4.9.5, шаг 1): чипы строит app.js из
-         GET /v1/rooms; ?capacity= — фильтр «вместимость не меньше»
-         (02 §5.2). Активный чип — aria-pressed (правило .chip app.css). -->
-    <section class="section" aria-labelledby="rooms-catalog-title">
-      <div class="section-title">
-        <h2 id="rooms-catalog-title">Каталог аудиторий</h2>
-        <div class="rooms-cap-field">
-          <label for="rooms-capacity">Вместимость от</label>
-          <select id="rooms-capacity" data-capacity-filter>
-            <option value="">Любая</option>
-            <option value="20">20 мест</option>
-            <option value="30">30 мест</option>
-            <option value="50">50 мест</option>
-          </select>
-        </div>
-      </div>
-      <div data-rooms-loading aria-busy="true">
-        <div class="skeleton pill"></div>
-        <div class="skeleton pill short"></div>
-      </div>
-      <section class="section flow" data-rooms-error hidden role="alert">
-        <h3>Не получилось загрузить аудитории</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-rooms-retry>Повторить</button>
-      </section>
-      <div class="chips" data-room-chips role="group" aria-label="Аудитории" hidden></div>
-    </section>
+  <!-- Панель выбора (эталон: .calendar-toolbar «Аудитория» + «Дата брони»).
+       Опции select строит app.js из GET /v1/rooms; ?capacity= — фильтр
+       «вместимость не меньше» (02 §5.2). -->
+  <div class="calendar-toolbar">
+    <div class="rooms-room-field">
+      <label for="rooms-room"><%c++ $$ << @@.get<std::string>("t.rooms.room"); %></label>
+      <select id="rooms-room" data-room-select disabled></select>
+    </div>
+    <div class="rooms-cap-field">
+      <label for="rooms-capacity"><%c++ $$ << @@.get<std::string>("t.rooms.capacity"); %></label>
+      <select id="rooms-capacity" data-capacity-filter>
+        <option value=""><%c++ $$ << @@.get<std::string>("t.rooms.capAny"); %></option>
+        <option value="20" data-cap-n="20"></option>
+        <option value="30" data-cap-n="30"></option>
+        <option value="50" data-cap-n="50"></option>
+      </select>
+    </div>
+    <div class="rooms-date-field">
+      <label for="slots-date"><%c++ $$ << @@.get<std::string>("t.rooms.date"); %></label>
+      <input type="date" id="slots-date" data-slots-date>
+    </div>
+  </div>
+  <p class="small muted rooms-room-line" data-room-meta hidden>
+    <span data-room-meta-text></span>
+    <a href="/map" data-room-map><%c++ $$ << @@.get<std::string>("t.rooms.onMap"); %></a>
+  </p>
+  <div data-rooms-loading aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.common.loading"); %>">
+    <div class="skeleton title"></div>
+    <div class="skeleton block"></div>
+  </div>
+  <section class="section flow" data-rooms-error hidden role="alert">
+    <h3><%c++ $$ << @@.get<std::string>("t.rooms.errorCatalog"); %></h3>
+    <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+    <button class="button" type="button" data-rooms-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+  </section>
+  <p class="notice" data-rooms-none hidden><%c++ $$ << @@.get<std::string>("t.rooms.noRooms"); %></p>
 
-    <!-- Сетка слотов дня выбранной аудитории (03 §4.9.5, шаг 2):
-         дата — дейт-пикер (дефолт сегодня UTC ставит app.js), состояния
-         слотов — цветом статуса 03 §2.5. Inline-предупреждение — исходы
-         «слот ушёл из-под руки» (slot_taken/conflict/blocked). -->
-    <section class="section" aria-labelledby="slots-title" data-slots-section hidden>
+  <!-- .room-layout эталона: слоты слева, итог справа (sticky ≥1024px) -->
+  <div class="room-layout" data-slots-section hidden>
+    <div>
       <div class="section-title">
-        <h2 id="slots-title">Свободное время</h2>
-        <span class="caption">Слот · 60 минут</span>
+        <h2 id="slots-title"><%c++ $$ << @@.get<std::string>("t.rooms.slotsTitle"); %></h2>
+        <span class="caption"><%c++ $$ << @@.get<std::string>("t.rooms.slotLen"); %></span>
       </div>
-      <div class="calendar-toolbar">
-        <div class="rooms-date-field">
-          <label for="slots-date">Дата</label>
-          <input type="date" id="slots-date" data-slots-date>
-        </div>
-      </div>
-      <p class="muted small rooms-room-line" data-slots-room-line></p>
-      <div class="room-grid" data-slots-loading aria-busy="true" hidden>
+      <div class="room-grid" data-slots-loading aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.common.loading"); %>" hidden>
         <div class="skeleton slot"></div>
         <div class="skeleton slot"></div>
         <div class="skeleton slot"></div>
         <div class="skeleton slot"></div>
       </div>
       <section class="section flow" data-slots-error hidden role="alert">
-        <h3>Не получилось загрузить слоты</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-slots-retry>Повторить</button>
+        <h3><%c++ $$ << @@.get<std::string>("t.rooms.errorSlots"); %></h3>
+        <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+        <button class="button" type="button" data-slots-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
       </section>
       <div class="empty" data-slots-empty hidden>
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18m-5.5 2.5-5 5m0-5 5 5"/></svg></div>
-        <h2>На эту дату слотов нет</h2>
-        <p>Выберите другую дату или аудиторию.</p>
-        <!-- Действие пустого состояния (03 §4.9.5: «+ primary „Каталог
-             аудиторий“»; черновик rooms-states.html#empty — кнопка):
-             каталог на этой же странице выше — якорь к нему. -->
-        <a class="button primary" href="#rooms-catalog-title">Каталог аудиторий</a>
+        <h2><%c++ $$ << @@.get<std::string>("t.rooms.emptyTitle"); %></h2>
+        <p><%c++ $$ << @@.get<std::string>("t.rooms.emptyText"); %></p>
+        <button class="button" type="button" data-focus-room><%c++ $$ << @@.get<std::string>("t.rooms.pickRoom"); %></button>
       </div>
-      <p class="notice warn" data-slots-warn role="alert" hidden></p>
-      <div class="room-grid" data-slots-grid hidden></div>
-      <!-- Шаг «подтверждение» (03 §4.9.5: «Три шага: каталог → сетка
-           слотов дня → подтверждение», primary «[Забронировать 11:00–12:00]
-           — активна при выбранном слоте»; design-drafts/rooms.html —
-           карточка «Ваша бронь / Выберите слот / Перед подтверждением
-           проверьте помещение, дату и время»): тап свободного слота
-           ТОЛЬКО выбирает его (aria-pressed), POST уходит по кнопке
-           data-booking-confirm. features (оборудование) и вместимость —
-           из каталога GET /v1/rooms (слотовый ответ features не отдаёт,
-           02 §5.2). -->
-      <div class="booking-summary flow" data-booking-card hidden>
-        <p class="overline">Ваша бронь</p>
-        <h3 data-booking-room></h3>
-        <p class="muted small" data-booking-meta></p>
-        <p class="small" data-booking-choice>Выберите свободное время</p>
-        <button class="button primary full" type="button" data-booking-confirm disabled>Выберите слот</button>
-        <p class="caption">Перед подтверждением проверьте помещение, дату и время.</p>
-      </div>
-    </section>
-
-    <!-- «Мои брони» (03 §4.9.5, шаг 3; С8 «деканат в кармане»): строки
-         строит app.js из GET /v1/room-bookings?upcoming=1; отмена —
-         danger-диалог ниже (повторная отмена 409 — inline). -->
-    <section class="section" aria-labelledby="bookings-title">
-      <div class="section-title">
-        <h2 id="bookings-title">Мои брони</h2>
-        <span class="caption" data-bookings-count></span>
-      </div>
-      <div class="app-list" data-bookings-loading aria-busy="true" hidden>
-        <div class="skeleton card"></div>
-        <div class="skeleton card"></div>
-      </div>
-      <section class="section flow" data-bookings-error hidden role="alert">
-        <h3>Не получилось загрузить брони</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-bookings-retry>Повторить</button>
-      </section>
-      <div class="empty" data-bookings-empty hidden>
-        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></div>
-        <h2>Броней нет</h2>
-        <p>Выберите аудиторию и свободный слот — бронь появится здесь.</p>
-      </div>
-      <p class="notice warn" data-bookings-warn role="alert" hidden></p>
-      <div class="app-list" data-bookings-list hidden></div>
-    </section>
+      <p class="notice danger" data-slots-warn role="alert" hidden></p>
+      <div class="room-grid" data-slots-grid aria-labelledby="slots-title" hidden></div>
+    </div>
+    <!-- Итог выбранного слота (эталон .booking-summary #booking-*) -->
+    <div class="booking-summary flow" data-booking-card>
+      <p class="overline"><%c++ $$ << @@.get<std::string>("t.rooms.slotMine"); %></p>
+      <h3 data-booking-room></h3>
+      <p class="small muted" data-booking-meta></p>
+      <p class="small" data-booking-choice></p>
+      <p class="caption booking-hint"><%c++ $$ << @@.get<std::string>("t.rooms.hint"); %></p>
+      <p class="notice success" data-booking-done role="status" hidden></p>
+      <button class="button primary full" type="button" data-booking-confirm data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.offline.needed"); %>" disabled><%c++ $$ << @@.get<std::string>("t.rooms.pickSlot"); %></button>
+      <p class="caption"><%c++ $$ << @@.get<std::string>("t.rooms.checkBefore"); %></p>
+    </div>
   </div>
 
-  <!-- Danger-диалог отмены брони (03 §2.8: подтверждение с danger;
-       03 §6.4: фокус-ловушка нативного <dialog>) — как sheet «Детали
-       пары» (class lesson-sheet → bottom-sheet на <600px). Поля заполняет
-       app.js (только textContent — 02 §6.4); закрытие — «Оставить»/Esc. -->
+  <!-- «Мои брони» (эталон #my-bookings: .list-row + «Отменить») -->
+  <section class="section" aria-labelledby="bookings-title">
+    <div class="section-title">
+      <h2 id="bookings-title" tabindex="-1"><%c++ $$ << @@.get<std::string>("t.rooms.myTitle"); %></h2>
+      <span class="caption" data-bookings-count></span>
+    </div>
+    <div data-bookings-loading aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.common.loading"); %>" hidden>
+      <div class="skeleton card"></div>
+      <div class="skeleton card"></div>
+    </div>
+    <section class="section flow" data-bookings-error hidden role="alert">
+      <h3><%c++ $$ << @@.get<std::string>("t.rooms.errorMy"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-bookings-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+    </section>
+    <div class="empty" data-bookings-empty hidden>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></div>
+      <h2><%c++ $$ << @@.get<std::string>("t.rooms.myEmptyTitle"); %></h2>
+      <p><%c++ $$ << @@.get<std::string>("t.rooms.myEmptyText"); %></p>
+    </div>
+    <p class="notice danger" data-bookings-warn role="alert" hidden></p>
+    <div data-bookings-list hidden></div>
+  </section>
+
+  <!-- Danger-диалог отмены (эталон #cancel-dialog; 03 §2.8/§6.4) -->
   <dialog id="cancel-booking-dialog" class="lesson-sheet" aria-labelledby="cancel-booking-title">
-    <h2 id="cancel-booking-title">Отменить бронь?</h2>
+    <h2 id="cancel-booking-title"><%c++ $$ << @@.get<std::string>("t.rooms.cancelTitle"); %></h2>
     <p data-cancel-booking-desc></p>
-    <p class="muted small">Слот станет доступен другим студентам.</p>
+    <p><%c++ $$ << @@.get<std::string>("t.rooms.cancelNote"); %></p>
     <div class="actions">
-      <button class="button" type="button" data-cancel-booking-close>Оставить</button>
-      <button class="button danger-button" type="button" data-cancel-booking-confirm>Отменить бронь</button>
+      <button class="button" type="button" data-cancel-booking-close><%c++ $$ << @@.get<std::string>("t.rooms.keep"); %></button>
+      <button class="button danger-button" type="button" data-cancel-booking-confirm data-network-action><%c++ $$ << @@.get<std::string>("t.rooms.cancelConfirm"); %></button>
     </div>
   </dialog>
 </main>

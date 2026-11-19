@@ -32,6 +32,13 @@
   };
   const LANG = document.documentElement.lang || 'ru';
   const LOCALE = { ru: 'ru-RU', en: 'en-GB', zh: 'zh-CN' }[LANG] || 'ru-RU';
+  /* plural по словарю: ключи <base>.one|few|many ({n}); Intl.PluralRules
+     LOCALE — ru one/few/many, en/zh other → .many (fe_rebuild шаг 18) */
+  const PLURAL = new Intl.PluralRules(LOCALE);
+  const tn = (base, n, fallback) => {
+    const r = PLURAL.select(n);
+    return t(base + '.' + (r === 'one' ? 'one' : r === 'few' ? 'few' : 'many'), fallback).replace('{n}', String(n));
+  };
 
   /* ---------- тост (app.css .toast; позиция — над таб-баром, 03 §2.8) ---------- */
   /* Второй аргумент — действие справа (03 §2.8: «действие справа»):
@@ -2527,42 +2534,26 @@
     }
   }
 
-  /* ---------- экран «Бронь аудитории» (views/rooms.csp; 03 §4.9.5) ------ */
+  /* ---------- экран «Бронь аудитории» (views/rooms.csp; дизайн v3, шаг 18) ------ */
   /* Данные — три fetch из ТЕХ ЖЕ JSON-роутов, что за API (02 §5.2):
-     каталог GET /v1/rooms (query ?capacity= — фильтр «вместимость не
-     меньше»), сетка дня GET /v1/rooms/{id}/slots?date= (дейт-пикер,
-     дефолт — сегодня UTC проекта; слоты 08:00–22:00 UTC по 60 минут,
-     состояния free/booked/mine — RoomsService), «Мои брони» GET
-     /v1/room-bookings?upcoming=1.
-     Поток брони — ТРИ ШАГА 03 §4.9.5 (правки по ревью — до этого тап
-     слота POST-ил сразу, риск случайной брони): каталог → сетка →
-     подтверждение. Тап свободного слота ТОЛЬКО выбирает его
-     (aria-pressed, акцент .room-slot[aria-pressed=true]), карточка
-     data-booking-card (.booking-summary черновика rooms.html) показывает
-     «Ауд. …», корпус/вместимость/оборудование (features — из каталога,
-     слотовый ответ features не отдаёт) и выбранный интервал, primary
-     «Забронировать HH:MM–HH:MM» активируется — POST /v1/rooms/{id}/
-     bookings {starts_at, ends_at} строками слота сетки «…Z» (границы не
-     вычисляются на клиенте). Исходы (постановка Э7):
-       201          → success-тост «Ауд. …, HH:MM–HH:MM — забронировано»
-                      с действием «Мои брони» (якорь к секции; дословно
-                      03 §4.9.5) + перерисовка сетки (слот стал mine) и
-                      «Моих брони»;
-       400 slot_taken → inline «Слот только что заняли — обновляем сетку»
-                      + перерисовка сетки (данные могли устареть);
-       409 conflict/blocked → inline с текстом {error:{message}}
-                      (02 §5.1) + перерисовка сетки;
-       404/прочие   → inline message тела; сеть/офлайн — баннер каркаса.
-     Отмена — danger-диалог <dialog> как sheet «Детали пары»
-     (03 §2.8/§6.4): подтверждение → DELETE /v1/room-bookings/{id};
-     204 → строка уходит, тост «Бронь отменена», сетка тихо перечитывается
-     (слот мог освободиться); 409 повторной отмены → inline у списка
-     с message тела. Состояния 03 §5: скелетоны секций, пусто («На эту
-     дату слотов нет» с primary «Каталог аудиторий» — якорь к каталогу —
-     / «Броней нет»), ошибки секций с «Повторить» (повторный fetch),
-     офлайн — баннер каркаса. Вставка — только createElement/textContent
-     (02 §6.4). mine-слот не тапается: id брони в сетке слотов не
-     отдаётся — отмена в «Моих брони». */
+     каталог GET /v1/rooms (?capacity= — «вместимость не меньше») → опции
+     select «1207 · Корпус Б · 24 места» (эталон rooms.html #room; 50
+     аудиторий чипами тяжелы); сетка дня GET /v1/rooms/{id}/slots?date=
+     (слоты 08:00–22:00 UTC по 60 минут, free/booked/mine — RoomsService);
+     «Мои брони» GET /v1/room-bookings?upcoming=1.
+     Под панелью — «корпус · N мест · оборудование» и «На карте» →
+     /map?q=<номер>. Итог .booking-summary справа (sticky ≥1024px):
+     «Аудитория N», подпись, «день · выберите свободное время» → после
+     выбора — интервал и primary «Забронировать HH:MM–HH:MM» (POST
+     /v1/rooms/{id}/bookings строками слота «…Z»). Исходы: 201 → в итоге
+     notice «Забронировано: …», тост с «Мои брони», тихая перечитка сетки
+     и списка; slot_taken / not_found → строки словаря; прочие (409
+     conflict/blocked) — общий текст (message сервера — только на ru: он
+     русский). Свой слот (mine) — кнопка: бронь ищется в «Моих бронях» по
+     room_id + starts_at (Date.parse — формат «…Z» у обоих роутов), тап
+     открывает тот же danger-диалог отмены, что и «Отменить» в списке
+     (эталон: «Нажмите на свою бронь, чтобы отменить её»).
+     Даты и plural — LOCALE / Intl.PluralRules, строки — словарь rooms.*. */
   if (document.body.dataset.page === 'rooms') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -2571,200 +2562,212 @@
       if (text != null) node.textContent = text;
       return node;
     };
-    const plural = (n, one, few, many) => {
-      const m10 = n % 10, m100 = n % 100;
-      if (m10 === 1 && m100 !== 11) return one;
-      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-      return many;
-    };
     const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '--:--';
     const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
+    const span = (s) => timeOf(s.starts_at) + '–' + timeOf(s.ends_at);
     /* формат дня по календарной дате UTC проекта (сдвига часового пояса нет) */
     const fmtDay = (ymd) => {
-      const p = ymd.split('-').map(Number);
+      const p = String(ymd).split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
     const todayUtc = () => new Date().toISOString().slice(0, 10);
+    const seats = (n) => tn('rooms.seats', n, '{n}');
+    const roomFull = (name) => t('rooms.roomFull', 'Аудитория {room}').replace('{room}', name || '—');
+    const roomShort = (name) => t('rooms.roomShort', 'Ауд. {room}').replace('{room}', name || '—');
+    /* message сервера — русский текст: показываем только на ru */
+    const serverText = (body, fallback) => (LANG === 'ru' && body && body.error && body.error.message) ? body.error.message : fallback;
 
+    const roomSelect = document.querySelector('[data-room-select]');
     const capSelect = document.querySelector('[data-capacity-filter]');
     const dateInput = document.querySelector('[data-slots-date]');
-    const state = { rooms: [], roomId: null, roomName: '', selected: null };
+    const card = document.querySelector('[data-booking-card]');
+    const confirmBtn = card ? card.querySelector('[data-booking-confirm]') : null;
+    const doneBox = card ? card.querySelector('[data-booking-done]') : null;
+    const state = { rooms: [], roomId: null, roomName: '', selected: null, bookings: [], bookingsLoaded: false };
     let bookingBusy = false; // двойной submit подтверждения (быстрый тап)
+    let slotsSeq = 0;
 
-    const showSlotWarn = (text) => {
-      const box = document.querySelector('[data-slots-warn]');
-      if (!box) return;
-      box.textContent = text;
-      box.hidden = false;
-    };
-    const showBookingsWarn = (text) => {
-      const box = document.querySelector('[data-bookings-warn]');
-      if (!box) return;
-      box.textContent = text;
-      box.hidden = false;
-    };
-
-    /* --- каталог аудиторий: чипы (номер · корпус · вместимость) -------- */
-    const syncChips = () => {
-      document.querySelectorAll('[data-room-chips] .chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.roomId) === state.roomId));
+    if (capSelect) {
+      capSelect.querySelectorAll('option[data-cap-n]').forEach((o) => {
+        o.textContent = t('rooms.capN', '{n} мест').replace('{n}', o.dataset.capN);
       });
+    }
+    const currentDate = () => (dateInput && dateInput.value) ? dateInput.value : todayUtc();
+    const setCardText = (sel, text) => { const n = card ? card.querySelector(sel) : null; if (n) n.textContent = text; };
+    const showWarn = (sel, text) => {
+      const box = document.querySelector(sel);
+      if (!box) return;
+      box.textContent = text;
+      box.hidden = false;
     };
-    const selectRoom = (id) => {
-      if (state.roomId === id) return;
-      state.roomId = id;
-      syncChips();
-      loadSlots();
+    const hideDone = () => { if (doneBox) doneBox.hidden = true; };
+    const selectedRoom = () => state.rooms.find((r) => r.id === state.roomId) || null;
+
+    /* --- подпись аудитории «корпус · мест · оборудование» + «На карте» --- */
+    const renderRoomMeta = () => {
+      const room = selectedRoom();
+      const metaText = room ? [room.building, seats(Number(room.capacity) || 0), room.features].filter(Boolean).join(' · ') : '';
+      const line = document.querySelector('[data-room-meta]');
+      if (line) {
+        const txt = line.querySelector('[data-room-meta-text]');
+        if (txt) txt.textContent = metaText;
+        const map = line.querySelector('[data-room-map]');
+        if (map && room) {
+          map.href = '/map?q=' + encodeURIComponent(room.name || '');
+          map.setAttribute('aria-label', t('rooms.onMap', 'На карте') + ': ' + roomFull(room.name));
+        }
+        line.hidden = !room;
+      }
+      setCardText('[data-booking-room]', roomFull(room ? room.name : ''));
+      setCardText('[data-booking-meta]', metaText);
     };
+
+    /* --- итог: до выбора — «день · выберите свободное время» ------------- */
+    const resetSelection = () => {
+      state.selected = null;
+      document.querySelectorAll('[data-slots-grid] .room-slot[data-free]').forEach((b) => {
+        b.setAttribute('aria-pressed', 'false');
+        const lbl = b.querySelector('span');
+        if (lbl) lbl.textContent = t('rooms.slotFree', 'Свободно');
+      });
+      setCardText('[data-booking-choice]', fmtDay(currentDate()) + ' · ' + t('rooms.pickTime', 'выберите свободное время'));
+      if (confirmBtn && !bookingBusy) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = t('rooms.pickSlot', 'Выберите слот');
+      }
+    };
+    const selectSlot = (slot, btn) => {
+      if (btn.disabled) return;
+      hideDone();
+      resetSelection();
+      state.selected = slot;
+      btn.setAttribute('aria-pressed', 'true');
+      const lbl = btn.querySelector('span');
+      if (lbl) lbl.textContent = t('rooms.slotPicked', 'Выбрано');
+      setCardText('[data-booking-choice]', fmtDay(dateOf(slot.starts_at)) + ' · ' + span(slot));
+      if (confirmBtn) {
+        confirmBtn.disabled = !navigator.onLine;
+        confirmBtn.textContent = t('rooms.bookBtn', 'Забронировать {time}').replace('{time}', span(slot));
+      }
+    };
+
+    /* --- каталог → опции select ------------------------------------------ */
     const loadCatalog = async () => {
       show('[data-rooms-loading]', true);
       show('[data-rooms-error]', false);
-      show('[data-room-chips]', false);
+      show('[data-rooms-none]', false);
+      if (roomSelect) roomSelect.disabled = true;
       const cap = capSelect && capSelect.value ? capSelect.value : '';
       const data = await fetchJSON('/v1/rooms' + (cap ? '?capacity=' + encodeURIComponent(cap) : ''));
       show('[data-rooms-loading]', false);
       if (!data || !Array.isArray(data.rooms)) {
         show('[data-rooms-error]', true);
+        show('[data-slots-section]', false);
         return;
       }
       state.rooms = data.rooms;
-      const chips = document.querySelector('[data-room-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      state.rooms.forEach((r) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.roomId = String(r.id);
-        chip.textContent = r.name + ' · ' + r.building + ' · ' + r.capacity + ' ' + plural(r.capacity, 'место', 'места', 'мест');
-        chip.addEventListener('click', () => selectRoom(r.id));
-        chips.append(chip);
-      });
-      if (!state.rooms.length) {
-        chips.append(el('p', 'muted small', 'Аудиторий с такой вместимостью нет — смягчите фильтр'));
-      }
-      /* выбранная аудитория отсеялась фильтром → первая из оставшихся */
       if (!state.rooms.some((r) => r.id === state.roomId)) {
         state.roomId = state.rooms.length ? state.rooms[0].id : null;
       }
-      chips.hidden = false;
-      syncChips();
-      const section = document.querySelector('[data-slots-section]');
-      if (section) section.hidden = !state.roomId;
+      if (roomSelect) {
+        roomSelect.replaceChildren();
+        state.rooms.forEach((r) => {
+          const o = el('option', null, [r.name, r.building, seats(Number(r.capacity) || 0)].filter(Boolean).join(' · '));
+          o.value = String(r.id);
+          roomSelect.append(o);
+        });
+        if (state.roomId) roomSelect.value = String(state.roomId);
+        roomSelect.disabled = !state.rooms.length;
+      }
+      show('[data-rooms-none]', !state.rooms.length);
+      show('[data-slots-section]', !!state.roomId);
+      renderRoomMeta();
       if (state.roomId) loadSlots();
     };
 
-    /* --- карточка подтверждения (03 §4.9.5, шаг 3; черновик rooms.html
-       .booking-summary): до выбора — disabled «Выберите слот», с выбором —
-       primary «Забронировать HH:MM–HH:MM». Оборудование (features) и
-       вместимость — из строки каталога выбранной аудитории ------------- */
-    const bookingCard = document.querySelector('[data-booking-card]');
-    const bookingConfirm = bookingCard ? bookingCard.querySelector('[data-booking-confirm]') : null;
-    const selectedRoom = () => state.rooms.find((r) => r.id === state.roomId) || null;
-    const resetSelection = () => {
-      state.selected = null;
-      document.querySelectorAll('[data-slots-grid] .room-slot').forEach((b) => b.setAttribute('aria-pressed', 'false'));
-      const choice = bookingCard ? bookingCard.querySelector('[data-booking-choice]') : null;
-      if (choice) choice.textContent = 'Выберите свободное время';
-      if (bookingConfirm) {
-        bookingConfirm.disabled = true;
-        bookingConfirm.textContent = 'Выберите слот';
-      }
+    /* --- сетка слотов: free — выбор, mine — отмена, booked — «Занято» ---- */
+    const bookingFor = (slot) => {
+      const at = Date.parse(slot.starts_at);
+      return state.bookings.find((b) => b.room_id === state.roomId && Date.parse(b.starts_at) === at) || null;
     };
-    const selectSlot = (slot, btn) => {
-      if (btn.disabled) return;
-      state.selected = slot;
-      document.querySelectorAll('[data-slots-grid] .room-slot').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
-      const room = selectedRoom();
-      const set = (sel, text) => { const n = bookingCard ? bookingCard.querySelector(sel) : null; if (n) n.textContent = text; };
-      set('[data-booking-room]', 'Ауд. ' + (state.roomName || '—'));
-      set('[data-booking-meta]', room
-        ? [room.building, room.capacity + ' ' + plural(room.capacity, 'место', 'места', 'мест'), room.features]
-            .filter(Boolean).join(' · ')
-        : '');
-      const when = fmtDay(dateOf(slot.starts_at)) + ' · ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at);
-      set('[data-booking-choice]', when);
-      if (bookingConfirm) {
-        bookingConfirm.disabled = false;
-        bookingConfirm.textContent = 'Забронировать ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at);
-      }
-    };
-
-    /* --- сетка слотов дня: free — выбор слота, booked — «Занято», mine —
-       «Ваша бронь» (кнопки ≥44px — .room-grid/.room-slot app.css) ------- */
     const renderSlots = (slots) => {
       const grid = document.querySelector('[data-slots-grid]');
       if (!grid) return;
-      resetSelection(); // сетка пересобрана — выбор слота не переживает её
       grid.replaceChildren();
       slots.forEach((s) => {
         const btn = el('button', 'room-slot');
         btn.type = 'button';
-        btn.setAttribute('aria-pressed', 'false');
         const label = el('span');
         if (s.state === 'free') {
-          label.textContent = 'Свободно';
+          btn.dataset.free = '';
+          btn.setAttribute('aria-pressed', 'false');
+          label.textContent = t('rooms.slotFree', 'Свободно');
           btn.addEventListener('click', () => selectSlot(s, btn));
         } else if (s.state === 'mine') {
           btn.classList.add('mine');
-          btn.disabled = true;
-          label.textContent = 'Ваша бронь';
+          label.textContent = t('rooms.slotMine', 'Ваша бронь');
+          btn.setAttribute('aria-label', t('rooms.slotMineAria', '{time} — ваша бронь, нажмите, чтобы отменить').replace('{time}', span(s)));
+          btn.addEventListener('click', async () => {
+            let b = bookingFor(s);
+            if (!b) { await loadBookings(true); b = bookingFor(s); }
+            if (b) openCancelDialog(b, btn);
+          });
         } else {
           btn.disabled = true;
-          label.textContent = 'Занято';
+          label.textContent = t('rooms.slotBusy', 'Занято');
         }
-        btn.append(el('strong', null, timeOf(s.starts_at) + '–' + timeOf(s.ends_at)), label);
+        btn.append(el('strong', null, span(s)), label);
         grid.append(btn);
       });
+      resetSelection();
     };
-    /* silent — тихая перечитка после POST/DELETE: сетка не мигает
-       скелетоном, заменяется по ответу; сбой — блок ошибки секции */
+    /* silent — тихая перечитка после POST/DELETE: сетка не мигает скелетоном */
     const loadSlots = async (silent) => {
       if (!state.roomId) return;
+      const seq = ++slotsSeq;
       show('[data-slots-error]', false);
-      show('[data-slots-warn]', false);
       show('[data-slots-empty]', false);
       if (!silent) {
+        show('[data-slots-warn]', false);
         show('[data-slots-grid]', false);
         show('[data-slots-loading]', true);
       }
-      const date = dateInput && dateInput.value ? dateInput.value : todayUtc();
+      const date = currentDate();
       if (dateInput && !dateInput.value) dateInput.value = date;
       const data = await fetchJSON('/v1/rooms/' + state.roomId + '/slots?date=' + encodeURIComponent(date));
+      if (seq !== slotsSeq) return;
       show('[data-slots-loading]', false);
       if (!data || !Array.isArray(data.slots)) {
         show('[data-slots-grid]', false);
-        show('[data-booking-card]', false); /* выбор слота скрыт вместе с сеткой */
         show('[data-slots-error]', true);
+        resetSelection();
         return;
       }
-      const line = document.querySelector('[data-slots-room-line]');
-      if (line) line.textContent = 'Ауд. ' + data.room + ' · ' + data.building;
       state.roomName = data.room || '';
       if (!data.slots.length) {
         show('[data-slots-grid]', false);
-        show('[data-booking-card]', false);
         show('[data-slots-empty]', true);
+        resetSelection();
         return;
       }
       renderSlots(data.slots);
       show('[data-slots-grid]', true);
-      show('[data-booking-card]', true);
     };
 
-    /* --- бронирование (шаг «подтверждение» 03 §4.9.5): POST по кнопке
-       карточки; исходы 201 / slot_taken / conflict / blocked / 404 ----- */
+    /* --- бронирование (шаг «подтверждение» 03 §4.9.5) -------------------- */
     const bookSlot = async () => {
       const slot = state.selected;
-      if (!slot || bookingBusy || (bookingConfirm && bookingConfirm.disabled)) return;
+      if (!slot || bookingBusy || (confirmBtn && confirmBtn.disabled)) return;
       if (!navigator.onLine) { applyOffline(true); return; }
       bookingBusy = true;
       show('[data-slots-warn]', false);
-      const was = bookingConfirm ? bookingConfirm.textContent : '';
-      if (bookingConfirm) {
-        bookingConfirm.textContent = 'Бронируем…';
-        bookingConfirm.disabled = true;
+      hideDone();
+      if (confirmBtn) {
+        confirmBtn.textContent = t('rooms.booking', 'Бронируем…');
+        confirmBtn.disabled = true;
       }
+      const room = state.roomName || (selectedRoom() || {}).name || '';
       try {
         const resp = await fetch('/v1/rooms/' + state.roomId + '/bookings', {
           method: 'POST',
@@ -2772,76 +2775,57 @@
           body: JSON.stringify({ starts_at: slot.starts_at, ends_at: slot.ends_at })
         });
         if (resp.status === 201) {
-          /* канон success-тоста 03 §4.9.5 («Ауд. 1207, 11:00–12:00 —
-             забронировано» со ссылкой «Мои брони»): «Мои брони» — секция
-             этой же страницы, действие — якорь к ней (действие тоста —
-             --bg на инверсном тосте: --primary на нём не проходит WCAG,
-             замер в шапке toast-хелпера) */
-          toast('Ауд. ' + (state.roomName || '') + ', ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at) + ' — забронировано',
-            { label: 'Мои брони', href: '#bookings-title' });
-        } else {
-          let code = '';
-          let message = t('toast.failBooking', 'Не получилось забронировать');
-          try {
-            const body = await resp.json();
-            if (body && body.error) {
-              code = body.error.code || '';
-              if (body.error.message) message = body.error.message;
-            }
-          } catch (e) { /* тело не JSON — остаётся общий текст */ }
-          if (code === 'slot_taken') {
-            showSlotWarn('Слот только что заняли — обновляем сетку');
-          } else if (code === 'not_found') {
-            showSlotWarn('Аудитория не найдена — обновляем каталог');
-            loadCatalog();
-          } else {
-            showSlotWarn(message);
+          const when = roomShort(room) + ', ' + fmtDay(dateOf(slot.starts_at)) + ' · ' + span(slot);
+          if (doneBox) {
+            doneBox.textContent = t('rooms.bookedDone', 'Забронировано: {when}.').replace('{when}', when);
+            doneBox.hidden = false;
           }
+          toast(roomShort(room) + ', ' + span(slot) + ' — ' + t('toast.booked', 'забронировано'),
+            { label: t('rooms.myTitle', 'Мои брони'), href: '#bookings-title' });
+        } else {
+          let body = null;
+          try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
+          const code = body && body.error ? body.error.code || '' : '';
+          if (code === 'slot_taken') showWarn('[data-slots-warn]', t('rooms.slotTaken', 'Слот только что заняли — обновляем сетку'));
+          else if (code === 'not_found') { showWarn('[data-slots-warn]', t('rooms.roomNotFound', 'Аудитория не найдена — обновляем каталог')); loadCatalog(); }
+          else showWarn('[data-slots-warn]', serverText(body, t('toast.failBooking', 'Не получилось забронировать')));
         }
       } catch (e) {
         if (!navigator.onLine) applyOffline(true);
-        else showSlotWarn(t('toast.failBookingNet', 'Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз'));
+        else showWarn('[data-slots-warn]', t('toast.failBookingNet', 'Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз'));
       } finally {
         bookingBusy = false;
-        /* выбор и подпись кнопки восстановит renderSlots/resetSelection
-           после тихой перечитки (или inline-восстановление ниже при сбое) */
-        if (bookingConfirm && state.selected) {
-          bookingConfirm.textContent = was;
-          bookingConfirm.disabled = false;
-        }
       }
-      /* после любого исхода данные могли устареть — сетка и «Мои брони»
-         перечитываются (после 201 слот стал mine и выбор сбрасывается —
-         renderSlots вызывает resetSelection; после конфликтов — чужая
-         бронь/блокировка); 404 уже перечитал каталог */
+      /* после любого исхода данные могли устареть: сетка (выбор сбрасывает
+         renderSlots) и «Мои брони» перечитываются тихо */
+      await loadBookings(true);
       loadSlots(true);
-      loadBookings(true);
     };
 
-    /* --- «Мои брони»: строки + отмена через danger-диалог --------------- */
-    const renderBookings = (bookings) => {
+    /* --- «Мои брони»: .list-row эталона + «Отменить» -------------------- */
+    const renderBookings = () => {
       const list = document.querySelector('[data-bookings-list]');
       if (!list) return;
       list.replaceChildren();
-      bookings.forEach((b) => {
-        const row = el('div', 'booking-row');
-        const main = el('div', 'booking-main');
-        main.append(el('strong', null, 'Ауд. ' + (b.room || '—')));
-        main.append(el('span', 'muted small', b.building || ''));
-        const when = el('div', 'booking-when', fmtDay(dateOf(b.starts_at)) + ' · ' + timeOf(b.starts_at) + '–' + timeOf(b.ends_at));
-        const cancel = el('button', 'button', 'Отменить');
+      state.bookings.forEach((b) => {
+        const row = el('div', 'list-row');
+        const main = el('div');
+        main.append(el('strong', null, roomShort(b.room)));
+        main.append(el('p', null, [b.building, fmtDay(dateOf(b.starts_at)) + ' · ' + span(b)].filter(Boolean).join(' · ')));
+        const cancel = el('button', 'button', t('rooms.cancel', 'Отменить'));
         cancel.type = 'button';
-        cancel.addEventListener('click', () => openCancelDialog(b));
-        row.append(main, when, cancel);
+        cancel.setAttribute('aria-label', t('rooms.cancelConfirm', 'Отменить бронь') + ': ' + roomShort(b.room) + ', ' + fmtDay(dateOf(b.starts_at)) + ' · ' + span(b));
+        cancel.addEventListener('click', () => openCancelDialog(b, cancel));
+        row.append(main, cancel);
         list.append(row);
       });
       list.hidden = false;
     };
     const loadBookings = async (silent) => {
       show('[data-bookings-error]', false);
-      show('[data-bookings-warn]', false);
       show('[data-bookings-empty]', false);
       if (!silent) {
+        show('[data-bookings-warn]', false);
         show('[data-bookings-list]', false);
         show('[data-bookings-loading]', true);
       }
@@ -2852,94 +2836,107 @@
         show('[data-bookings-error]', true);
         return;
       }
+      state.bookings = data.bookings;
+      state.bookingsLoaded = true;
       const count = document.querySelector('[data-bookings-count]');
-      if (count) {
-        count.textContent = data.bookings.length
-          ? data.bookings.length + ' ' + plural(data.bookings.length, 'предстоящая', 'предстоящие', 'предстоящих')
-          : '';
-      }
-      if (!data.bookings.length) {
+      if (count) count.textContent = state.bookings.length ? tn('rooms.upcoming', state.bookings.length, '{n}') : '';
+      if (!state.bookings.length) {
         show('[data-bookings-list]', false);
         show('[data-bookings-empty]', true);
         return;
       }
-      renderBookings(data.bookings);
+      renderBookings();
     };
 
-    /* --- danger-диалог отмены (03 §2.8: danger только в диалогах) ------- */
+    /* --- danger-диалог отмены (03 §2.8: danger только в диалогах) -------- */
     const dlg = document.getElementById('cancel-booking-dialog');
     const dlgDesc = dlg ? dlg.querySelector('[data-cancel-booking-desc]') : null;
     const dlgConfirm = dlg ? dlg.querySelector('[data-cancel-booking-confirm]') : null;
     const dlgClose = dlg ? dlg.querySelector('[data-cancel-booking-close]') : null;
     let pendingCancel = null;
-    const openCancelDialog = (b) => {
-      if (!dlg) return;
+    let returnFocus = null;
+    const openCancelDialog = (b, opener) => {
+      if (!dlg || typeof dlg.showModal !== 'function') return;
       pendingCancel = b;
+      returnFocus = opener || null;
       if (dlgDesc) {
-        dlgDesc.textContent = 'Ауд. ' + (b.room || '—') + ' (' + (b.building || '') + ') · '
-          + fmtDay(dateOf(b.starts_at)) + ', ' + timeOf(b.starts_at) + '–' + timeOf(b.ends_at);
+        dlgDesc.textContent = roomFull(b.room) + (b.building ? ' (' + b.building + ')' : '') + ' · '
+          + fmtDay(dateOf(b.starts_at)) + ', ' + span(b);
       }
       dlg.showModal();
     };
+    if (dlg) {
+      dlg.addEventListener('close', () => {
+        const target = returnFocus && returnFocus.isConnected ? returnFocus : roomSelect;
+        if (target) target.focus();
+        returnFocus = null;
+      });
+    }
     if (dlgClose) dlgClose.addEventListener('click', () => dlg.close());
     if (dlgConfirm) {
       dlgConfirm.addEventListener('click', async () => {
         if (!pendingCancel || dlgConfirm.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
         dlgConfirm.disabled = true;
-        dlgConfirm.textContent = 'Отменяем…';
+        dlgConfirm.textContent = t('rooms.cancelling', 'Отменяем…');
         try {
           const resp = await fetch('/v1/room-bookings/' + pendingCancel.id, {
             method: 'DELETE',
             headers: { Accept: 'application/json' }
           });
           if (resp.status === 204) {
+            /* кнопка-открывашка (слот/строка) пересоберётся — фокус к списку */
+            returnFocus = document.getElementById('bookings-title');
             dlg.close();
-            toast('Бронь отменена');
+            hideDone();
+            toast(t('toast.bookingCancelled', 'Бронь отменена'));
           } else {
-            /* 409 повторной отмены/блокировка → message тела (02 §5.1);
-               403/404/прочие — тот же inline, без деталей наружу */
-            let message = t('toast.failBookingCancel', 'Не получилось отменить бронь');
-            try {
-              const body = await resp.json();
-              if (body && body.error && body.error.message) message = body.error.message;
-            } catch (e) { /* тело не JSON */ }
+            let body = null;
+            try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
             dlg.close();
-            showBookingsWarn(message);
+            showWarn('[data-bookings-warn]', serverText(body, t('toast.failBookingCancel', 'Не получилось отменить бронь')));
           }
         } catch (e) {
           dlg.close();
           if (!navigator.onLine) applyOffline(true);
-          else showBookingsWarn(t('toast.failBookingCancelNet', 'Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз'));
+          else showWarn('[data-bookings-warn]', t('toast.failBookingCancelNet', 'Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз'));
         } finally {
           dlgConfirm.disabled = false;
-          dlgConfirm.textContent = 'Отменить бронь';
+          dlgConfirm.textContent = t('rooms.cancelConfirm', 'Отменить бронь');
           pendingCancel = null;
         }
-        /* строка уходит из списка (после 204) или перечитывается (409 —
-           брони могла уже не быть); сетка тихо перечитывается — слот мог
-           освободиться/уйти */
-        loadBookings(true);
+        await loadBookings(true);
         loadSlots(true);
       });
     }
 
-    /* --- ретраи и переключатели ----------------------------------------- */
-    if (bookingConfirm) bookingConfirm.addEventListener('click', () => bookSlot());
+    /* --- ретраи и переключатели ------------------------------------------ */
+    if (confirmBtn) confirmBtn.addEventListener('click', () => bookSlot());
     const roomsRetry = document.querySelector('[data-rooms-retry]');
     if (roomsRetry) roomsRetry.addEventListener('click', () => loadCatalog());
     const slotsRetry = document.querySelector('[data-slots-retry]');
     if (slotsRetry) slotsRetry.addEventListener('click', () => loadSlots());
     const bookingsRetry = document.querySelector('[data-bookings-retry]');
     if (bookingsRetry) bookingsRetry.addEventListener('click', () => loadBookings());
-    if (capSelect) capSelect.addEventListener('change', () => loadCatalog());
+    const focusRoom = document.querySelector('[data-focus-room]');
+    if (focusRoom) focusRoom.addEventListener('click', () => { if (roomSelect) roomSelect.focus(); });
+    if (capSelect) capSelect.addEventListener('change', () => { hideDone(); loadCatalog(); });
+    if (roomSelect) {
+      roomSelect.addEventListener('change', () => {
+        state.roomId = Number(roomSelect.value) || null;
+        hideDone();
+        renderRoomMeta();
+        loadSlots();
+      });
+    }
     if (dateInput) {
       if (!dateInput.value) dateInput.value = todayUtc(); /* дефолт — сегодня UTC проекта */
-      dateInput.addEventListener('change', () => loadSlots());
+      dateInput.min = todayUtc();
+      dateInput.addEventListener('change', () => { hideDone(); loadSlots(); });
     }
 
-    loadCatalog();
     loadBookings();
+    loadCatalog();
   }
 
   /* ---------- экран «Библиотека» (views/library.csp; 03 §4.9.6/5.12) ----- */

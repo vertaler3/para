@@ -360,11 +360,12 @@ void RoomsCtrl::roomsPage(const HttpRequestPtr& req,
     // страницы «Новая заявка» (ApplicationsCtrl::newPage): значения не
     // дублируются сервером, состояния 03 §5 — в шаблоне и app.js.
     // query контракта каталога ?capacity= — тоже на клиенте (fetch).
-    // 5.18 (шаг 3): каркас — словарь из view-данных (Р-16); тело экрана —
-    // по-русски (вторичный экран, вне охвата шага 3 — журнал 5.18).
+    // 5.18 (шаг 3): каркас — словарь из view-данных (Р-16); fe_rebuild
+    // шаг 18: тело экрана и заголовок вкладки тоже на словаре (rooms.*).
     HttpViewData data;
-    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
-    data.insert("pageTitle", std::string("Аудитории · Пара"));
+    const auto lang = i18n::resolveRequestLang(req);
+    i18n::insertUiStrings(data, lang);
+    data.insert("pageTitle", i18n::pageTitleOf("rooms.title", lang));
     // Экран НЕ таб (03 §3.1 — вход по ghost-ссылке «Забронировать
     // аудиторию» шапки расписания, 03 §4.3/§4.9.5): пустой activeTab —
     // ни один пункт таб-бара не получает aria-current.

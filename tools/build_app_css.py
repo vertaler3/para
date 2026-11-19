@@ -151,6 +151,12 @@ input[type=range]{min-height:44px!important;padding:0!important;border:0!importa
 .ics-steps{padding-top:1rem;border-top:1px solid var(--border)}
 .ics-steps h4{font-size:.9375rem;margin-bottom:.5rem}
 .ics-card .actions .button{flex:1 1 auto}
+.rooms-room-field{display:flex;flex-direction:column;gap:.25rem;flex:1 1 16rem;min-width:0;max-width:28rem}
+.rooms-room-field label{margin:0}
+body[data-page=rooms] .calendar-toolbar{justify-content:flex-start;margin-bottom:.75rem}
+body[data-page=rooms] .rooms-room-line{margin:0 0 1.5rem;display:flex;flex-wrap:wrap;gap:.25rem 1rem}
+.room-slot.mine{cursor:pointer}
+.booking-summary .notice{margin:0}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}
