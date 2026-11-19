@@ -2939,22 +2939,20 @@
     loadCatalog();
   }
 
-  /* ---------- экран «Библиотека» (views/library.csp; 03 §4.9.6/5.12) ----- */
-  /* Наличие литературы: два fetch из ТЕХ ЖЕ JSON-роутов, что за API
-     (02 §5.2): филиалы GET /v1/library/branches (чипы «Все филиалы» + по
-     одному, aria-pressed) и каталог GET /v1/library/items — query q=
-     (debounce ~300 мс, как на «Людях»), branch_id=, available=1 (чип-
-     тумблер «Только доступные»); гонку устаревших ответов гасит
-     монотонный seq. Строка книги — .book-row черновика library.html:
-     обложка-иконка, название, «автор · тип издания» (kind — словарь DDL
-     book|journal|textbook), бейдж «свободно N из M» (available>0 —
-     .badge.info, 0 — нейтральный: «свободно 0 из 4» честно виден) и
-     подпись «филиал · зал» (hall nullable — пустой зал не рисуется;
-     author nullable — строка автора без имени не рисуется).
-     Пустой результат — «Ничего не нашлось» (дословно 03 §5.2/черновик).
-     Состояния 03 §5: скелетон только при ответе > 300 мс, ошибка с
-     «Повторить», офлайн — баннер каркаса. Вставка — только
-     createElement/textContent (02 §6.4). */
+  /* ---------- экран «Библиотека» (views/library.csp; дизайн v3, шаг 19) ---------- */
+  /* Данные — ТЕ ЖЕ JSON-роуты, что за API (02 §5.2): филиалы
+     GET /v1/library/branches {id,name,building_id,building}, каталог
+     GET /v1/library/items (q= с debounce 300 мс, branch_id=, available=1 —
+     чекбокс «Только в наличии» эталона), билет GET /v1/library/my-card
+     ({card_no} | 404). Гонку устаревших ответов гасит seq.
+     Счётчик эталона «Найдено: N из M»: M — ответ без фильтров (один
+     запрос на страницу, кэш), N — текущий ответ.
+     Строка — .book-row эталона: название, «автор · вид · филиал», бейдж
+     «Свободно N из M» (0 — нейтральный), «зал · корпус», details «Где и как
+     получить»: место из items, номер билета из my-card (нет билета — фраза
+     не рисуется), «Показать корпус» → /map?building=<building_id филиала>
+     (id корпуса — из branches по branch_id; филиалы грузятся ДО строк).
+     Бронь книг / «Ваши книги» / год издания эталона — нет API и полей. */
   if (document.body.dataset.page === 'library') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -2964,55 +2962,92 @@
       return node;
     };
     const BOOK_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 0h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9"/></svg>';
-    const KIND_LABEL = { book: 'книга', journal: 'журнал', textbook: 'учебное пособие' };
+    const KIND = { book: ['library.kind.book', 'книга'], journal: ['library.kind.journal', 'журнал'], textbook: ['library.kind.textbook', 'учебное пособие'] };
+    const kindOf = (k) => (KIND[k] ? t(KIND[k][0], KIND[k][1]) : (k || ''));
     const input = document.querySelector('[data-library-q]');
-    const availChip = document.querySelector('[data-library-available]');
+    const availBox = document.querySelector('[data-library-available]');
     const branchesBox = document.querySelector('[data-library-branches]');
-    const state = { q: '', branchId: '', available: false, seq: 0 };
+    const countEl = document.querySelector('[data-library-count]');
+    const state = { q: '', branchId: '', available: false, seq: 0, total: null, branches: new Map(), card: '' };
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
     let debounce = 0;
 
     const rowFor = (it) => {
       const row = el('article', 'book-row');
       const cover = el('div', 'book-cover');
+      cover.setAttribute('aria-hidden', 'true');
       cover.innerHTML = BOOK_ICON; /* статическая svg-константа — 02 §6.4 */
       row.append(cover);
       const mid = el('div');
       mid.append(el('h2', null, it.title || ''));
-      const by = [it.author || '', KIND_LABEL[it.kind] || it.kind || ''].filter(Boolean).join(' · ');
+      const by = [it.author, kindOf(it.kind), it.branch].filter(Boolean).join(' · ');
       if (by) mid.append(el('p', null, by));
       const have = Number(it.available) || 0;
       const total = Number(it.total) || 0;
-      const badge = el('span', 'badge' + (have > 0 ? ' info' : ''), 'Свободно ' + have + ' из ' + total);
-      mid.append(badge);
-      mid.append(el('p', null, [it.branch || '', it.hall || ''].filter(Boolean).join(' · ')));
+      mid.append(el('span', 'badge' + (have > 0 ? ' info' : ''),
+        t('library.freeOf', 'Свободно {a} из {t}').replace('{a}', String(have)).replace('{t}', String(total))));
+      const where = [it.hall, it.building].filter(Boolean).join(' · ');
+      if (where) mid.append(el('p', null, where));
+      const det = document.createElement('details');
+      det.append(el('summary', null, t('library.howTitle', 'Где и как получить')));
+      const body = el('div');
+      const place = [it.branch, it.hall, it.building].filter(Boolean).join(', ');
+      let text = t('library.howPlace', 'Назовите книгу библиотекарю: {place}.').replace('{place}', place);
+      if (state.card) text += ' ' + t('library.howCard', 'Возьмите читательский билет {card}.').replace('{card}', state.card);
+      body.append(el('p', null, text));
+      const br = state.branches.get(Number(it.branch_id));
+      if (br && br.building_id != null) {
+        const a = el('a', 'button ghost', t('library.showBuilding', 'Показать корпус'));
+        a.href = '/map?building=' + encodeURIComponent(String(br.building_id));
+        body.append(a);
+      }
+      det.append(body);
+      mid.append(det);
       row.append(mid);
       return row;
+    };
+
+    const renderCount = (n) => {
+      if (!countEl) return;
+      const m = state.total == null ? n : state.total;
+      countEl.textContent = t('library.foundOf', 'Найдено: {n} из {m}').replace('{n}', String(n)).replace('{m}', String(m));
     };
 
     const loadItems = async () => {
       const seq = ++state.seq;
       clearTimeout(skTimer);
-      show('[data-library-loading]', false);
       show('[data-library-empty]', false);
       show('[data-library-error]', false);
-      show('[data-library-results]', false);
       const params = new URLSearchParams();
       const q = state.q.trim();
       if (q) params.set('q', q);
       if (state.branchId) params.set('branch_id', state.branchId);
       if (state.available) params.set('available', '1');
-      skTimer = setTimeout(() => show('[data-library-loading]', true), 300);
       const qs = params.toString();
-      const data = await fetchJSON('/v1/library/items' + (qs ? '?' + qs : ''));
+      skTimer = setTimeout(() => {
+        show('[data-library-results]', false);
+        show('[data-library-loading]', true);
+      }, 300);
+      /* M счётчика — каталог без фильтров, один раз за страницу */
+      const needTotal = state.total == null && qs !== '';
+      const [data, all] = await Promise.all([
+        fetchJSON('/v1/library/items' + (qs ? '?' + qs : '')),
+        needTotal ? fetchJSON('/v1/library/items') : Promise.resolve(null)
+      ]);
+      if (all && Array.isArray(all.items)) state.total = all.items.length;
+      if (!qs && data && Array.isArray(data.items)) state.total = data.items.length;
       if (seq !== state.seq) return;
       clearTimeout(skTimer);
       show('[data-library-loading]', false);
       if (!data || !Array.isArray(data.items)) {
+        show('[data-library-results]', false);
+        if (countEl) countEl.textContent = '';
         show('[data-library-error]', true);
         return;
       }
+      renderCount(data.items.length);
       if (!data.items.length) {
+        show('[data-library-results]', false);
         show('[data-library-empty]', true);
         return;
       }
@@ -3023,40 +3058,38 @@
       show('[data-library-results]', true);
     };
 
-    /* филиалы: «Все филиалы» + по одному (GET /v1/library/branches) */
-    const loadBranches = async () => {
-      const data = await fetchJSON('/v1/library/branches');
-      if (!data || !Array.isArray(data.branches) || !branchesBox) return;
-      data.branches.forEach((b) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.branchId = String(b.id);
-        chip.textContent = b.name || '';
-        chip.setAttribute('aria-pressed', String(String(b.id) === state.branchId));
-        chip.addEventListener('click', () => {
-          state.branchId = String(b.id);
-          syncBranchChips();
-          clearTimeout(debounce);
-          loadItems();
-        });
-        branchesBox.append(chip);
-      });
-    };
     const syncBranchChips = () => {
       if (!branchesBox) return;
       branchesBox.querySelectorAll('.chip').forEach((chip) => {
         chip.setAttribute('aria-pressed', String((chip.dataset.branchId || '') === state.branchId));
       });
     };
-    if (branchesBox) {
-      branchesBox.querySelector('.chip').addEventListener('click', () => {
-        state.branchId = '';
-        syncBranchChips();
-        clearTimeout(debounce);
-        loadItems();
+    const pickBranch = (id) => {
+      state.branchId = id;
+      syncBranchChips();
+      clearTimeout(debounce);
+      loadItems();
+    };
+    /* филиалы и билет — до первой отрисовки строк (building_id, card_no) */
+    const loadBranches = async () => {
+      const [data, card] = await Promise.all([fetchJSON('/v1/library/branches'), fetchJSON('/v1/library/my-card')]);
+      if (card && card.card_no) state.card = String(card.card_no);
+      if (!data || !Array.isArray(data.branches) || !branchesBox) return;
+      data.branches.forEach((b) => {
+        state.branches.set(Number(b.id), b);
+        const chip = el('button', 'chip', b.name || '');
+        chip.type = 'button';
+        chip.dataset.branchId = String(b.id);
+        chip.setAttribute('aria-pressed', 'false');
+        chip.addEventListener('click', () => pickBranch(String(b.id)));
+        branchesBox.append(chip);
       });
+      syncBranchChips();
+    };
+    if (branchesBox) {
+      const all = branchesBox.querySelector('.chip');
+      if (all) all.addEventListener('click', () => pickBranch(''));
     }
-
     if (input) {
       input.addEventListener('input', () => {
         state.q = input.value;
@@ -3064,10 +3097,10 @@
         debounce = setTimeout(loadItems, 300);
       });
     }
-    if (availChip) {
-      availChip.addEventListener('click', () => {
-        state.available = availChip.getAttribute('aria-pressed') !== 'true';
-        availChip.setAttribute('aria-pressed', String(state.available));
+    if (availBox) {
+      availBox.checked = false;
+      availBox.addEventListener('change', () => {
+        state.available = availBox.checked;
         clearTimeout(debounce);
         loadItems();
       });
@@ -3075,8 +3108,7 @@
     const libraryRetry = document.querySelector('[data-library-retry]');
     if (libraryRetry) libraryRetry.addEventListener('click', () => loadItems());
 
-    loadBranches();
-    loadItems();
+    loadBranches().then(loadItems);
   }
 
   /* ---------- экран «Столовые» (views/canteens.csp; 03 §4.9.6/5.13) ------ */
