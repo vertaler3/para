@@ -189,7 +189,7 @@
         if (resp.status >= 500) toast(message);
         return null;
       }
-      lastSyncAt = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      lastSyncAt = new Date().toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
       return await resp.json();
     } catch (e) {
       applyOffline(true);
@@ -3864,11 +3864,13 @@
       const date = iso.slice(0, 10);
       const time = iso.slice(11, 16);
       const today = new Date().toISOString().slice(0, 10);
-      if (date === today) return time;
-      if (date === new Date(Date.now() - 86400000).toISOString().slice(0, 10)) return 'Вчера, ' + time;
+      /* v3: «Сегодня, HH:MM» / «Вчера, HH:MM» (notifications.html) — слова из
+         словаря, месяц — Intl по языку страницы (<html lang> → LOCALE) */
+      if (date === today) return t('notif.today', 'Сегодня') + ', ' + time;
+      if (date === new Date(Date.now() - 86400000).toISOString().slice(0, 10)) return t('notif.yesterday', 'Вчера') + ', ' + time;
       const p = date.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return date;
-      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
       return day + ', ' + time;
     };
     /* ISO-метка ВНУТРИ текста с сервера (тело напоминания ReminderService:
@@ -3887,12 +3889,12 @@
         const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
         if (Number.isNaN(day.getTime())) return m;
         const time = m.length >= 16 ? m.slice(11, 16) : '';
-        const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+        const label = day.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
         return time ? label + ', ' + time : label;
       });
     };
 
-    const state = { type: '', unread: false, cursor: null, items: [] };
+    const state = { type: '', unread: false, cursor: null, items: [], query: '' };
     const feedUrl = (cursor) => {
       const p = new URLSearchParams();
       if (state.type) p.set('type', state.type);
@@ -3956,29 +3958,80 @@
       return LIVE_FIRST_SEG.has(seg) ? href : '/notifications';
     };
 
-    /* строка ленты: <a> с deep_link / <button> без него (в <a> вложенный
-       <a> невалиден — заголовок текстом + точка .unread-mark каркаса) */
+    /* строка ленты v3 (notifications.html): article.notification — иконка
+       типа, h2 со ссылкой deep_link (без ссылки — текст) и точкой
+       .unread-mark, тело, время, кнопка «Отметить прочитанным»
+       (POST /v1/notifications/{id}/read). Кнопка — не внутри <a>, поэтому
+       строка стала article со ссылкой внутри. Дедлайн — красным (.red,
+       как в эталоне; левая полоса — .notification:has(.red)). */
     const renderRow = (n) => {
       const href = deepLinkTarget(n.deep_link);
-      const row = href ? el('a', 'notification') : el('button', 'notification');
-      if (href) row.href = href;
-      else row.type = 'button';
+      const urgent = n.type === 'deadline';
+      const row = el('article', 'notification');
       row.dataset.notifId = String(n.id);
+      row.dataset.kind = n.type || '';
       row.classList.add(n.read_at ? 'is-read' : 'is-unread');
       row.append(document.createRange().createContextualFragment(FEED_ICON[n.type] || FEED_ICON.fallback));
       const mid = el('div');
-      const title = el('div', 'ntitle', humanizeDates(n.title) || t('notif.itemOne', 'Уведомление'));
+      const title = el('h2', 'ntitle');
+      const titleText = humanizeDates(n.title) || t('notif.itemOne', 'Уведомление');
+      if (href) {
+        const a = el('a', urgent ? 'red' : null, titleText);
+        a.href = href;
+        a.dataset.read = String(n.id);
+        title.append(a);
+      } else {
+        title.append(el('span', urgent ? 'red' : null, titleText));
+      }
       if (!n.read_at) {
         const dot = el('span', 'unread-mark');
-        dot.setAttribute('aria-hidden', 'true');
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', t('notif.unreadMark', 'Непрочитано'));
         title.append(dot);
       }
       mid.append(title);
-      if (n.body) mid.append(el('p', 'nbody', humanizeDates(n.body)));
+      if (n.body) mid.append(el('p', urgent ? 'small red' : 'small muted', humanizeDates(n.body)));
       const when = stampOf(n.created_at);
-      if (when) mid.append(el('p', 'nwhen', when));
+      if (when) mid.append(el('p', 'caption', when));
+      const mark = el('button', 'button ghost small', n.read_at ? t('notif.isRead', 'Прочитано') : t('notif.markRead', 'Отметить прочитанным'));
+      mark.type = 'button';
+      mark.dataset.markRead = String(n.id);
+      mark.setAttribute('data-network-action', '');
+      mark.disabled = Boolean(n.read_at);
+      mid.append(mark);
       row.append(mid);
       return row;
+    };
+    /* поиск среди загруженных + «Показано: N» (notifications.html
+       #notification-count): фильтр только по state.items — параметра q у
+       API нет; «Только непрочитанные» скрывает и те, что отмечены здесь */
+    const applySearch = () => {
+      const list = document.querySelector('[data-feed-list]');
+      const count = document.querySelector('[data-feed-count]');
+      const none = document.querySelector('[data-feed-search-empty]');
+      if (!list) return;
+      const q = state.query.trim().toLocaleLowerCase(LOCALE);
+      let visible = 0;
+      list.querySelectorAll('[data-notif-id]').forEach((row) => {
+        const item = state.items.find((x) => String(x.id) === row.dataset.notifId);
+        const hide = (q && !row.textContent.toLocaleLowerCase(LOCALE).includes(q)) ||
+          (state.unread && item && item.read_at);
+        row.hidden = Boolean(hide);
+        if (!hide) visible += 1;
+      });
+      if (count) {
+        count.hidden = !state.items.length;
+        count.textContent = t('notif.shown', 'Показано:') + ' ' + visible +
+          (q ? ' ' + t('notif.ofLoaded', 'из {n} загруженных').replace('{n}', String(state.items.length)) : '');
+      }
+      if (none) {
+        const empty = state.items.length > 0 && visible === 0;
+        none.textContent = empty
+          ? t('notif.searchEmpty', 'Среди загруженных ничего не нашлось') +
+            (state.cursor ? '. ' + t('notif.searchMore', 'Нажмите «Ещё» — поиск продолжится по новым записям') : '')
+          : '';
+        none.hidden = !empty;
+      }
     };
     const renderList = () => {
       const list = document.querySelector('[data-feed-list]');
@@ -3986,6 +4039,7 @@
       list.replaceChildren();
       state.items.forEach((n) => list.append(renderRow(n)));
       list.hidden = !state.items.length;
+      applySearch();
     };
 
     /* загрузка страницы ленты: без cursor — первая (скелетон/сброс),
@@ -3998,6 +4052,8 @@
         show('[data-feed-empty]', false);
         show('[data-feed-empty-filter]', false);
         show('[data-feed-more]', false);
+        show('[data-feed-count]', false);
+        show('[data-feed-search-empty]', false);
         show('[data-feed-loading]', true);
       }
       const data = await fetchJSON(feedUrl(cursor));
@@ -4041,9 +4097,12 @@
        переживают обмен (тот же приём, что у sheet «Детали пары» экрана
        «Расписание»). */
     const NEWS_CATEGORY = {
-      official: 'Официальная', conference: 'Конференция',
-      org: 'Организация', event: 'Событие'
+      official: ['news.categoryOfficial', 'Официальная'],
+      conference: ['news.categoryConference', 'Конференция'],
+      org: ['news.categoryOrg', 'Организация'],
+      event: ['news.categoryEvent', 'Событие']
     };
+    const newsCategory = (c) => (NEWS_CATEGORY[c] ? t(NEWS_CATEGORY[c][0], NEWS_CATEGORY[c][1]) : t('news.one', 'Новость'));
     /* «D месяца, HH:MM» из ISO-метки новости (published_at/event_at —
        строки «…Z»); тот же формат, что у stampOf/humanizeDates выше */
     const newsDayLabel = (iso) => {
@@ -4052,26 +4111,71 @@
       if (p.length !== 3 || p.some(Number.isNaN)) return '';
       const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
       if (Number.isNaN(day.getTime())) return '';
-      const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      const label = day.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
       return iso.length >= 16 ? label + ', ' + iso.slice(11, 16) : label;
     };
     /* строка новости (5.17, 01 §5.17 «На экране»): бейдж категории
        (словарь CHECK 0007), заголовок, дата и место события (когда есть),
        тело; дата публикации — справа от бейджа */
+    /* v3 (news.html): отдельного API новости (/v1/news/{id}) нет —
+       новость раскрывается прямо в ленте: свёрнуто — бейдж, дата,
+       заголовок и превью тела (3 строки); «Читать полностью»
+       (aria-expanded) показывает полный текст, строку «дата · категория»
+       и «Как пройти» → /map?q=<аудитория>, когда в месте события есть
+       аудитория. «Сохранить объявление» эталона не переносится (хранения
+       на сервере нет). */
+    const roomOf = (location) => {
+      if (typeof location !== 'string') return '';
+      const m = location.match(/(?:ауд\.|aud\.|room)\s*([^\s,;]+)/i);
+      return m ? m[1] : '';
+    };
     const renderNewsRow = (n) => {
       const row = el('article', 'news-item');
+      const bodyId = 'news-body-' + n.id;
       const head = el('div', 'news-head');
-      head.append(el('span', 'badge', NEWS_CATEGORY[n.category] || 'Новость'));
+      head.append(el('span', 'badge', newsCategory(n.category)));
       const pub = stampOf(n.published_at);
       if (pub) head.append(el('span', 'news-date', pub));
       row.append(head);
-      row.append(el('h2', null, humanizeDates(n.title) || 'Новость'));
+      row.append(el('h2', null, humanizeDates(n.title) || t('news.one', 'Новость')));
       const meta = [];
       if (n.event_at) meta.push(newsDayLabel(n.event_at));
       if (n.location) meta.push(n.location);
       if (meta.length) row.append(el('p', 'news-meta', meta.join(' · ')));
-      if (n.body) row.append(el('p', 'news-body', humanizeDates(n.body)));
+      if (n.body) {
+        const body = el('p', 'news-body', humanizeDates(n.body));
+        body.id = bodyId;
+        row.append(body);
+      }
+      const full = el('div', 'news-full flow');
+      full.hidden = true;
+      full.append(el('p', 'caption', [newsDayLabel(n.published_at), newsCategory(n.category)].filter(Boolean).join(' · ')));
+      const room = roomOf(n.location);
+      if (room) {
+        const actions = el('div', 'actions');
+        const go = el('a', 'button ghost', t('news.route', 'Как пройти'));
+        go.href = '/map?q=' + encodeURIComponent(room);
+        actions.append(go);
+        full.append(actions);
+      }
+      row.append(full);
+      const toggle = el('button', 'button ghost small news-toggle', t('news.readMore', 'Читать полностью'));
+      toggle.type = 'button';
+      toggle.dataset.newsToggle = '';
+      toggle.setAttribute('aria-expanded', 'false');
+      if (n.body) toggle.setAttribute('aria-controls', bodyId);
+      row.append(toggle);
       return row;
+    };
+    const toggleNews = (btn) => {
+      const row = btn.closest('.news-item');
+      if (!row) return;
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? t('news.collapse', 'Свернуть') : t('news.readMore', 'Читать полностью');
+      row.classList.toggle('is-open', open);
+      const full = row.querySelector('.news-full');
+      if (full) full.hidden = !open;
     };
     const newsState = { mode: null, cursor: null, items: [] };
     const renderNewsList = () => {
@@ -4142,6 +4246,7 @@
          unread) — state приводится к разметке, первая страница */
       state.type = '';
       state.unread = false;
+      state.query = '';
       state.cursor = null;
       state.items = [];
       load(null);
@@ -4152,29 +4257,54 @@
       if (target && target.id === 'notifications-segment') initCurrentSegment();
     });
 
-    /* --- тап по строке ленты: пометка В ФОНЕ, deep_link-переход не ждёт её */
-    const markReadInBackground = (row) => {
-      if (!row.classList.contains('is-unread')) return;
+    /* --- пометка прочтения (POST /v1/notifications/{id}/read): тап по
+       ссылке строки — в фоне (keepalive, переход по deep_link не ждёт);
+       кнопка «Отметить прочитанным» (v3) — на месте, с тостом при сбое.
+       После успеха — точка снята, кнопка «Прочитано» (disabled), бейдж
+       колокольчика перечитывается каркасной функцией. */
+    const applyRead = (row, item) => {
+      item.read_at = new Date().toISOString();
+      row.classList.remove('is-unread');
+      row.classList.add('is-read');
+      const dot = row.querySelector('.unread-mark');
+      if (dot) dot.remove();
+      const btn = row.querySelector('[data-mark-read]');
+      if (btn) {
+        btn.textContent = t('notif.isRead', 'Прочитано');
+        btn.disabled = true;
+        /* офлайн-переключатель не должен «вернуть» кнопку в enabled */
+        btn.removeAttribute('data-network-action');
+      }
+      refreshUnreadBadge();
+      applySearch();
+    };
+    const markRead = (row, background) => {
+      if (!row || !row.classList.contains('is-unread')) return;
       const id = Number(row.dataset.notifId);
       const item = state.items.find((x) => x.id === id);
-      if (!item || item.read_at) return; // повторный тап до ответа/уже прочитано
+      if (!item || item.read_at || row.dataset.pending) return; // уже прочитано / запрос в полёте
       if (!navigator.onLine) { applyOffline(true); return; }
+      row.dataset.pending = '1';
+      const btn = row.querySelector('[data-mark-read]');
+      if (btn && !background) btn.disabled = true;
       fetch('/v1/notifications/' + id + '/read', {
         method: 'POST',
         headers: { Accept: 'application/json' },
-        keepalive: true /* фон: запрос переживает уход по deep_link */
+        keepalive: Boolean(background) /* фон: запрос переживает уход по deep_link */
       }).then((resp) => {
-        if (!resp.ok) return; /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
-        item.read_at = new Date().toISOString();
-        row.classList.remove('is-unread');
-        row.classList.add('is-read');
-        const dot = row.querySelector('.unread-mark');
-        if (dot) dot.remove();
-        /* синхронизация бейджа колокольчика — та же каркасная функция */
-        refreshUnreadBadge();
-      }).catch(() => { /* сеть ушла — точка остаётся, баннер покажет каркас */ });
-      /* <a>-строка: браузер сам уходит по deep_link (preventDefault нет);
-         строки без deep_link (<button>) остаются на месте — точка гаснет */
+        delete row.dataset.pending;
+        if (!resp.ok) { /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
+          if (btn) btn.disabled = false;
+          if (!background) toast(t('toast.failMarkRead', 'Не получилось отметить прочитанным'));
+          return;
+        }
+        applyRead(row, item);
+      }).catch(() => {
+        delete row.dataset.pending;
+        if (btn) btn.disabled = false;
+        if (!navigator.onLine) applyOffline(true);
+        else if (!background) toast(t('toast.failMarkRead', 'Не получилось отметить прочитанным'));
+      });
     };
 
     /* «Прочитать всё»: 204 идемпотентно → точки сняты, бейдж обнулён */
@@ -4201,7 +4331,7 @@
             renderList();
           }
           refreshUnreadBadge();
-          toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
+          toast(t('toast.readAllDone', 'Все уведомления прочитаны')); /* дословно 03 §4.6 */
         } else {
           let message = t('toast.failReadAll', 'Не получилось пометить всё прочитанным');
           try {
@@ -4223,8 +4353,12 @@
        страница нового фильтра, cursor сброс), «Ещё»/«Повторить» обеих
        вкладок */
     document.addEventListener('click', (event) => {
-      const row = event.target.closest('[data-notif-id]');
-      if (row) { markReadInBackground(row); return; }
+      const markBtn = event.target.closest('[data-mark-read]');
+      if (markBtn) { markRead(markBtn.closest('[data-notif-id]'), false); return; }
+      const rowLink = event.target.closest('[data-notif-id] a[data-read]');
+      if (rowLink) { markRead(rowLink.closest('[data-notif-id]'), true); return; }
+      const newsToggle = event.target.closest('[data-news-toggle]');
+      if (newsToggle) { toggleNews(newsToggle); return; }
       const readAllBtn = event.target.closest('[data-read-all]');
       if (readAllBtn) { readAll(readAllBtn); return; }
       const chip = event.target.closest('[data-feed-filter]');
@@ -4234,13 +4368,6 @@
         document.querySelectorAll('[data-feed-filter]').forEach((c) => {
           c.setAttribute('aria-pressed', String(c === chip));
         });
-        load(null);
-        return;
-      }
-      const unreadChip = event.target.closest('[data-feed-unread]');
-      if (unreadChip) {
-        state.unread = unreadChip.getAttribute('aria-pressed') !== 'true';
-        unreadChip.setAttribute('aria-pressed', String(state.unread));
         load(null);
         return;
       }
@@ -4258,6 +4385,19 @@
       }
       const newsRetry = event.target.closest('[data-news-retry]');
       if (newsRetry) { loadNews(null, 0); return; }
+    });
+
+    /* поиск и «Только непрочитанные» — делегирование на document: поле и
+       чекбокс приезжают новыми в каждом htmx-фрагменте сегмента */
+    document.addEventListener('input', (event) => {
+      if (!event.target.matches || !event.target.matches('[data-feed-search]')) return;
+      state.query = event.target.value || '';
+      applySearch();
+    });
+    document.addEventListener('change', (event) => {
+      if (!event.target.matches || !event.target.matches('[data-feed-unread]')) return;
+      state.unread = event.target.checked;
+      load(null);
     });
 
     /* --- состояния ПЕРЕКЛЮЧЕНИЯ сегмента (03 §5.3/§5.4; паттерн экрана

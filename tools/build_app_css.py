@@ -134,6 +134,14 @@ input[type=range]{min-height:44px!important;padding:0!important;border:0!importa
 #rating-root .enh-toolbar>.caption{max-width:320px}
 .notice.danger>p+.button{display:inline-flex}
 #assignment+section,.content-narrow>.notice.section+section{margin-top:2rem}
+.notification .button.small,.news-item .button.small{min-height:44px;padding:.5rem .875rem;margin-top:.5rem;font-size:.875rem}
+.notification h2 .red{color:var(--danger-text)}
+#notification-count{margin:0 0 .25rem}
+.news-item:not(.is-open) .news-body{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.news-item.is-open .news-body{color:var(--text);font-size:.9375rem;line-height:1.65}
+.news-item .news-full{margin-top:.75rem}
+.news-item .news-full .actions{margin-top:.5rem}
+.news-item .news-full .actions>.button{display:inline-flex;width:auto;flex:0 0 auto}
 '''
 
 DROP = {'@font-face', ':focus-visible', '.primary-nav', '.nav-link', '.skeleton'}

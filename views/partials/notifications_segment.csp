@@ -70,10 +70,23 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
         <button class="chip" type="button" data-feed-filter="deadline" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeDeadline"); %></button>
         <button class="chip" type="button" data-feed-filter="application" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeApplication"); %></button>
         <button class="chip" type="button" data-feed-filter="announcement" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeAnnouncement"); %></button>
-        <button class="chip" type="button" data-feed-unread aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.unread"); %></button>
       </div>
       <button class="button ghost" type="button" data-read-all><%c++ $$ << @@.get<std::string>("t.notif.readAll"); %></button>
     </div>
+    <!-- v3 (notifications.html .enh-toolbar): поиск — на клиенте по уже
+         загруженным записям (параметра q в GET /v1/notifications нет —
+         честная подпись «среди загруженных»); «Только непрочитанные» —
+         серверный unread=1 (перезапрос первой страницы); счётчик
+         «Показано: N» — aria-live. -->
+    <div class="enh-toolbar">
+      <div class="field enh-field">
+        <label for="notification-search"><%c++ $$ << @@.get<std::string>("t.notif.search"); %></label>
+        <input id="notification-search" name="notification-search" type="search" autocomplete="off" data-feed-search aria-describedby="notification-search-hint" placeholder="<%c++ $$ << @@.get<std::string>("t.notif.searchPh"); %>">
+        <span class="caption" id="notification-search-hint"><%c++ $$ << @@.get<std::string>("t.notif.searchHint"); %></span>
+      </div>
+      <label class="enh-check"><input id="notification-unread" name="notification-unread" type="checkbox" data-feed-unread><%c++ $$ << @@.get<std::string>("t.notif.unreadOnly"); %></label>
+    </div>
+    <p class="caption" id="notification-count" role="status" aria-live="polite" data-feed-count></p>
 
     <!-- Скелетон ленты (03 §5.1: 4 строки — иконка-круг 24 + 2 строки
          текста); прячется app.js по ответу (данные/пусто/ошибка). -->
@@ -110,6 +123,10 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
     <!-- Inline-предупреждение неудачной догрузки «Ещё» (03 §5.3): текст
          ставит app.js; повтор — та же кнопка «Ещё». -->
     <p class="notice warn" data-feed-warn role="alert" hidden></p>
+    <!-- Поиск по загруженным ничего не дал (notifications.html
+         #notifications-empty: p.notice.section); текст ставит app.js —
+         с подсказкой «Ещё», если есть следующая страница. -->
+    <p class="notice section" data-feed-search-empty hidden></p>
 
     <!-- Лента: строки строит app.js из GET /v1/notifications (иконка типа,
          title, body-превью, время, точка непрочитанного — 03 §4.6).
