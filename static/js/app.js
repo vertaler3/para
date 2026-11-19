@@ -4473,7 +4473,7 @@
       const nameEl = $('[data-account-name]');
       if (nameEl) nameEl.textContent = name;
       const meta = $('[data-account-meta]');
-      if (meta) meta.textContent = p ? p.course + ' курс · ' + p.faculty : '';
+      if (meta) meta.textContent = p ? t('profile.course', '{n} курс').replace('{n}', String(p.course)) + ' · ' + p.faculty : '';
       const prog = $('[data-account-program]');
       if (prog) prog.textContent = p ? p.program : '';
       const group = $('[data-account-group]');
@@ -4523,6 +4523,11 @@
       const to = $('[data-quiet-to]');
       if (from && typeof q.from === 'string') from.value = q.from;
       if (to && typeof q.to === 'string') to.value = q.to;
+      const qs = $('[data-quiet-status]');
+      if (qs && from && to && from.value && to.value) {
+        qs.textContent = t('settings.quietNow', 'Сейчас на сервере: {from}–{to}')
+          .replace('{from}', from.value).replace('{to}', to.value);
+      }
       if (s.theme) { applyTheme(s.theme); markTheme(s.theme); }
       markLang(document.documentElement.lang || s.lang);
       show('[data-settings-body]', true);
@@ -4570,69 +4575,147 @@
         }
       });
     });
-    /* тихие часы: два time-инпута → PUT quiet_hours_json (строка с JSON —
-       формат сервера {"from":"HH:MM","to":"HH:MM"}, дефолт 23:00–07:00;
-       интервал через полночь допустим — проверка на не-пустоту) */
-    const saveQuiet = async () => {
-      const from = $('[data-quiet-from]');
-      const to = $('[data-quiet-to]');
-      if (!from || !to || !from.value || !to.value) return;
-      if (!navigator.onLine) { applyOffline(true); return; }
-      const saved = await putSettings({
-        quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
+    /* тихие часы (v3, profile.html #quiet-hours-form): форма с подписями
+       «с / до», явное «Сохранить тихие часы» → PUT quiet_hours_json
+       (строка с JSON — формат сервера {"from":"HH:MM","to":"HH:MM»},
+       интервал через полночь допустим), строка статуса — aria-live */
+    const quietForm = $('[data-quiet-form]');
+    if (quietForm) {
+      quietForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const from = $('[data-quiet-from]');
+        const to = $('[data-quiet-to]');
+        const status = $('[data-quiet-status]');
+        const btn = $('[data-quiet-save]');
+        const empty = !from.value || !to.value;
+        from.setAttribute('aria-invalid', String(!from.value));
+        to.setAttribute('aria-invalid', String(!to.value));
+        if (empty) {
+          if (status) status.textContent = t('settings.quietEmpty', 'Укажите начало и конец тихих часов');
+          (from.value ? to : from).focus();
+          return;
+        }
+        if (!navigator.onLine) { applyOffline(true); return; }
+        if (btn) btn.disabled = true;
+        const saved = await putSettings({
+          quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
+        });
+        if (btn) btn.disabled = false;
+        if (saved) {
+          if (status) {
+            status.textContent = t('settings.quietSavedAt', 'Сохранено: {from}–{to}')
+              .replace('{from}', from.value).replace('{to}', to.value);
+          }
+          toast(t('toast.quietSaved', 'Тихие часы сохранены'));
+        } else {
+          toast(t('toast.failQuiet', 'Не получилось сохранить тихие часы'));
+        }
       });
-      if (saved) toast('Тихие часы сохранены');
-      else toast(t('toast.failQuiet', 'Не получилось сохранить тихие часы'));
-    };
-    const quietFrom = $('[data-quiet-from]');
-    const quietTo = $('[data-quiet-to]');
-    if (quietFrom) quietFrom.addEventListener('change', saveQuiet);
-    if (quietTo) quietTo.addEventListener('change', saveQuiet);
+    }
     /* тема: смена применяется СРАЗУ (applyTheme — data-theme на <html>),
        сохранение — PUT {theme}; сбой сети — вид остаётся локальным,
        офлайн-баннер покажет каркас */
     document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const t = btn.dataset.themeChoice;
-        applyTheme(t);
-        markTheme(t);
+        /* имя theme, а не t: прежний `const t` затенял функцию словаря, и
+           ветка ошибки падала TypeError вместо тоста */
+        const theme = btn.dataset.themeChoice;
+        applyTheme(theme);
+        markTheme(theme);
         if (!navigator.onLine) { applyOffline(true); return; }
-        const saved = await putSettings({ theme: t });
-        if (saved) toast('Оформление сохранено');
+        const saved = await putSettings({ theme });
+        if (saved) toast(t('toast.themeSaved', 'Оформление сохранено'));
         else toast(t('toast.failTheme', 'Не получилось сохранить тему'));
       });
     });
 
-    /* --- подписка на календарь (5.4): POST /v1/ics/token → 201 {token}
-       (Р-11: 256 бит, 64 hex); ПОВТОРНОЕ создание ротирует токен — прежняя
-       ссылка перестаёт обновляться (подсказка в блоке); DELETE → 204.
-       GET «есть ли подписка» в API нет (02 §5.2) — экран стартует в
-       состоянии «нет подписки» (постановка). --- */
-    const showIcs = (token) => {
+    /* --- подписка на календарь (5.4; calendar.html): при загрузке —
+       GET /v1/ics/token (200 {token, created_at} — подписка активна,
+       404 — нет). Исправление: раньше блок этот GET не вызывал и после
+       перезагрузки активная подписка выглядела отсутствующей.
+       POST → 201 {token}: создать или перевыпустить (ротация — прежняя
+       ссылка перестаёт обновляться); DELETE → 204 — отозвать. Ссылка —
+       readonly-поле + «Скопировать» (navigator.clipboard, тост). --- */
+    const showIcs = (token, createdAt) => {
       if (!/^[0-9a-f]{64}$/.test(token)) return;
       const path = '/ics/' + token;
       const url = $('[data-ics-url]');
       const webcal = $('[data-ics-webcal]');
-      if (url) url.textContent = location.origin + path;
+      const status = $('[data-ics-status]');
+      if (url) url.value = location.origin + path;
       if (webcal) webcal.href = 'webcal://' + location.host + path;
+      if (status) {
+        const d = typeof createdAt === 'string' ? new Date(createdAt.replace(' ', 'T') + (/Z$/.test(createdAt) ? '' : 'Z')) : null;
+        status.textContent = d && !Number.isNaN(d.getTime())
+          ? t('profile.icsActive', 'Подписка активна с {date}').replace('{date}', d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' }))
+          : t('profile.icsActiveNow', 'Подписка активна');
+      }
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', false);
       show('[data-ics-none]', false);
       show('[data-ics-active]', true);
     };
-    const icsCreate = $('[data-ics-create]');
-    if (icsCreate) {
+    const showIcsNone = () => {
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', false);
+      show('[data-ics-active]', false);
+      show('[data-ics-none]', true);
+    };
+    const loadIcs = async () => {
+      show('[data-ics-loading]', true);
+      show('[data-ics-error]', false);
+      show('[data-ics-none]', false);
+      show('[data-ics-active]', false);
+      if (!navigator.onLine) { applyOffline(true); show('[data-ics-loading]', false); show('[data-ics-error]', true); return; }
+      try {
+        const resp = await fetch('/v1/ics/token', { headers: { Accept: 'application/json' } });
+        if (resp.status === 404) { showIcsNone(); return; }
+        const data = resp.ok ? await resp.json() : null;
+        if (data && data.token) { showIcs(data.token, data.created_at); return; }
+      } catch (e) {
+        if (!navigator.onLine) applyOffline(true);
+      }
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', true);
+    };
+    /* сервер уже знает, есть ли подписка (ProfileCtrl: data-ics-state
+       active|none|unknown, без самого токена): none — сразу «Создать»
+       без заведомого 404, active/unknown — GET за ссылкой */
+    const icsCard = $('[data-ics-state]');
+    if (icsCard && icsCard.dataset.icsState === 'none') showIcsNone();
+    else loadIcs();
+    const icsRetry = $('[data-ics-retry]');
+    if (icsRetry) icsRetry.addEventListener('click', () => { loadIcs(); });
+    document.querySelectorAll('[data-ics-create]').forEach((icsCreate) => {
       icsCreate.addEventListener('click', async () => {
         if (icsCreate.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
+        const label = icsCreate.textContent;
         icsCreate.disabled = true;
-        icsCreate.textContent = 'Создаём…';
+        icsCreate.textContent = t('profile.icsCreating', 'Создаём…');
         const data = await fetchJSON('/v1/ics/token', { method: 'POST' });
         icsCreate.disabled = false;
-        icsCreate.textContent = 'Создать подписку';
+        icsCreate.textContent = label;
         if (data && data.token) {
-          showIcs(data.token);
-          toast('Подписка создана — прежняя ссылка отозвана');
+          showIcs(data.token, new Date().toISOString());
+          toast(t('toast.icsCreated', 'Подписка создана — прежняя ссылка отозвана'));
         } else {
           toast(t('toast.failIcsCreate', 'Не получилось создать подписку'));
+        }
+      });
+    });
+    const icsCopy = $('[data-ics-copy]');
+    if (icsCopy) {
+      icsCopy.addEventListener('click', async () => {
+        const url = $('[data-ics-url]');
+        if (!url || !url.value) return;
+        try {
+          await navigator.clipboard.writeText(url.value);
+          toast(t('toast.icsCopied', 'Ссылка скопирована'));
+        } catch (e) {
+          url.focus();
+          url.select();
+          toast(t('toast.copyFail', 'Не получилось скопировать — выделите ссылку вручную'));
         }
       });
     }
@@ -4652,9 +4735,8 @@
         } catch (e) { /* сеть ушла — баннер покажет каркас */ }
         icsRevoke.disabled = false;
         if (revoked) {
-          show('[data-ics-active]', false);
-          show('[data-ics-none]', true);
-          toast('Подписка отозвана — календарь больше не обновляется');
+          showIcsNone();
+          toast(t('toast.icsRevoked', 'Подписка отозвана — календарь больше не обновляется'));
         } else {
           toast(t('toast.failIcsRevoke', 'Не получилось отозвать подписку'));
         }
@@ -4667,7 +4749,7 @@
     const qrDialog = $('#qr-dialog');
     const drawQr = (text) => {
       if (!qrDialog || typeof window.qrcode !== 'function') {
-        toast('QR-модуль не загрузился — обновите страницу');
+        toast(t('toast.qrModuleFail', 'QR-модуль не загрузился — обновите страницу'));
         return false;
       }
       window.qrcode.stringToBytes = window.qrcode.stringToBytesFuncs['UTF-8'];
@@ -4696,9 +4778,9 @@
     };
     const openQr = (title, text, value) => {
       if (!drawQr(text)) return;
-      const t = $('[data-qr-title]');
+      const titleEl = $('[data-qr-title]');
       const v = $('[data-qr-value]');
-      if (t) t.textContent = title;
+      if (titleEl) titleEl.textContent = title;
       if (v) v.textContent = value;
       qrDialog.showModal();
     };
@@ -4740,7 +4822,7 @@
           if (logoutConfirm.disabled) return;
           if (!navigator.onLine) { applyOffline(true); return; }
           logoutConfirm.disabled = true;
-          logoutConfirm.textContent = 'Выходим…';
+          logoutConfirm.textContent = t('profile.loggingOut', 'Выходим…');
           let done = false;
           try {
             const resp = await fetch('/v1/auth/logout', {
@@ -4754,7 +4836,7 @@
             return;
           }
           logoutConfirm.disabled = false;
-          logoutConfirm.textContent = 'Выйти';
+          logoutConfirm.textContent = t('profile.logout', 'Выйти');
           toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
         });
       }
