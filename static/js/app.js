@@ -2389,17 +2389,24 @@
      экрана ошибки — перезагрузка (03 §5.3). Вставка — только
      createElement/textContent (02 §6.4). */
   if (document.body.dataset.page === 'application') {
+    /* v3 (шаг 14): строки — словарь ×3 (apps.*), даты — LOCALE по <html lang> */
     const APP_STATUS = {
-      draft: 'Черновик', submitted: 'Подана', accepted: 'Принята',
-      in_progress: 'В работе', need_info: 'Требуется уточнение',
-      ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
+      draft: t('apps.statusDraft', 'Черновик'), submitted: t('apps.statusSubmitted', 'Подана'),
+      accepted: t('apps.statusAccepted', 'Принята'), in_progress: t('apps.statusInProgress', 'В работе'),
+      need_info: t('apps.statusNeedInfo', 'Требуется уточнение'), ready: t('apps.statusReady', 'Готова'),
+      issued: t('apps.statusIssued', 'Выдана'), rejected: t('apps.statusRejected', 'Отклонена'),
+      cancelled: t('apps.statusCancelled', 'Отменена')
     };
     const appRetry = document.querySelector('[data-app-retry]');
     if (appRetry) appRetry.addEventListener('click', () => window.location.reload());
 
-    /* --- PDF: 200 → blob-скачивание; 409 not_ready → inline-сообщение
-       «Справка ещё не готова» у кнопки (серверный message из 02 §5.2);
-       прочие ошибки — inline c message тела (формат 02 §5.1) ----------- */
+    /* «Печать / сохранить в PDF» (application-document.html): печать
+       HTML-превью; CSS печати оставляет только .document-paper */
+    const printBtn = document.querySelector('[data-print-document]');
+    if (printBtn) printBtn.addEventListener('click', () => window.print());
+
+    /* --- PDF: 200 → blob-скачивание; 409 not_ready и прочие ошибки —
+       inline-сообщение у кнопки (message тела, формат 02 §5.1) --------- */
     const pdfLink = document.querySelector('[data-pdf-link]');
     const pdfError = document.querySelector('[data-pdf-error]');
     if (pdfLink) {
@@ -2407,6 +2414,11 @@
         event.preventDefault();
         if (!navigator.onLine) { applyOffline(true); return; }
         if (pdfError) pdfError.hidden = true;
+        const fail = (message) => {
+          if (!pdfError) return;
+          pdfError.textContent = message || t('apps.pdfFail', 'Не удалось скачать справку');
+          pdfError.hidden = false;
+        };
         try {
           const resp = await fetch(pdfLink.href, { headers: { Accept: 'application/pdf' } });
           if (resp.ok) {
@@ -2414,62 +2426,56 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'para-spravka-' + (pdfLink.getAttribute('href').split('/').pop() || '') + '.pdf';
+            a.download = 'para-spravka-' + (pdfLink.getAttribute('href').split('/').slice(-2, -1)[0] || '') + '.pdf';
             document.body.append(a);
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 5000);
             return;
           }
-          let message = 'Не удалось скачать справку';
+          let message = '';
           try {
             const body = await resp.json();
             if (body && body.error && body.error.message) message = body.error.message;
           } catch (e) { /* тело не JSON */ }
-          if (pdfError) {
-            pdfError.textContent = message;
-            pdfError.hidden = false;
-          }
+          fail(message);
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
-          if (pdfError) {
-            pdfError.textContent = 'Не удалось скачать справку';
-            pdfError.hidden = false;
-          }
+          fail('');
         }
       });
     }
 
-    /* --- ветка С7.6: ответ на уточнение --------------------------------- */
-    const replyBlock = document.querySelector('[data-reply-block]');
+    /* --- ветка С7.6: ответ на уточнение (form, Enter/submit) ----------- */
+    const replyForm = document.querySelector('[data-reply-block]');
     const replyBtn = document.querySelector('[data-reply-send]');
     const replyText = document.querySelector('[data-reply-text]');
     const replyError = document.querySelector('[data-reply-error]');
     const replyResult = document.querySelector('[data-reply-result]');
     const badge = document.querySelector('[data-app-badge]');
     const timeline = document.querySelector('[data-app-timeline]');
-    if (replyBtn && replyBlock) {
-      replyBtn.addEventListener('click', async () => {
+    const showReplyError = (text) => {
+      if (replyText) { replyText.setAttribute('aria-invalid', 'true'); replyText.setAttribute('aria-describedby', 'reply-error'); }
+      if (replyError) { replyError.textContent = text; replyError.hidden = false; }
+    };
+    if (replyForm && replyBtn) {
+      replyForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
         if (replyBtn.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
-        const appId = replyBlock.dataset.appId;
+        const appId = replyForm.dataset.appId;
         const text = replyText ? replyText.value.trim() : '';
         if (replyError) replyError.hidden = true;
         if (!text) {
-          if (replyText) replyText.setAttribute('aria-invalid', 'true');
-          if (replyError) {
-            replyError.textContent = 'Напишите ответ — деканат ждёт уточнение';
-            replyError.hidden = false;
-          }
+          showReplyError(t('apps.replyEmpty', 'Напишите ответ — деканат ждёт уточнение'));
+          if (replyText) replyText.focus();
           return;
         }
-        if (replyText) replyText.removeAttribute('aria-invalid');
+        if (replyText) { replyText.removeAttribute('aria-invalid'); replyText.removeAttribute('aria-describedby'); }
         const previousLabel = replyBtn.textContent;
         replyBtn.textContent = t('toast.sending', 'Отправляем…');
         replyBtn.disabled = true;
         try {
-          /* fetchJSON форматует ошибки из {error:{code,message}} (02 §5.1);
-             201 — Ok, тело = событие + application_status/status (С7.6) */
           const data = await fetchJSON('/v1/applications/' + appId + '/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2477,33 +2483,39 @@
           });
           if (data) {
             const newStatus = data.application_status || data.status;
-            if (newStatus === 'in_progress' && badge) {
-              badge.className = 'badge info';
-              badge.textContent = APP_STATUS.in_progress;
-            }
             if (timeline) {
+              timeline.querySelectorAll('[aria-current]').forEach((li) => li.removeAttribute('aria-current'));
               const li = document.createElement('li');
-              li.className = (data.to_status === 'in_progress') ? 'done' : '';
+              li.className = (data.to_status === 'in_progress') ? 'current' : '';
+              if (data.to_status === 'in_progress') li.setAttribute('aria-current', 'step');
               const strong = document.createElement('strong');
-              strong.textContent = APP_STATUS[data.to_status] || data.to_status || 'Сообщение';
+              strong.textContent = APP_STATUS[data.to_status] || t('apps.message', 'Сообщение');
               const p = document.createElement('p');
-              const when = data.at ? new Date(data.at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+              const when = data.at ? new Date(data.at).toLocaleString(LOCALE, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
               p.textContent = when + (text ? ' · ' + text : '');
               li.append(strong, p);
               timeline.append(li);
             }
-            replyBlock.hidden = true;
+            replyForm.hidden = true;
             if (replyResult) {
               replyResult.textContent = newStatus === 'in_progress'
-                ? 'Ответ отправлен — заявка снова в работе'
-                : 'Ответ отправлен';
+                ? t('apps.replySentWork', 'Ответ отправлен. Заявка снова в работе.')
+                : t('apps.replySent', 'Ответ отправлен.');
               replyResult.hidden = false;
             }
+            toast(t('apps.replySavedToast', 'Ответ сохранён в заявке'));
+            if (badge) {
+              if (newStatus === 'in_progress') {
+                badge.className = 'badge info';
+                badge.textContent = APP_STATUS.in_progress;
+              }
+              badge.tabIndex = -1;
+              badge.focus();
+            }
           } else if (!navigator.onLine) {
-            applyOffline(true); /* каркас: баннер + helper на кнопке */
-          } else if (replyError) {
-            replyError.textContent = 'Ответ не отправился. Проверьте интернет — и попробуем ещё раз';
-            replyError.hidden = false;
+            applyOffline(true);
+          } else {
+            showReplyError(t('apps.replyFailed', 'Ответ не отправился. Проверьте интернет — и попробуем ещё раз'));
           }
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);

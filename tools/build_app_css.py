@@ -52,7 +52,12 @@ def chrome(css):
         return sel + '{' + body + '}'
     return re.sub(r'([^{}@]+)\{([^{}]*)\}', fix, css)
 
-FIXES = '''.app-card[hidden],.app-list[hidden]{display:none!important}
+FIXES = '''[data-submitted-block]{margin-bottom:1.5rem}
+[data-submitted-block] .stack{margin-top:1rem;gap:.5rem;border:0;border-radius:0;background:var(--clear);overflow:visible}
+[data-document-block] .document-paper{margin-top:.75rem}
+[data-document-block] .document-paper .detail-list{margin-top:1rem}
+@media print{body[data-page=application] .content-form>:not([data-document-block]),body[data-page=application] [data-submitted-block],body[data-page=application] [data-document-block]>:not(.document-paper),#offline-banner{display:none!important}body[data-page=application] .content-form{max-width:none;padding:0}}
+.app-card[hidden],.app-list[hidden]{display:none!important}
 .document-flow .section-title .button{flex:none}
 .ob-footer .button{white-space:nowrap}
 .htmx-indicator.skeleton{display:none}
