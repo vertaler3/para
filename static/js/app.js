@@ -4360,7 +4360,7 @@
       const base = isAnn ? '/v1/announcements' : '/v1/news';
       const raw = await fetchJSON(base + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
       const data = isAnn && raw && Array.isArray(raw.announcements)
-        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: a.author || '' })) }
+        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' })) }
         : raw;
       show('[data-news-loading]', false);
       if (!data || !Array.isArray(data.news)) {
@@ -4416,7 +4416,17 @@
     initCurrentSegment();
     document.body.addEventListener('htmx:afterSwap', (e) => {
       const target = e.detail && e.detail.target;
-      if (target && target.id === 'notifications-segment') initCurrentSegment();
+      if (target && target.id === 'notifications-segment') {
+        initCurrentSegment();
+        /* шапка не входит в htmx-обмен: подсветка пункта навигации
+           («Новости»/«Объявления» у сотрудника) — по новому сегменту */
+        const fresh = document.getElementById('notifications-segment');
+        const seg = fresh ? fresh.dataset.segment || '' : '';
+        document.querySelectorAll('.primary-nav .nav-link[data-nav]').forEach((a) => {
+          if (a.dataset.nav === seg) a.setAttribute('aria-current', 'page');
+          else if (a.dataset.nav === 'news' || a.dataset.nav === 'announcements') a.removeAttribute('aria-current');
+        });
+      }
     });
 
     /* --- пометка прочтения (POST /v1/notifications/{id}/read): тап по
@@ -5431,9 +5441,9 @@
     const QUEUE_KEYS = ['submitted', 'accepted', 'in_progress', 'need_info', 'ready'];
     const changeRow = (e) => {
       const li = el('li');
-      const link = el('a', 'staff-change');
-      const day = dateOf(e.starts_at);
-      link.href = day ? '/schedule?date=' + day : '/schedule';
+      /* Р-35: студенческое расписание сотруднику недоступно (303 /staff) —
+         строка изменения информационная, без ссылки */
+      const link = el('div', 'staff-change');
       link.append(el('strong', null, e.discipline || 'Занятие'));
       if (CHANGE_LABEL[e.status]) link.append(' ', el('span', 'badge ' + (e.status === 'cancelled' ? 'danger' : e.status === 'substituted' ? 'info' : 'warn'), CHANGE_LABEL[e.status]));
       const pieces = [];

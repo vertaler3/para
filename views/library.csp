@@ -24,7 +24,7 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <a class="back" href="<%c++ $$ << (@@.get<std::string>("staffEntry") == "1" ? "/staff" : "/profile"); %>"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>(@@.get<std::string>("staffEntry") == "1" ? "t.staff.desk" : "t.common.back"); %></a>
       <h1><%c++ $$ << @@.get<std::string>("t.campus.library"); %></h1>
     </div>
   </div>

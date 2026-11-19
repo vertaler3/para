@@ -25,8 +25,16 @@ void insertStaffFlag(drogon::HttpViewData& data,
         data.insert("staffEntry", std::string("1"));
 }
 
-bool isStudentOnlyPage(const std::string& path)
+bool isStudentOnlyPage(const std::string& rawPath)
 {
+    // Роутинг Drogon регистронезависим (/SCHEDULE == /schedule) — сравниваем
+    // путь в нижнем регистре (ASCII), без хвостового «/».
+    std::string path = rawPath;
+    for (auto& ch : path)
+        if (ch >= 'A' && ch <= 'Z')
+            ch = static_cast<char>(ch - 'A' + 'a');
+    while (path.size() > 1 && path.back() == '/')
+        path.pop_back();
     static const char* const kExact[] = {"/schedule", "/grades",
                                          "/gradebook", "/rating",
                                          "/profile", "/applications"};
