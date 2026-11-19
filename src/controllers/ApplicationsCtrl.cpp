@@ -392,8 +392,16 @@ void ApplicationsCtrl::newPage(
     // состояния загрузки/ошибки — в шаблоне и app.js (03 §5.1/§5.3).
     // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера (Р-16).
     const auto lang = i18n::resolveRequestLang(req);
-    HttpViewData data =
-        basePageData(i18n::pageTitleOf("apps.formTitle", lang), lang);
+    // v3 (шаг 12): ?type=<ключ> — deep link сразу в форму. Фаза — только
+    // для первого кадра (заголовок h1 без мигания); валидность ключа
+    // проверяет клиент по GET /v1/application-types (неизвестный ключ —
+    // каталог), сервер ключ в разметку не выводит.
+    const bool formPhase = !req->getParameter("type").empty();
+    HttpViewData data = basePageData(
+        i18n::pageTitleOf(formPhase ? "apps.docFormTitle" : "apps.catalogTitle",
+                          lang),
+        lang);
+    data.insert("phase", std::string(formPhase ? "form" : "catalog"));
     // Имя шаблона — application_form (подчёркивание): drogon_ctl 1.9.14
     // генерирует из имени файла имя C++-класса, дефис не компилирует
     // (прецедент Э7 экрана «Расписание»: schedule_today/schedule_week).

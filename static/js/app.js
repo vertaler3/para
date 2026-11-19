@@ -1856,61 +1856,83 @@
       if (text != null) node.textContent = text;
       return node;
     };
+    const fill = (s, map) => Object.keys(map).reduce((acc, k) => acc.replace('{' + k + '}', String(map[k])), s);
     /* статические иконки строк каталога (по мотивам Lucide; НЕ данные) */
     const ICON = {
       file: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg>',
       pen: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
       arrow: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>'
     };
-    /* 1–2 вопроса на тип: наборы полей — payload-примеры sql/fixtures.sql
-       ({"copies":2,"delivery":"office"}, {"purpose":…,"copies":1,"delivery":"pdf"},
-       {"topic":…,"supervisor":…}); подсказки строк каталога — 03 §4.5.2 */
+    /* Поля по типу (payload-примеры sql/fixtures.sql), v3 (шаг 12) — по
+       секциям эталона: «01 / Данные заявки» и «02 / Получение документа».
+       У справок к copies/delivery добавлен НЕОБЯЗАТЕЛЬНЫЙ comment эталона
+       (Р-34: обязательных вопросов по-прежнему 1–2). purpose в форме нет
+       (правило «1–2 вопроса», 03 §4.5.3:626) — поле живёт в «Деталях». */
     const TYPE_FIELDS = {
-      study_certificate: ['copies', 'delivery'],
-      period_certificate: ['copies', 'delivery'],
-      /* academic_certificate — ровно 2 вопроса, как в вайрфрейме 03
-         §4.5.3:597–625 («Количество экземпляров» + «Как получить»);
-         «purpose» в форме НЕТ (правило «1–2 вопроса максимум» —
-         03 §4.5.3:626), поле остаётся в примере payload фикстур
-         ({"purpose":…}) и отображается в «Деталях заявки» карточки */
-      academic_certificate: ['copies', 'delivery'],
-      thesis_topic: ['topic', 'supervisor'],
-      other: ['comment']
+      study_certificate: [['copies'], ['delivery', 'comment']],
+      period_certificate: [['copies'], ['delivery', 'comment']],
+      academic_certificate: [['copies'], ['delivery', 'comment']],
+      thesis_topic: [['topic', 'supervisor'], []],
+      other: [['statement'], []]
     };
-    const TYPE_HINT = {
-      study_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      period_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      academic_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      thesis_topic: 'Согласование темы и научного руководителя',
-      other: 'Свободный текст заявления'
-    };
+    const REQUIRED = { topic: 'apps.errTopic', supervisor: 'apps.errSupervisor', statement: 'apps.errStatement' };
+    const REQUIRED_FB = { topic: 'Укажите тему ВКР', supervisor: 'Укажите научного руководителя', statement: 'Опишите, что нужно в заявлении' };
+    const typeHint = (key) => (key === 'thesis_topic'
+      ? t('apps.hintThesis', 'Согласование темы и научного руководителя')
+      : key === 'other' ? t('apps.hintOther', 'Свободный текст заявления')
+        : t('apps.hintCert', 'Обычно до 3 рабочих дней · PDF или в деканате'));
+    /* payload-ключ поля: «Текст заявления» другого типа — comment (как в БД) */
+    const payloadKey = (name) => (name === 'statement' ? 'comment' : name);
+    const allFields = (key) => (TYPE_FIELDS[key] ? TYPE_FIELDS[key][0].concat(TYPE_FIELDS[key][1]) : []);
 
-    const state = { typeKey: null, typeTitle: '', draftId: null, draftStopped: false };
+    const state = { typeKey: null, typeTitle: '', draftId: null, draftStopped: false, types: [] };
     let saveTimer = 0;
+    let selectSeq = 0;
     const stopTimer = () => { if (saveTimer) { clearInterval(saveTimer); saveTimer = 0; } };
+    const statusLine = () => document.querySelector('[data-draft-status]');
+    const nowHM = () => new Date().toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 
-    /* --- сборка payload из полей активного типа (JSON-строка) ---------- */
+    /* --- сборка payload из полей активного типа (JSON-объект) ---------- */
     const field = (name) => document.querySelector('[data-field="' + name + '"]');
+    const control = (name) => document.getElementById('app-field-' + name);
     const collectPayload = () => {
       const p = {};
-      (TYPE_FIELDS[state.typeKey] || []).forEach((name) => {
+      allFields(state.typeKey).forEach((name) => {
         const f = field(name);
         if (!f) return;
         if (f.dataset.kind === 'radios') {
           const checked = f.querySelector('input:checked');
-          p[name] = checked ? checked.value : '';
-          if (name === 'copies' && p.copies !== '') p.copies = Number(p.copies);
-        } else if (f.value) {
-          p[name] = f.value;
+          if (checked) p[name] = checked.value;
+        } else {
+          const c = control(name);
+          if (!c) return;
+          if (name === 'copies') p.copies = Number(c.value) || 1;
+          else if (c.value.trim()) p[payloadKey(name)] = c.value.trim();
         }
       });
       return p;
     };
+    /* заполнение полей из payload серверного черновика */
+    const applyPayload = (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      allFields(state.typeKey).forEach((name) => {
+        const v = payload[payloadKey(name)];
+        if (v == null) return;
+        const f = field(name);
+        if (!f) return;
+        if (f.dataset.kind === 'radios') {
+          const input = f.querySelector('input[value="' + String(v).replace(/"/g, '') + '"]');
+          if (input) input.checked = true;
+        } else {
+          const c = control(name);
+          if (c) { c.value = String(v); c.dispatchEvent(new Event('input', { bubbles: true })); }
+        }
+      });
+    };
 
     /* --- автосохранение черновика (С7): raw fetch — нужен статус 409;
-       сетевой сбой/офлайн молча пропускается (баннер показывает каркас);
-       409 «Править можно только черновик» — статус ушёл, автосохранение
-       прекращается навсегда до перезагрузки (постановка Э7) ------------ */
+       сетевой сбой/офлайн молча пропускается; 409 — статус ушёл,
+       автосохранение прекращается до перезагрузки (постановка Э7) ------ */
     const autosaveNow = async () => {
       if (!state.draftId || state.draftStopped) return null;
       try {
@@ -1922,80 +1944,67 @@
         if (resp.status === 409) {
           state.draftStopped = true;
           stopTimer();
-          const statusLine = document.querySelector('[data-draft-status]');
-          if (statusLine) statusLine.textContent = 'Черновик больше не черновик — правки не сохраняются';
+          const line = statusLine();
+          if (line) line.textContent = t('apps.draftNotDraft', 'Черновик больше не черновик — правки не сохраняются');
           return false;
         }
-        if (resp.status === 404) {
-          /* заявка исчезла — автосохранению некуда писать; молча прекращаем */
-          state.draftStopped = true;
-          stopTimer();
-          return false;
-        }
+        if (resp.status === 404) { state.draftStopped = true; stopTimer(); return false; }
         return resp.ok;
       } catch (e) { return null; } /* сети нет — молча (03 §5.4) */
     };
-    const startAutosave = () => {
-      if (!saveTimer) saveTimer = setInterval(autosaveNow, 10000);
-    };
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) autosaveNow();
-    });
+    const startAutosave = () => { if (!saveTimer) saveTimer = setInterval(autosaveNow, 10000); };
+    document.addEventListener('visibilitychange', () => { if (document.hidden) autosaveNow(); });
 
-    /* --- поля формы: 1–2 вопроса, значения по умолчанию — как в
-       черновике 03 §4.5.3 (copies 1, delivery pdf) --------------------- */
-    const buildField = (name) => {
-      if (name === 'copies') {
-        const wrap = el('fieldset');
-        wrap.dataset.field = 'copies';
-        wrap.dataset.kind = 'radios';
-        wrap.append(el('legend', null, 'Количество экземпляров'));
-        [['1', '1 экземпляр', true], ['2', '2 экземпляра', false]].forEach(([v, label, on]) => {
-          const opt = el('label', 'option');
-          const input = document.createElement('input');
-          input.type = 'radio';
-          input.name = 'copies';
-          input.value = v;
-          input.checked = on;
-          opt.append(input, document.createTextNode(label));
-          wrap.append(opt);
-        });
-        return wrap;
-      }
-      if (name === 'delivery') {
-        const wrap = el('fieldset');
-        wrap.dataset.field = 'delivery';
-        wrap.dataset.kind = 'radios';
-        wrap.append(el('legend', null, 'Как получить'));
-        [['pdf', 'PDF в кабинете', true], ['office', 'В деканате', false]].forEach(([v, label, on]) => {
-          const opt = el('label', 'option');
-          const input = document.createElement('input');
-          input.type = 'radio';
-          input.name = 'delivery';
-          input.value = v;
-          input.checked = on;
-          opt.append(input, document.createTextNode(label));
-          wrap.append(opt);
-        });
-        return wrap;
-      }
-      const wrap = el('div', 'field');
-      wrap.dataset.field = name;
-      const text = {
-        purpose: ['Куда нужна справка', 'Например, в университет-партнёр'],
-        topic: ['Тема ВКР', 'Тема выпускной квалификационной работы'],
-        supervisor: ['Научный руководитель', 'ФИО руководителя'],
-        comment: ['Комментарий · необязательно', 'Например, куда нужна справка']
-      }[name] || [name, ''];
-      wrap.append(el('label', null, text[0]));
-      const input = name === 'comment' ? document.createElement('textarea') : document.createElement('input');
-      if (name === 'comment') input.setAttribute('rows', '4');
-      input.maxLength = 1000;
-      input.placeholder = text[1];
-      wrap.append(input);
-      return wrap;
+    /* --- ошибки: по полю (aria-invalid/aria-describedby) + сводка ------ */
+    const clearFieldErrors = () => {
+      document.querySelectorAll('[data-form] .field-error[data-for]').forEach((n) => n.remove());
+      document.querySelectorAll('[data-form] [aria-invalid]').forEach((n) => { n.removeAttribute('aria-invalid'); n.removeAttribute('aria-describedby'); });
+      show('[data-validation-summary]', false);
     };
-
+    const fieldError = (name, text) => {
+      const c = control(name);
+      if (!c) return;
+      const id = 'err-' + name;
+      const p = el('p', 'field-error', text);
+      p.id = id;
+      p.dataset.for = name;
+      p.setAttribute('role', 'alert');
+      c.setAttribute('aria-invalid', 'true');
+      c.setAttribute('aria-describedby', id);
+      c.parentNode.insertBefore(p, c.nextSibling);
+    };
+    const summary = (errors) => {
+      const box = document.querySelector('[data-validation-summary]');
+      const list = document.querySelector('[data-validation-list]');
+      if (!box || !list) return;
+      list.replaceChildren();
+      errors.forEach(([name, text]) => {
+        const li = el('li');
+        const a = el('a', null, text);
+        a.href = '#app-field-' + name;
+        a.addEventListener('click', (e) => { e.preventDefault(); const c = control(name); if (c) c.focus(); });
+        li.append(a);
+        list.append(li);
+      });
+      box.hidden = false;
+      box.focus();
+    };
+    const validate = () => {
+      clearFieldErrors();
+      const errors = [];
+      allFields(state.typeKey).forEach((name) => {
+        const c = control(name);
+        if (!c || c.tagName === 'SELECT') return;
+        const v = c.value.trim();
+        if (REQUIRED[name] && !v) errors.push([name, t(REQUIRED[name], REQUIRED_FB[name])]);
+        else if (v.length > 1000) errors.push([name, t('apps.errTooLong', 'Сократите текст до 1000 символов')]);
+      });
+      errors.forEach(([name, text]) => fieldError(name, text));
+      if (errors.length) summary(errors);
+      return errors.length === 0;
+    };
+    /* дефект до v3: узла [data-form-error-inline] в разметке не было —
+       ошибки сервера/сети молча терялись; узел добавлен в шаблон */
     const setFormError = (text) => {
       const box = document.querySelector('[data-form-error-inline]');
       if (!box) return;
@@ -2003,71 +2012,235 @@
       box.hidden = !text;
     };
 
-    /* --- выбор типа: каталог → форма; смена типа СБРАСЫВАЕТ привязку
-       автосохранения (PUT чужого типа в старый черновик недопустим;
-       сохранённый черновик остаётся в «Черновиках» списка) ------------- */
-    const selectType = (key, title) => {
-      if (state.typeKey !== key) stopTimer();
+    /* --- живое резюме (request-summary эталона) ------------------------ */
+    const renderSummary = () => {
+      const title = document.querySelector('[data-summary-title]');
+      const line = document.querySelector('[data-summary-line]');
+      if (title) title.textContent = state.typeTitle;
+      if (!line) return;
+      const p = collectPayload();
+      const parts = [];
+      if (p.copies) parts.push(p.copies === 2 ? t('apps.copiesTwo', '2 экземпляра') : t('apps.copiesOne', '1 экземпляр'));
+      if (p.delivery) parts.push(p.delivery === 'office' ? t('apps.deliveryOffice', 'В деканате') : t('apps.deliveryPdf', 'PDF в кабинете'));
+      if (!parts.length) parts.push(typeHint(state.typeKey));
+      line.textContent = parts.join(' · ');
+    };
+
+    /* --- поля формы ---------------------------------------------------- */
+    const radios = (name, legendKey, legendFb, options) => {
+      const wrap = el('fieldset');
+      wrap.dataset.field = name;
+      wrap.dataset.kind = 'radios';
+      wrap.append(el('legend', null, t(legendKey, legendFb)));
+      options.forEach(([v, key, fb, on]) => {
+        const opt = el('label', 'option');
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = name;
+        input.value = v;
+        input.checked = on;
+        opt.append(input, document.createTextNode(t(key, fb)));
+        wrap.append(opt);
+      });
+      return wrap;
+    };
+    const buildField = (name) => {
+      if (name === 'delivery') {
+        return radios('delivery', 'apps.delivery', 'Способ получения', [
+          ['pdf', 'apps.deliveryPdf', 'PDF в кабинете', true],
+          ['office', 'apps.deliveryOffice', 'В деканате', false]]);
+      }
+      const wrap = el('div', 'field');
+      wrap.dataset.field = name;
+      const label = el('label');
+      label.htmlFor = 'app-field-' + name;
+      wrap.append(label);
+      if (name === 'copies') {
+        label.textContent = t('apps.copies', 'Количество экземпляров');
+        const sel = document.createElement('select');
+        sel.id = 'app-field-copies';
+        [['1', 'apps.copiesOne', '1 экземпляр'], ['2', 'apps.copiesTwo', '2 экземпляра']].forEach(([v, key, fb]) => {
+          const o = el('option', null, t(key, fb));
+          o.value = v;
+          sel.append(o);
+        });
+        wrap.append(sel);
+        return wrap;
+      }
+      const text = {
+        topic: ['apps.topic', 'Тема ВКР', 'apps.topicPh', 'Тема выпускной квалификационной работы'],
+        supervisor: ['apps.supervisor', 'Научный руководитель', 'apps.supervisorPh', 'ФИО руководителя'],
+        comment: ['apps.comment', 'Комментарий · необязательно', 'apps.commentPh', 'Например, куда нужна справка'],
+        statement: ['apps.statement', 'Текст заявления', 'apps.statementPh', 'Опишите, что нужно']
+      }[name];
+      label.textContent = t(text[0], text[1]);
+      const multi = name === 'comment' || name === 'statement';
+      const input = document.createElement(multi ? 'textarea' : 'input');
+      input.id = 'app-field-' + name;
+      if (multi) input.setAttribute('rows', '4');
+      if (REQUIRED[name]) input.required = true;
+      input.maxLength = 1000;
+      input.placeholder = t(text[2], text[3]);
+      wrap.append(input);
+      if (multi) {
+        /* счётчик символов эталона (field-counter) */
+        const counter = el('p', 'caption field-counter', fill(t('apps.counter', '{n} / 1000'), { n: 0 }));
+        counter.setAttribute('aria-live', 'polite');
+        input.addEventListener('input', () => { counter.textContent = fill(t('apps.counter', '{n} / 1000'), { n: input.value.length }); });
+        wrap.append(counter);
+      }
+      return wrap;
+    };
+
+    /* --- фазы: каталог ↔ форма (deep link ?type=, history) ------------- */
+    const heading = document.querySelector('[data-form-heading]');
+    const back = document.querySelector('[data-form-back]');
+    const setPhase = (phase) => {
+      const form = phase === 'form';
+      show('[data-catalog]', !form);
+      show('[data-paper]', form);
+      document.querySelectorAll('[data-form-only]').forEach((n) => { n.hidden = !form; });
+      if (heading) {
+        heading.textContent = form ? heading.dataset.formTitle : heading.dataset.catalogTitle;
+        const suffix = document.title.split(' · ').pop();
+        document.title = heading.textContent + ' · ' + suffix;
+      }
+      if (back) back.href = form ? '/applications/new' : '/applications';
+    };
+
+    /* восстановление серверного черновика (Р-34): ?draft=<id> того же типа
+       или последний по updated_at черновик типа из ?status=draft */
+    const restoreDraft = async (key, draftParam, seq) => {
+      let draft = null;
+      if (draftParam) {
+        const one = await fetchJSON('/v1/applications/' + encodeURIComponent(draftParam));
+        if (one && one.status === 'draft' && one.type === key) draft = one;
+      }
+      if (!draft) {
+        const list = await fetchJSON('/v1/applications?status=draft');
+        const drafts = (list && Array.isArray(list.applications) ? list.applications : [])
+          .filter((a) => a.type === key && a.status === 'draft')
+          .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
+        draft = drafts[0] || null;
+      }
+      if (!draft || seq !== selectSeq) return;
+      state.draftId = draft.id;
+      state.draftStopped = false;
+      applyPayload(draft.payload);
+      renderSummary();
+      startAutosave();
+      show('[data-draft-restored]', true);
+      const line = statusLine();
+      if (line) line.textContent = t('apps.draftAutosave', 'Черновик в вашем кабинете · дальше сохраняем автоматически');
+    };
+
+    const selectType = (key, draftParam) => {
+      const type = state.types.find((x) => x.key === key);
+      if (!type) return false;
+      stopTimer();
+      selectSeq += 1;
       state.typeKey = key;
-      state.typeTitle = title;
+      state.typeTitle = type.title || '';
       state.draftId = null;
       state.draftStopped = false;
-      const fields = document.querySelector('[data-type-fields]');
-      if (fields) {
-        fields.replaceChildren();
-        (TYPE_FIELDS[key] || []).forEach((name) => fields.append(buildField(name)));
-      }
-      const titleEl = document.querySelector('[data-type-title]');
-      if (titleEl) titleEl.textContent = title;
+      const sel = document.querySelector('[data-type-select]');
+      if (sel) sel.value = key;
+      const [first, second] = TYPE_FIELDS[key] || [[], []];
+      const box1 = document.querySelector('[data-type-fields]');
+      const box2 = document.querySelector('[data-type-fields-02]');
+      if (box1) { box1.replaceChildren(); first.forEach((n) => box1.append(buildField(n))); }
+      if (box2) { box2.replaceChildren(); second.forEach((n) => box2.append(buildField(n))); }
+      show('[data-section-02]', second.length > 0);
+      clearFieldErrors();
       setFormError('');
-      const statusLine = document.querySelector('[data-draft-status]');
-      if (statusLine) statusLine.textContent = 'Обычно готова до 3 рабочих дней';
-      show('[data-catalog]', false);
-      show('[data-form]', true);
+      show('[data-draft-restored]', false);
+      const line = statusLine();
+      if (line) line.textContent = t('apps.usualTime', 'Обычно готова до 3 рабочих дней');
+      renderSummary();
+      setPhase('form');
+      restoreDraft(key, draftParam, selectSeq);
+      return true;
     };
     const backToCatalog = () => {
       stopTimer();
+      selectSeq += 1;
+      state.typeKey = null;
       state.draftId = null;
       state.draftStopped = false;
-      show('[data-form]', false);
-      show('[data-catalog]', true);
+      setPhase('catalog');
     };
+    const route = () => {
+      const q = new URLSearchParams(window.location.search);
+      const key = q.get('type');
+      if (!key || !selectType(key, q.get('draft'))) {
+        if (key) history.replaceState(null, '', '/applications/new');
+        backToCatalog();
+      }
+    };
+    window.addEventListener('popstate', route);
+    if (back) {
+      back.addEventListener('click', (e) => {
+        if (!state.typeKey) return; /* каталог → обычная ссылка на список */
+        e.preventDefault();
+        history.pushState(null, '', '/applications/new');
+        backToCatalog();
+        const first = document.querySelector('[data-catalog] .document-type');
+        if (first) first.focus();
+      });
+    }
 
     /* --- каталог и профиль (fetch; скелетон → данные | ошибка) --------- */
     const renderCatalog = (types) => {
       const box = document.querySelector('[data-catalog]');
-      if (!box) return;
-      box.replaceChildren();
-      types.forEach((t) => {
-        const row = el('button', 'document-type');
-        row.type = 'button';
-        row.append(document.createRange().createContextualFragment((t.key === 'thesis_topic' || t.key === 'other') ? ICON.pen : ICON.file));
-        const mid = el('div');
-        mid.append(el('h2', null, t.title || ''));
-        mid.append(el('p', null, TYPE_HINT[t.key] || ''));
-        row.append(mid);
-        row.append(document.createRange().createContextualFragment(ICON.arrow));
-        row.addEventListener('click', () => selectType(t.key, t.title || ''));
-        box.append(row);
+      const sel = document.querySelector('[data-type-select]');
+      if (box) box.replaceChildren();
+      if (sel) sel.replaceChildren();
+      types.forEach((ty) => {
+        if (box) {
+          const row = el('a', 'document-type');
+          row.href = '/applications/new?type=' + encodeURIComponent(ty.key);
+          row.append(document.createRange().createContextualFragment((ty.key === 'thesis_topic' || ty.key === 'other') ? ICON.pen : ICON.file));
+          const mid = el('div');
+          mid.append(el('h2', null, ty.title || ''));
+          mid.append(el('p', null, typeHint(ty.key)));
+          row.append(mid);
+          row.append(document.createRange().createContextualFragment(ICON.arrow));
+          row.addEventListener('click', (e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            history.pushState(null, '', row.getAttribute('href'));
+            selectType(ty.key, null);
+            if (heading) { heading.tabIndex = -1; heading.focus(); }
+          });
+          box.append(row);
+        }
+        if (sel) {
+          const o = el('option', null, ty.title || '');
+          o.value = ty.key;
+          sel.append(o);
+        }
       });
     };
+    const typeSelect = document.querySelector('[data-type-select]');
+    if (typeSelect) {
+      typeSelect.addEventListener('change', () => {
+        history.pushState(null, '', '/applications/new?type=' + encodeURIComponent(typeSelect.value));
+        selectType(typeSelect.value, null);
+      });
+    }
     const loadForm = async () => {
       show('[data-form-loading]', true);
       show('[data-catalog]', false);
-      show('[data-form]', false);
+      show('[data-paper]', false);
       show('[data-form-error]', false);
-      const [types, me] = await Promise.all([
-        fetchJSON('/v1/application-types'),
-        fetchJSON('/v1/me')
-      ]);
+      const [types, me] = await Promise.all([fetchJSON('/v1/application-types'), fetchJSON('/v1/me')]);
       show('[data-form-loading]', false);
       if (!types || !Array.isArray(types.types)) {
-        /* офлайн уже показал баннер (fetchJSON); ошибка API — экранная */
         show('[data-form-error]', true);
         return;
       }
+      state.types = types.types;
       renderCatalog(types.types);
-      show('[data-catalog]', true);
       if (me && me.profile) {
         const p = me.profile;
         const card = document.querySelector('[data-profile-card]');
@@ -2076,20 +2249,22 @@
           if (fio) fio.textContent = p.fio || '';
           const meta = document.querySelector('[data-profile-meta]');
           if (meta) {
-            meta.textContent = [p.course ? p.course + ' курс' : '', p.faculty || '', p.group ? 'группа ' + p.group : '']
+            meta.textContent = [p.course ? fill(t('apps.courseN', '{n} курс'), { n: p.course }) : '', p.faculty || '', p.group ? fill(t('apps.groupG', 'группа {g}'), { g: p.group }) : '']
               .filter(Boolean).join(' · ');
           }
           card.hidden = false;
         }
       }
+      route();
     };
     const formRetry = document.querySelector('[data-form-retry]');
     if (formRetry) formRetry.addEventListener('click', () => { loadForm(); });
-    const typeBack = document.querySelector('[data-type-back]');
-    if (typeBack) typeBack.addEventListener('click', backToCatalog);
     loadForm();
 
     /* --- кнопки формы --------------------------------------------------- */
+    const form = document.querySelector('[data-form]');
+    if (form) form.addEventListener('input', renderSummary);
+    if (form) form.addEventListener('change', renderSummary);
     const busy = (btn, on, busyLabel) => {
       if (!btn) return;
       if (on) {
@@ -2107,14 +2282,13 @@
       saveDraftBtn.addEventListener('click', async () => {
         if (!state.typeKey || saveDraftBtn.disabled) return;
         setFormError('');
-        const statusLine = document.querySelector('[data-draft-status]');
+        const line = statusLine();
         if (!navigator.onLine) { applyOffline(true); return; }
         if (state.draftStopped) {
-          /* 409 ранее: черновик уже не draft — сохранение бессмысленно */
-          setFormError('Черновик уже не черновик — изменение не сохраняется');
+          setFormError(t('apps.draftNotDraft', 'Черновик больше не черновик — правки не сохраняются'));
           return;
         }
-        busy(saveDraftBtn, true, 'Сохраняем…');
+        busy(saveDraftBtn, true, t('apps.draftSaving', 'Сохраняем…'));
         try {
           let ok = false;
           if (state.draftId) {
@@ -2123,50 +2297,46 @@
             const resp = await fetch('/v1/applications', {
               method: 'POST',
               headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                type: state.typeKey,
-                payload_json: JSON.stringify(collectPayload()),
-                submit: false
-              })
+              body: JSON.stringify({ type: state.typeKey, payload_json: JSON.stringify(collectPayload()), submit: false })
             });
             if (resp.ok) {
               const body = await resp.json();
               state.draftId = body && body.id;
               startAutosave();
               ok = true;
-            } else if (resp.status !== 409) {
-              ok = false;
             }
           }
           if (ok) {
-            toast('Черновик сохранён');
-            const t = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            if (statusLine) statusLine.textContent = 'Черновик сохранён · ' + t + ' · дальше сохраняем автоматически';
+            toast(t('toast.draftSaved', 'Черновик сохранён'));
+            /* бывшая локальная const t = new Date()… перекрывала функцию t() —
+               переименована (аудит D §0.3) */
+            const savedAt = nowHM();
+            if (line) line.textContent = fill(t('apps.draftSavedAt', 'Черновик сохранён · {t} · дальше сохраняем автоматически'), { t: savedAt });
           } else if (!navigator.onLine) {
-            applyOffline(true); /* каркас покажет баннер и helper на кнопке */
+            applyOffline(true);
           } else {
-            setFormError('Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз');
+            setFormError(t('apps.draftFailed', 'Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз'));
           }
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
+          else setFormError(t('apps.draftFailed', 'Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз'));
         } finally {
           busy(saveDraftBtn, false);
         }
       });
     }
-    const form = document.querySelector('[data-form]');
     if (form) {
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const submitBtn = form.querySelector('[data-submit-app]');
         if (!state.typeKey || (submitBtn && submitBtn.disabled)) return;
         setFormError('');
+        if (!validate()) return;
         if (!navigator.onLine) { applyOffline(true); return; }
         busy(submitBtn, true, t('toast.sending', 'Отправляем…'));
         try {
           /* 8.i (Р-29): есть живой черновик — подаём ЕГО одним PUT {payload_json,
-             submit:true} (синк полей + переход draft→submitted, без дубля-черновика);
-             409 «уже не черновик» — черновика больше нет, подаём новой POST-строкой. */
+             submit:true}; 409/404 — черновика больше нет, подаём новой POST-строкой. */
           let resp = null;
           if (state.draftId && !state.draftStopped) {
             resp = await fetch('/v1/applications/' + state.draftId, {
@@ -2176,7 +2346,7 @@
             });
             if (resp.ok) {
               stopTimer();
-              window.location.href = '/applications/' + state.draftId;
+              window.location.href = '/applications/' + state.draftId + '?submitted=1';
               return;
             }
             if (resp.status === 409 || resp.status === 404) { state.draftStopped = true; stopTimer(); resp = null; }
@@ -2184,31 +2354,25 @@
           if (!resp) resp = await fetch('/v1/applications', {
             method: 'POST',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: state.typeKey,
-              payload_json: JSON.stringify(collectPayload()),
-              submit: true
-            })
+            body: JSON.stringify({ type: state.typeKey, payload_json: JSON.stringify(collectPayload()), submit: true })
           });
           if (resp.ok) {
             const body = await resp.json();
-            window.location.href = '/applications/' + (body && body.id);
+            window.location.href = '/applications/' + (body && body.id) + '?submitted=1';
             return;
           }
-          let message = 'Заявка не отправилась';
+          let message = t('apps.submitFailed', 'Заявка не отправилась');
           try {
             const err = await resp.json();
             if (err && err.error && err.error.message) message = err.error.message;
           } catch (e) { /* тело не JSON */ }
-          if (state.draftId && !state.draftStopped) {
-            message += '. Черновик сохранён — попробуйте ещё раз, ничего не потеряется';
-          } else {
-            message += '. Проверьте интернет — и попробуем ещё раз';
-          }
+          message += '. ' + ((state.draftId && !state.draftStopped)
+            ? t('apps.submitDraftKept', 'Черновик сохранён — попробуйте ещё раз, ничего не потеряется')
+            : t('apps.submitCheckNet', 'Проверьте интернет — и попробуем ещё раз'));
           setFormError(message);
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
-          else setFormError('Заявка не отправилась. Проверьте интернет — и попробуем ещё раз');
+          else setFormError(t('apps.submitFailed', 'Заявка не отправилась') + '. ' + t('apps.submitCheckNet', 'Проверьте интернет — и попробуем ещё раз'));
         } finally {
           busy(submitBtn, false);
         }
