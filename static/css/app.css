@@ -916,6 +916,8 @@ button.chip{font:inherit;cursor:pointer}
 .lang-switch span{color:var(--text-2)}
 
 /* ---- стыки эталона v3 и прод-разметки (fe_rebuild) ---- */
+.app-card[hidden],.app-list[hidden]{display:none!important}
+.document-flow .section-title .button{flex:none}
 .ob-footer .button{white-space:nowrap}
 .htmx-indicator.skeleton{display:none}
 .htmx-request .htmx-indicator.skeleton,.htmx-request.htmx-indicator.skeleton{display:block;opacity:1}

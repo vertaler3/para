@@ -52,7 +52,9 @@ def chrome(css):
         return sel + '{' + body + '}'
     return re.sub(r'([^{}@]+)\{([^{}]*)\}', fix, css)
 
-FIXES = '''.ob-footer .button{white-space:nowrap}
+FIXES = '''.app-card[hidden],.app-list[hidden]{display:none!important}
+.document-flow .section-title .button{flex:none}
+.ob-footer .button{white-space:nowrap}
 .htmx-indicator.skeleton{display:none}
 .htmx-request .htmx-indicator.skeleton,.htmx-request.htmx-indicator.skeleton{display:block;opacity:1}
 a.notification,a.app-card,a.next-class,a.lesson,a.staff-change{text-decoration:none}

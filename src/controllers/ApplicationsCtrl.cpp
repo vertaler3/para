@@ -323,31 +323,39 @@ void ApplicationsCtrl::listPage(
 {
     // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
     const auto session = req->attributes()->get<para::SessionInfo>("session");
-    // query status — тот же фильтр, что у JSON API (значение из словаря
-    // CHECK DDL). НЕИЗВЕСТНОЕ — решение шага (см. шапку заголовка): 303 на
-    // /applications — страница не отвечает голым JSON, фильтр сбрасывается.
-    std::optional<std::string> statusFilter;
+    // query status (v3, шаг 12): группа фильтра списка ИЛИ прежнее значение
+    // словаря CHECK DDL — сводится к своей группе (ссылки ?status=need_info
+    // продолжают работать). Сервис отдаёт ПОЛНЫЙ список: фильтр и поиск —
+    // клиентские поверх SSR-карточек (app.js), группа только предвыбирает
+    // фильтр и скрывает лишние карточки на SSR. НЕИЗВЕСТНОЕ → 303.
     const std::string status = req->getParameter("status");
+    std::string group;
     if (!status.empty())
     {
-        bool known = false;
-        for (const auto& s : models::kApplicationStatuses)
-            if (s == status)
+        static const std::pair<const char*, const char*> kGroupOf[] = {
+            {"active", "active"},       {"reply", "reply"},
+            {"ready", "ready"},         {"issued", "issued"},
+            {"draft", "draft"},         {"closed", "closed"},
+            {"submitted", "active"},    {"accepted", "active"},
+            {"in_progress", "active"},  {"need_info", "reply"},
+            {"rejected", "closed"},     {"cancelled", "closed"}};
+        for (const auto& g : kGroupOf)
+            if (status == g.first)
             {
-                known = true;
+                group = g.second;
                 break;
             }
-        if (!known)
+        if (group.empty())
         {
             cb(HttpResponse::newRedirectionResponse("/applications",
                                                      k303SeeOther));
             return;
         }
-        statusFilter = status;
     }
     ApplicationsService::list(
-        app().getDbClient("para"), session.userId, statusFilter,
-        [cb = std::move(cb), status = statusFilter,
+        app().getDbClient("para"), session.userId,
+        std::nullopt,  // полный список (см. выше)
+        [cb = std::move(cb), group,
          lang = i18n::resolveRequestLang(req)](
             ApplicationsService::Result r) mutable {
             // 5.18 (шаг 3): язык — para_lang → Accept-Language → ru;
@@ -365,7 +373,7 @@ void ApplicationsCtrl::listPage(
             else
             {
                 data.insert("failed", std::string("0"));
-                data.insert("statusFilter", std::string(status ? *status : ""));
+                data.insert("statusFilter", group);
                 data.insert("bodyJson", pageJson(r.body));
             }
             cb(HttpResponse::newHttpViewResponse("applications",

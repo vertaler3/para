@@ -1780,9 +1780,54 @@
      фильтр ?status= — чипы-ссылки). Здесь только «Повторить» состояния
      ошибки: реально перезапрашивает — перезагрузка страницы (03 §5.3);
      офлайн обслуживает баннер каркаса (topbar + applyOffline, 03 §5.4). */
+  /* v3 (шаг 12): поиск по названию и витринному номеру (data-search карточки
+     — только то, что уже отрисовал сервер) + select групп статусов
+     (data-group, группы — шапка applications.csp); счётчик с plural
+     (data-one/few/many — словарь сервера), «Сбросить фильтры» → фокус в
+     поиск; группа синхронизируется с ?status= (replaceState). */
   if (document.body.dataset.page === 'applications') {
     const applicationsRetry = document.querySelector('[data-applications-retry]');
     if (applicationsRetry) applicationsRetry.addEventListener('click', () => window.location.reload());
+    const search = document.getElementById('application-search');
+    const filter = document.getElementById('application-filter');
+    const list = document.getElementById('application-list');
+    const count = document.querySelector('[data-apps-count]');
+    const filteredEmpty = document.querySelector('[data-apps-filtered-empty]');
+    const reset = document.querySelector('[data-apps-reset]');
+    if (search && filter && list) {
+      const cards = Array.from(list.querySelectorAll('.app-card'));
+      const norm = (v) => String(v || '').toLowerCase().replace(/ё/g, 'е').trim();
+      const plural = (n) => {
+        if (!count) return '';
+        if (LANG !== 'ru') return n === 1 ? count.dataset.one : count.dataset.many;
+        const m10 = n % 10, m100 = n % 100;
+        if (m10 === 1 && m100 !== 11) return count.dataset.one;
+        if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return count.dataset.few;
+        return count.dataset.many;
+      };
+      const render = () => {
+        const q = norm(search.value);
+        const g = filter.value;
+        let n = 0;
+        cards.forEach((card) => {
+          const ok = (!g || card.dataset.group === g) && (!q || norm(card.dataset.search).indexOf(q) !== -1);
+          card.hidden = !ok;
+          if (ok) n += 1;
+        });
+        list.hidden = n === 0;
+        if (filteredEmpty) filteredEmpty.hidden = n > 0;
+        if (count) count.textContent = n + ' ' + plural(n);
+      };
+      const syncUrl = () => {
+        const url = new URL(window.location.href);
+        if (filter.value) url.searchParams.set('status', filter.value); else url.searchParams.delete('status');
+        history.replaceState(null, '', url.pathname + url.search);
+      };
+      search.addEventListener('input', render);
+      filter.addEventListener('change', () => { syncUrl(); render(); });
+      if (reset) reset.addEventListener('click', () => { search.value = ''; filter.value = ''; syncUrl(); render(); search.focus(); });
+      render();
+    }
   }
 
   /* ---------- экран «Новая заявка» (views/application-form.csp; 03

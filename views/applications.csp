@@ -48,6 +48,18 @@
              живёт на /applications/new, где каталог типов грузится
              fetch-ом;
      офлайн — баннер каркаса (topbar + app.js applyOffline, 03 §5.4).
+   v3 (fe_rebuild шаг 12, applications.html + applications-states.html):
+   body.document-flow (правила листа эталона), .section-title «История
+   обращений» с CTA, .collection-toolbar (поиск по названию и витринному
+   номеру + select групп статусов), collection-count с plural (aria-live),
+   filtered-empty со «Сбросить фильтры». Сервис отдаёт ПОЛНЫЙ список;
+   ?status=<группа> (контроллер) предвыбирает select и скрывает лишние
+   карточки уже на SSR, дальше фильтрует app.js. Группы (каждый статус —
+   ровно в одной): active = submitted|accepted|in_progress, reply =
+   need_info, ready, issued, draft, closed = rejected|cancelled.
+   Витринный номер «З-2026-0001» = префикс apps.numberPrefix + год
+   created_at + id с нулями до 4 знаков (источником истины не является —
+   поля номера в API нет; та же формула в application.csp и app.js).
    PDF-кнопки в списке нет (03 §4.5.1 черновик показывал её в карточке
    «готова») — скачивание живёт в карточке заявки (роут
    /v1/applications/{id}/pdf, обработка 409 not_ready — app.js). */
@@ -56,7 +68,7 @@
 <!-- Каркасный head.csp подключает только CSS: app.js — сама страница
      (defer, локальный путь — AGENTS: без npm/CDN). -->
 <script defer src="/static/js/app.js"></script>
-<body data-page="applications">
+<body class="document-flow" data-page="applications">
 <%view topbar %>
 <main id="main" class="shell">
   <div class="page-heading">
@@ -64,7 +76,6 @@
       <h1><%c++ $$ << @@.get<std::string>("t.apps.title"); %></h1>
       <p><%c++ $$ << @@.get<std::string>("t.apps.subtitle"); %></p>
     </div>
-    <a class="button primary" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.new"); %></a>
   </div>
 <%c++
 const std::string failed = @@.get<std::string>("failed");
@@ -79,6 +90,7 @@ if (failed == "1") {
   <!-- Состояние «Ошибка» (03 §5.3): «Повторить» реально перезапрашивает —
        перезагрузка страницы (app.js, [data-applications-retry]). -->
   <div class="content-narrow">
+    <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.apps.history"); %></h2><a class="button primary" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.newShort"); %></a></div>
     <section class="section flow" role="alert">
       <h3><%c++ $$ << @@.get<std::string>("t.error.loadApplications"); %></h3>
       <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
@@ -162,30 +174,37 @@ const auto doneStages = [](const std::string& s) -> int {
     return 0;
 };
 %>
-  <div class="content-narrow">
-    <!-- Чипы-фильтры ?status= (03 §4.6: активный — primary-soft; ссылки —
-         SSR-фильтр страницы; aria-current подсвечивает активный) -->
-    <div class="chips section" aria-label="<%c++ $$ << @@.get<std::string>("t.apps.filterA11y"); %>">
-      <a class="chip" href="/applications"<%c++
-if (statusFilter.empty()) $$ << " aria-current=\"page\"";
-%>><%c++ $$ << @@.get<std::string>("t.common.all"); %></a>
 <%c++
-// Метки чипов — словарь CHECK DDL в порядке объявления (как в моделях);
-// подписи — строки словаря из view-данных (5.18, Р-16)
-const std::pair<const char*, const char*> kChips[] = {
-    {"draft", "apps.statusDraft"}, {"submitted", "apps.statusSubmitted"},
-    {"accepted", "apps.statusAccepted"}, {"in_progress", "apps.statusInProgress"},
-    {"need_info", "apps.statusNeedInfo"}, {"ready", "apps.statusReady"},
-    {"issued", "apps.statusIssued"}, {"rejected", "apps.statusRejected"},
-    {"cancelled", "apps.statusCancelled"}};
-for (const auto& c : kChips) {
-    const std::string key = c.first;
-    $$ << "<a class=\"chip\" href=\"/applications?status=" << c.first << "\"";
-    if (statusFilter == key) $$ << " aria-current=\"page\"";
-    $$ << ">" << esc(vstr(c.second)) << "</a>";
-}
+// Группа фильтра по статусу (см. шапку): каждый статус — ровно в одной
+const auto groupOf = [](const std::string& s) -> std::string {
+    if (s == "submitted" || s == "accepted" || s == "in_progress")
+        return "active";
+    if (s == "need_info") return "reply";
+    if (s == "rejected" || s == "cancelled") return "closed";
+    return s;  // ready | issued | draft
+};
+// Витринный номер «З-2026-0001» (см. шапку)
+const auto numberOf = [&vstr](const Json::Value& a) -> std::string {
+    std::string id = std::to_string(a["id"].asInt64());
+    while (id.size() < 4) id = "0" + id;
+    const std::string created = a["created_at"].asString();
+    const std::string year = created.size() >= 4 ? created.substr(0, 4) : "";
+    return vstr("apps.numberPrefix") + "-" + year + "-" + id;
+};
+const auto pluralOf = [&vstr, &uiLang](long n) -> std::string {
+    const long m10 = n % 10, m100 = n % 100;
+    if (uiLang == "ru")
+    {
+        if (m10 == 1 && m100 != 11) return vstr("plural.applicationOne");
+        if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14))
+            return vstr("plural.applicationFew");
+        return vstr("plural.applicationMany");
+    }
+    return vstr(n == 1 ? "plural.applicationOne" : "plural.applicationMany");
+};
 %>
-    </div>
+  <div class="content-narrow">
+    <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.apps.history"); %></h2><a class="button primary" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.newShort"); %></a></div>
 <%c++
 if (broken) {
 %>
@@ -196,48 +215,68 @@ if (broken) {
     </section>
 <%c++
 } else if (!hasApps) {
-    // Пустой список (03 §4.5.1 и §5.2 — тексты финальные). ДВА варианта
-    // (правки по ревью раунд 1): БЕЗ фильтра — «Заявок пока нет» с CTA
-    // «Открыть каталог» (03 §5.2:997); С АКТИВНЫМ фильтром — «По этой
-    // теме пока ничего не было» без CTA (03 §5.2:1000: заявки в других
-    // статусах есть — «заявок нет» вводило бы в заблуждение; выход —
-    // сбросить фильтр чипом «Все»).
+    // Пусто (applications-states.html #empty): заявок нет совсем — фильтр
+    // и поиск не рисуются, CTA «Открыть каталог» (03 §5.2:997).
 %>
     <div id="applications-root" data-state="empty">
       <div class="surface">
         <div class="empty">
           <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg></div>
-<%c++
-    if (!statusFilter.empty()) {
-%>
-          <p><%c++ $$ << @@.get<std::string>("t.common.emptyFilter"); %></p>
-<%c++
-    } else {
-%>
           <h2><%c++ $$ << @@.get<std::string>("t.dash.emptyApplications"); %></h2>
           <p><%c++ $$ << @@.get<std::string>("t.apps.emptyText"); %></p>
           <a class="button" href="/applications/new"><%c++ $$ << @@.get<std::string>("t.apps.openCatalog"); %></a>
-<%c++
-    }
-%>
         </div>
       </div>
     </div>
 <%c++
 } else {
-    // --- Данные (SSR): карточки списком, каждая — ссылка на карточку ----
+    // --- Данные (SSR): тулбар, счётчик, карточки-ссылки ----------------
+    const std::pair<const char*, const char*> kGroups[] = {
+        {"", "apps.filterAll"},         {"active", "apps.filterActive"},
+        {"reply", "apps.filterReply"},  {"ready", "apps.filterReady"},
+        {"issued", "apps.filterIssued"}, {"draft", "apps.filterDraft"},
+        {"closed", "apps.filterClosed"}};
+    long visible = 0;
+    for (const auto& a : apps)
+        if (statusFilter.empty() || groupOf(a["status"].asString()) == statusFilter)
+            ++visible;
 %>
+    <div class="collection-toolbar" role="search">
+      <div class="field">
+        <label for="application-search"><%c++ $$ << @@.get<std::string>("t.apps.searchLabel"); %></label>
+        <input id="application-search" type="search" autocomplete="off" placeholder="<%c++ $$ << @@.get<std::string>("t.apps.searchPlaceholder"); %>">
+      </div>
+      <div class="field">
+        <label for="application-filter"><%c++ $$ << @@.get<std::string>("t.apps.filterLabel"); %></label>
+        <select id="application-filter" name="status">
+<%c++
+    for (const auto& g : kGroups)
+    {
+        $$ << "<option value=\"" << g.first << "\"";
+        if (statusFilter == g.first) $$ << " selected";
+        $$ << ">" << esc(vstr(g.second)) << "</option>";
+    }
+%>
+        </select>
+      </div>
+    </div>
+    <p class="caption collection-count" aria-live="polite" data-apps-count data-one="<%c++ $$ << esc(vstr("plural.applicationOne")); %>" data-few="<%c++ $$ << esc(vstr("plural.applicationFew")); %>" data-many="<%c++ $$ << esc(vstr("plural.applicationMany")); %>"><%c++ $$ << visible << " " << esc(pluralOf(visible)); %></p>
     <div id="applications-root" data-state="data">
-      <div class="app-list">
+      <div class="app-list" id="application-list"<%c++ if (visible == 0) $$ << " hidden"; %>>
 <%c++
         for (const auto& a : apps)
         {
             const std::string st = a["status"].asString();
+            const std::string grp = groupOf(st);
             const int done = doneStages(st);
+            const std::string number = numberOf(a);
+            const std::string title = a["type_title"].asString();
             $$ << "<a class=\"app-card\" href=\"/applications/"
-               << a["id"].asInt64() << "\">";
-            $$ << "<div class=\"row wrap\"><h3>"
-               << esc(a["type_title"].asString()) << "</h3>";
+               << a["id"].asInt64() << "\" data-group=\"" << grp
+               << "\" data-search=\"" << esc(title + " " + number) << "\"";
+            if (!statusFilter.empty() && grp != statusFilter) $$ << " hidden";
+            $$ << ">";
+            $$ << "<div class=\"row wrap\"><h3>" << esc(title) << "</h3>";
             $$ << "<span class=\"badge " << badgeClass(st) << "\">"
                << esc(statusTitle(st)) << "</span></div>";
             // 5 стадий канонического пути (01 §4.4); aria-label читается
@@ -251,12 +290,30 @@ if (broken) {
                 $$ << "<span" << (i < done ? " class=\"done\"" : "")
                    << "></span>";
             $$ << "</div>";
-            $$ << "<p class=\"caption\">" << vstr("apps.from")
-               << (uiLang == "zh" ? "" : " ")
-               << esc(dayMonthOf(a["created_at"].asString())) << "</p>";
-            $$ << "</a>";
+            // Подпись эталона: номер · от даты · хвост по статусу (срок —
+            // ориентир, не SLA; у need_info текста вопроса в теле списка
+            // нет — честная подпись «деканат ждёт ваш ответ»)
+            std::string tail;
+            if (grp == "active") tail = vstr("apps.usualShort");
+            else if (grp == "reply") tail = vstr("apps.replyCaption");
+            else if (grp == "ready" || grp == "issued")
+                tail = a["payload"].isObject() &&
+                               a["payload"]["delivery"].isString() &&
+                               a["payload"]["delivery"].asString() == "office"
+                           ? vstr("apps.pickupOffice")
+                           : vstr("apps.docAvailable");
+            $$ << "<p class=\"caption\">" << esc(number) << " · "
+               << vstr("apps.from") << (uiLang == "zh" ? "" : " ")
+               << esc(dayMonthOf(a["created_at"].asString()));
+            if (!tail.empty()) $$ << " · " << esc(tail);
+            $$ << "</p></a>";
         }
 %>
+      </div>
+      <div class="empty filtered-empty" data-apps-filtered-empty<%c++ if (visible > 0) $$ << " hidden"; %>>
+        <h2><%c++ $$ << @@.get<std::string>("t.apps.filteredEmptyTitle"); %></h2>
+        <p><%c++ $$ << @@.get<std::string>("t.apps.filteredEmptyText"); %></p>
+        <button class="button" type="button" data-apps-reset><%c++ $$ << @@.get<std::string>("t.apps.resetFilters"); %></button>
       </div>
     </div>
 <%c++
