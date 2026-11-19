@@ -126,15 +126,16 @@ std::string pageJson(const Json::Value& body)
 // activeTab — серверные константы (02 §6.4). «Люди» — вложенный экран
 // (вход из sheet «Детали пары» расписания и поиска), НЕ пункт таб-бара —
 // пустой activeTab, как на /notifications.
-// 5.18 (шаг 3): строки словаря каркаса — в view-данные ДО рендера (Р-16);
-// тела secondary-экранов (люди/профиль человека) — по-русски, вне охвата
-// шага 3 (журнал): переведён только общий каркас (head/topbar/tabbar/footer).
-HttpViewData basePageData(const std::string& title,
+// 5.18 (шаг 3): строки словаря — в view-данные ДО рендера (Р-16);
+// fe_rebuild шаг 17: тела «Люди»/«Профиль человека» и заголовки вкладок
+// тоже на словаре (people.* / person.*; pageTitleOf).
+HttpViewData basePageData(std::string_view titleKey,
                           const HttpRequestPtr& req)
 {
     HttpViewData data;
-    i18n::insertUiStrings(data, i18n::resolveRequestLang(req));
-    data.insert("pageTitle", title);
+    const auto lang = i18n::resolveRequestLang(req);
+    i18n::insertUiStrings(data, lang);
+    data.insert("pageTitle", i18n::pageTitleOf(titleKey, lang));
     data.insert("activeTab", std::string(""));
     return data;
 }
@@ -151,7 +152,7 @@ void sendPersonPage(std::function<void(const HttpResponsePtr&)> cb,
                     std::string bodyJson,
                     const HttpRequestPtr& req)
 {
-    HttpViewData data = basePageData("Профиль · Пара", req);
+    HttpViewData data = basePageData("person.title", req);
     data.insert("mode", std::move(mode));
     data.insert("personId", std::move(personId));
     if (!bodyJson.empty())
@@ -170,7 +171,7 @@ void PeopleCtrl::searchPage(
     // Страница без данных (паттерн notifications.csp): каталог-поиск грузит
     // клиент — GET /v1/people/search из app.js (тот же JSON-роут выше);
     // сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
-    HttpViewData data = basePageData("Люди · Пара", req);
+    HttpViewData data = basePageData("people.title", req);
     cb(HttpResponse::newHttpViewResponse("people", std::move(data)));
 }
 

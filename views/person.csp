@@ -51,11 +51,16 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/people"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Люди</a>
+      <a class="back" href="/people"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
 <%c++
 const std::string mode = @@.get<std::string>("mode");
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
+};
+// 5.18 (fe_rebuild шаг 17): строки экрана — словарь t.person.* / t.people.*
+// из view-данных (Р-16; контроллер кладёт бандл insertUiStrings).
+const auto T = [&](const std::string& key) {
+    return @@.get<std::string>("t." + key);
 };
 // Инициалы аватара: первые буквы двух слов ФИО (верхний регистр уже в
 // данных сервера — и полных, и маскированных «И. Фамилия»).
@@ -107,7 +112,7 @@ const auto roomNoOf = [](const std::string& office) -> std::string {
     while (!room.empty() && room.back() == ' ') room.pop_back();
     return room;
 };
-std::string heading = "Профиль";
+std::string heading = T("person.title");
 Json::Value person(Json::objectValue);
 bool dataOk = false;
 if (mode == "data")
@@ -122,8 +127,15 @@ if (mode == "data")
              reader->parse(bodyJson.data(), bodyJson.data() + bodyJson.size(),
                            &person, &errs) &&
              person.isMember("role") && person.isMember("fio");
+    // v3 (person.html): h1 — «Профиль преподавателя/сотрудника/студента»,
+    // ФИО — h2 в .profile-summary ниже.
     if (dataOk)
-        heading = person["fio"].asString();
+    {
+        const std::string r = person["role"].asString();
+        heading = r == "teacher" ? T("person.headTeacher")
+                  : r == "staff" ? T("person.headStaff")
+                                 : T("person.headStudent");
+    }
 }
 $$ << "<h1>" << esc(heading) << "</h1>";
 %>
@@ -139,11 +151,11 @@ if (mode == "notfound")
     <div class="surface">
       <div class="empty">
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.6a4.5 4.5 0 0 1 5 4.4"/></svg></div>
-        <h2>Не нашли то, что искали</h2>
-        <p>Возможно, ссылка устарела. Преподавателей и студентов факультета найдёт поиск.</p>
+        <h2><%c++ $$ << @@.get<std::string>("t.person.notFoundTitle"); %></h2>
+        <p><%c++ $$ << @@.get<std::string>("t.person.notFoundText"); %></p>
         <div class="actions">
-          <a class="button" href="/people">Поиск людей</a>
-          <a class="button" href="/">На главную</a>
+          <a class="button" href="/people"><%c++ $$ << @@.get<std::string>("t.person.searchPeople"); %></a>
+          <a class="button" href="/"><%c++ $$ << @@.get<std::string>("t.common.toHome"); %></a>
         </div>
       </div>
     </div>
@@ -154,9 +166,9 @@ else if (mode == "dberror" || (mode == "data" && !dataOk))
     // Ошибка БД (fail-closed) или разбора тела — 03 §5.3:1013.
 %>
     <section class="section flow" role="alert">
-      <h3>Сервис не отвечает</h3>
-      <p class="muted">Мы уже знаем и чиним. Попробуйте через минуту.</p>
-      <button class="button" type="button" data-person-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.person.svcDownTitle"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.person.svcDownText"); %></p>
+      <button class="button" type="button" data-person-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
 <%c++
 }
@@ -206,47 +218,58 @@ else
             if (!sub.empty() && !dept.empty())
                 sub += " · " + dept;
             else if (dept.empty() && sub.empty())
-                sub = role == "staff" ? "Сотрудник" : "Преподаватель";
+                sub = role == "staff" ? T("people.roleStaff") : T("people.roleTeacher");
             else if (sub.empty())
                 sub = dept;
             $$ << esc(sub);
         }
         else
         {
-            $$ << "Студент" << (group.empty() ? "" : " · группа " + esc(group));
+            std::string groupLabel = T("people.groupN");
+            const auto gpos = groupLabel.find("{g}");
+            if (gpos != std::string::npos) groupLabel.replace(gpos, 3, group);
+            $$ << esc(T("people.roleStudent")) << (group.empty() ? "" : " · " + esc(groupLabel));
         }
         %></p>
 <%c++
     if (selfStudent)
     {
 %>
-        <p class="caption"><%c++ $$ << esc(faculty) << (hasCourse ? " · " + std::to_string(person["course"].asInt64()) + " курс" : ""); if (!program.empty()) $$ << " · " << esc(program); %></p>
+        <p class="caption"><%c++
+        std::string courseLabel = T("profile.course");
+        const auto npos = courseLabel.find("{n}");
+        if (npos != std::string::npos && hasCourse)
+            courseLabel.replace(npos, 3, std::to_string(person["course"].asInt64()));
+        $$ << esc(faculty) << (hasCourse ? " · " + esc(courseLabel) : "");
+        if (!program.empty()) $$ << " · " << esc(program); %></p>
+<%c++
+    }
+    if (staffLike)
+    {
+%>
+        <p class="caption"><%c++ $$ << T("person.fictional"); %></p>
 <%c++
     }
 %>
       </div>
     </div>
     <div class="section">
-      <div class="surface">
+      <div>
 <%c++
     if (!email.empty())
     {
 %>
+        <!-- v3 (person.html): почта строкой .list-row + icon-button
+             «Скопировать почту» (navigator.clipboard, тост — app.js);
+             mailto «Написать о консультации» с темой — у преподавателя и
+             сотрудника. Часы приёма и запись на консультацию эталона не
+             переносятся: таких данных нет. -->
         <div class="list-row">
           <div>
-            <strong><%c++ $$ << esc(email); %></strong>
-            <p>Почта вымышленная · домен @example.edu</p>
+            <strong data-person-email><%c++ $$ << esc(email); %></strong>
+            <p><%c++ $$ << (staffLike ? T("person.emailNote") : T("person.emailFake")); %></p>
           </div>
-<%c++
-        // «Написать» (mailto) — ветка преподавателя/сотрудника (постановка);
-        // у чужого студента почта показана без кнопки.
-        if (staffLike)
-        {
-%>
-          <a class="button" href="mailto:<%c++ $$ << esc(email); %>">Написать</a>
-<%c++
-        }
-%>
+          <button class="icon-button" type="button" data-copy-email="<%c++ $$ << esc(email); %>" aria-label="<%c++ $$ << T("person.copyEmail"); %>" title="<%c++ $$ << T("person.copyEmail"); %>"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>
         </div>
 <%c++
     }
@@ -258,9 +281,9 @@ else
         // до неё тап ловит временный guard app.js: честный тост вместо
         // 404, правки по ревью раунд 1).
 %>
-        <a class="list-row" href="/map/rooms?q=<%c++ $$ << esc(roomNoOf(office)); %>">
+        <a class="list-row" href="/map?q=<%c++ $$ << esc(roomNoOf(office)); %>">
           <div>
-            <strong>Кабинет · <%c++ $$ << esc(roomNoOf(office).empty() ? office : roomNoOf(office)); %></strong>
+            <strong><%c++ $$ << T("person.office"); %> · <%c++ $$ << esc(roomNoOf(office).empty() ? office : roomNoOf(office)); %></strong>
             <p><%c++ $$ << esc(office); %></p>
           </div>
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
@@ -270,32 +293,57 @@ else
     else if (!staffLike && group.empty())
     {
 %>
-        <div class="list-row"><div><strong>Группа</strong><p>—</p></div></div>
+        <div class="list-row"><div><strong><%c++ $$ << T("person.group"); %></strong><p>—</p></div></div>
 <%c++
     }
 %>
       </div>
+<%c++
+    if (staffLike && !email.empty())
+    {
+        // mailto с темой: тема — строка словаря, кодируется для URI
+        // (пробелы/кириллица/CJK → %XX), адрес — данные (htmlTranslate).
+        std::string subject;
+        static const char* hex = "0123456789ABCDEF";
+        for (const unsigned char c : T("person.consultSubject"))
+        {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.')
+                subject += static_cast<char>(c);
+            else
+            {
+                subject += '%';
+                subject += hex[c >> 4];
+                subject += hex[c & 15];
+            }
+        }
+%>
+      <div class="actions section">
+        <a class="button primary" href="mailto:<%c++ $$ << esc(email) << "?subject=" << subject; %>"><%c++ $$ << T("person.consult"); %></a>
+      </div>
+<%c++
+    }
+%>
     </div>
     <section class="section" data-person-schedule>
-      <div class="section-title"><h2 data-ps-title><%c++ $$ << (staffLike ? "Занятия" : "Расписание группы"); %></h2></div>
+      <div class="section-title"><h2 data-ps-title><%c++ $$ << (staffLike ? T("person.lessons") : T("person.groupSchedule")); %></h2></div>
 
       <!-- Скелетон (03 §5.1): 2 строки-карточки расписания -->
-      <div class="stack" data-ps-loading aria-busy="true" aria-label="Загрузка занятий">
+      <div class="stack" data-ps-loading aria-busy="true" aria-label="<%c++ $$ << T("person.loadingLessons"); %>">
         <div class="skeleton card"></div>
         <div class="skeleton card"></div>
       </div>
 
       <!-- Ошибка (03 §5.3): «Повторить» — повторный fetch schedule -->
       <section class="section flow" data-ps-error hidden role="alert">
-        <h3>Не получилось загрузить занятия</h3>
-        <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-        <button class="button" type="button" data-ps-retry>Повторить</button>
+        <h3><%c++ $$ << T("person.errorLessons"); %></h3>
+        <p class="muted"><%c++ $$ << T("error.checkInternet"); %></p>
+        <button class="button" type="button" data-ps-retry><%c++ $$ << T("common.retry"); %></button>
       </section>
 
       <!-- Пусто: текст по ветке данных (сотрудник — занятий нет честным
            пустым списком сервиса; студент — группа без пар) -->
       <div class="empty" data-ps-empty hidden>
-        <p><%c++ $$ << (staffLike ? "Занятий нет" : "В расписании группы пар нет"); %></p>
+        <p><%c++ $$ << (staffLike ? T("person.noLessons") : T("person.noGroupLessons")); %></p>
       </div>
 
       <!-- Дни и пары строит app.js (компоненты каркаса: caption дня +

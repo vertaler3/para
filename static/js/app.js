@@ -4877,16 +4877,26 @@
       return node;
     };
     const ARROW = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>';
-    const ROLE_LABEL = { teacher: 'Преподаватель', student: 'Студент', staff: 'Сотрудник' };
+    const ROLE_LABEL = {
+      teacher: ['people.roleTeacher', 'Преподаватель'],
+      student: ['people.roleStudent', 'Студент'],
+      staff: ['people.roleStaff', 'Сотрудник']
+    };
+    const roleLabel = (r) => (ROLE_LABEL[r] ? t(ROLE_LABEL[r][0], ROLE_LABEL[r][1]) : '');
+    const countEl = document.querySelector('[data-people-count]');
+    const setCount = (n) => {
+      if (!countEl) return;
+      countEl.textContent = n == null ? '' : t('people.found', 'Найдено: {n}').replace('{n}', String(n));
+    };
     const input = document.querySelector('[data-people-q]');
     const state = { q: '', role: '', seq: 0 };
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
     let debounce = 0;
 
     const subOf = (p) => {
-      const parts = [ROLE_LABEL[p.role] || ''];
+      const parts = [roleLabel(p.role)];
       if (p.role === 'student') {
-        if (p.group) parts.push('группа ' + p.group);
+        if (p.group) parts.push(t('people.groupN', 'группа {g}').replace('{g}', p.group));
       } else {
         if (p.title) parts.push(p.title);
         if (p.department) parts.push(p.department);
@@ -4917,6 +4927,7 @@
       show('[data-people-empty]', false);
       show('[data-people-error]', false);
       show('[data-people-results]', false);
+      setCount(null);
       const q = state.q.trim();
       /* Пустой запрос — «каталог». БЕЗ чипа роли — подсказка + преподаватели
          (первая страница search без q, role=teacher — пустой q сервис не
@@ -4948,9 +4959,11 @@
            нашли» честно: выход — сбросить фильтр (текст пустого состояния
            это и предлагает); подсказка при этом скрыта */
         if (browse) show('[data-people-hint]', false);
+        setCount(0);
         show('[data-people-empty]', true);
         return;
       }
+      if (!browse) setCount(data.people.length);
       if (browse) {
         renderInto(document.querySelector('[data-people-hint-list]'), data.people);
         return;
@@ -5009,21 +5022,26 @@
       if (text != null) node.textContent = text;
       return node;
     };
-    const KIND = { lecture: 'Лекция', seminar: 'Семинар', practice: 'Практика' };
+    const KIND = {
+      lecture: ['lesson.lecture', 'Лекция'],
+      seminar: ['lesson.seminar', 'Семинар'],
+      practice: ['lesson.practice', 'Практика']
+    };
+    const kindLabel = (k) => (KIND[k] ? t(KIND[k][0], KIND[k][1]) : '');
     const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '';
     const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
     /* день по календарной дате UTC проекта (без сдвига часового пояса) */
     const fmtDay = (ymd) => {
       const p = ymd.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
     /* «2 ноября» / для диапазона «Занятия 2–8 ноября» (черновик
        design-drafts/person.html) */
     const dayMonth = (ymd) => {
       const p = ymd.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
 
     const pageRetry = document.querySelector('[data-person-retry]');
@@ -5040,14 +5058,16 @@
       if (timeOf(e.ends_at)) time.append(el('span', null, timeOf(e.ends_at)));
       const mid = el('div');
       mid.append(el('div', 'lesson-subject', e.discipline || ''));
-      const detail = el('p', 'lesson-detail', KIND[e.kind] || '');
-      if (e.status === 'moved') detail.append(' ', el('span', 'badge warn', 'Перенос'));
-      if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+      const detail = el('p', 'lesson-detail', kindLabel(e.kind));
+      if (e.status === 'moved') detail.append(' ', el('span', 'badge warn', t('schedule.sheetChange', 'Перенос')));
+      if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', t('lesson.cancelled', 'Отменена')));
       mid.append(detail);
-      const room = el('div', 'lesson-room');
+      /* v3 (person.html): аудитория — ссылка на карту /map?q= (кроме отмены) */
+      const room = el(e.status !== 'cancelled' && e.room ? 'a' : 'div', 'lesson-room');
+      if (room.tagName === 'A') room.href = '/map?q=' + encodeURIComponent(e.room);
       if (e.status === 'cancelled') {
         room.append(el('s', null, e.room || '—'));
-        room.append(el('small', null, 'отменена'));
+        room.append(el('small', null, t('lesson.cancelled', 'Отменена').toLocaleLowerCase(LOCALE)));
       } else if (e.status === 'moved' && e.prev_room) {
         room.append(el('s', null, e.prev_room));
         room.append(document.createTextNode(' → ' + (e.room || '—')));
@@ -5086,11 +5106,13 @@
         const first = dateOf(data.events[0].starts_at);
         const last = dateOf(data.events[data.events.length - 1].starts_at);
         if (first && last) {
-          title.textContent = 'Занятия ' + (first === last
-            ? dayMonth(first)
-            : first.slice(0, 7) === last.slice(0, 7)
-              ? first.slice(8, 10).replace(/^0/, '') + '–' + dayMonth(last)
-              : dayMonth(first) + ' – ' + dayMonth(last));
+          /* диапазон — Intl formatRange по языку страницы («3–26 ноября»,
+             «3–26 November», «11月3日至26日»); без formatRange — «D – D» */
+          const d = (ymd) => { const p = ymd.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); };
+          const fmt = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
+          const range = first === last ? dayMonth(first)
+            : (typeof fmt.formatRange === 'function' ? fmt.formatRange(d(first), d(last)) : dayMonth(first) + ' – ' + dayMonth(last));
+          title.textContent = t('person.lessonsRange', 'Занятия {range}').replace('{range}', range);
         }
       }
       let current = '';
@@ -5109,6 +5131,22 @@
     };
     const psRetry = document.querySelector('[data-ps-retry]');
     if (psRetry) psRetry.addEventListener('click', () => loadSchedule());
+
+    /* v3 (person.html): «Скопировать почту» — navigator.clipboard + тост;
+       без доступа к буферу — выделение адреса и честный тост */
+    document.addEventListener('click', async (event) => {
+      const btn = event.target.closest && event.target.closest('[data-copy-email]');
+      if (!btn) return;
+      const email = btn.dataset.copyEmail || '';
+      try {
+        await navigator.clipboard.writeText(email);
+        toast(t('toast.emailCopied', 'Почта скопирована'));
+      } catch (e) {
+        const strong = document.querySelector('[data-person-email]');
+        if (strong) window.getSelection().selectAllChildren(strong);
+        toast(t('toast.copyFail', 'Не получилось скопировать — выделите текст вручную'));
+      }
+    });
 
     loadSchedule();
   }
