@@ -1,6 +1,7 @@
 #include "controllers/MapCtrl.h"
 
 #include "utils/I18nView.h"
+#include "utils/StaffRouting.h"
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
 
@@ -72,6 +73,7 @@ void MapCtrl::mapPage(const HttpRequestPtr& req,
     HttpViewData data;
     const auto lang = i18n::resolveRequestLang(req);
     i18n::insertUiStrings(data, lang);
+    para::insertStaffFlag(data, req);  // навигация сотрудника (Р-35)
     // v3 (шаг 5): тело экрана переведено (map.*), заголовок вкладки — из словаря.
     data.insert("pageTitle", i18n::pageTitleOf("campus.map", lang));
     // Экран НЕ таб (03 §3.1 — вход из профиля/профиля человека,

@@ -1,6 +1,7 @@
 #include "controllers/CanteensCtrl.h"
 
 #include "utils/I18nView.h"
+#include "utils/StaffRouting.h"
 #include <drogon/drogon.h>
 
 #include "services/CanteensService.h"
@@ -68,6 +69,7 @@ void CanteensCtrl::canteensPage(
     HttpViewData data;
     const auto lang = i18n::resolveRequestLang(req);
     i18n::insertUiStrings(data, lang);
+    para::insertStaffFlag(data, req);  // навигация сотрудника (Р-35)
     data.insert("pageTitle", i18n::pageTitleOf("campus.canteen", lang));
     // Экран НЕ таб (03 §3.1 — вход из профиля, 03 §4.9.6/5.13): пустой
     // activeTab — ни один пункт таб-бара не получает aria-current.

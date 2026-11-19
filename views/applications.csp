@@ -74,7 +74,6 @@
   <div class="page-heading">
     <div>
       <h1><%c++ $$ << @@.get<std::string>("t.apps.title"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.apps.subtitle"); %></p>
     </div>
   </div>
 <%c++

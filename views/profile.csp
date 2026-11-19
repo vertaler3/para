@@ -40,7 +40,6 @@
   <div class="page-heading">
     <div>
       <h1><%c++ $$ << @@.get<std::string>("t.profile.heading"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.profile.subtitle"); %></p>
     </div>
   </div>
   <div>

@@ -354,7 +354,10 @@
     getMe().then((me) => {
       const fio = me && me.profile && me.profile.fio ? String(me.profile.fio) : '';
       const parts = fio.trim().split(/\s+/).filter(Boolean);
-      const ini = parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2);
+      let ini = parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2);
+      /* сотрудник: студенческого профиля нет — инициалы из логина
+         («dean.demo» → «DE», как в списке демо-доступов входа, Р-35) */
+      if (!ini && me && typeof me.login === 'string') ini = me.login.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2);
       av.textContent = ini.toUpperCase();
     });
   })();
@@ -875,7 +878,8 @@
     if (metaEl) {
       getMe().then((me) => {
         const group = me && me.profile && me.profile.group ? String(me.profile.group) : '';
-        if (group) metaEl.textContent = group + ' · ' + t('dash.headingTail', 'всё важное на сегодня');
+        metaEl.textContent = group; /* фиксы 2026-11-19: без слогана-хвоста */
+        metaEl.hidden = !group;
       });
     }
     /* aria-busy секции виджета на время загрузки (dashboard-states.html:
@@ -1340,7 +1344,7 @@
       body.hidden = false;
       body.replaceChildren();
       rows.forEach((r) => {
-        const row = el('a', 'lesson');
+        const row = el('a', 'lesson' + (r.status === 'cancelled' || r.status === 'moved' ? ' ' + r.status : ''));
         row.href = r.href;
         const time = el('div', 'lesson-time');
         time.append(el('strong', null, r.time));
@@ -4283,7 +4287,7 @@
       const row = el('article', 'news-item');
       const bodyId = 'news-body-' + n.id;
       const head = el('div', 'news-head');
-      head.append(el('span', 'badge', newsCategory(n.category)));
+      head.append(el('span', 'badge', n.kind === 'announcement' ? t('notif.typeAnnouncement', 'Объявление') : newsCategory(n.category)));
       const pub = stampOf(n.published_at);
       if (pub) head.append(el('span', 'news-date', pub));
       row.append(head);
@@ -4299,7 +4303,7 @@
       }
       const full = el('div', 'news-full flow');
       full.hidden = true;
-      full.append(el('p', 'caption', [newsDayLabel(n.published_at), newsCategory(n.category)].filter(Boolean).join(' · ')));
+      full.append(el('p', 'caption', [newsDayLabel(n.published_at), n.kind === 'announcement' ? '' : newsCategory(n.category)].filter(Boolean).join(' · ')));
       const room = roomOf(n.location);
       if (room) {
         const actions = el('div', 'actions');
@@ -4349,7 +4353,15 @@
         show('[data-news-more]', false);
         show('[data-news-loading]', true);
       }
-      const data = await fetchJSON('/v1/news' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+      /* фиксы 2026-11-19: «Объявления» — лента деканата GET /v1/announcements
+         (тот же контракт cursor/next_cursor); строки приводятся к форме
+         новости: бейдж «Объявление», автор — в строке мета. */
+      const isAnn = newsState.mode === 'announcements';
+      const base = isAnn ? '/v1/announcements' : '/v1/news';
+      const raw = await fetchJSON(base + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+      const data = isAnn && raw && Array.isArray(raw.announcements)
+        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: a.author || '' })) }
+        : raw;
       show('[data-news-loading]', false);
       if (!data || !Array.isArray(data.news)) {
         /* офлайн: баннер уже показал каркас (fetchJSON); ошибка API —
@@ -4385,7 +4397,7 @@
     const initCurrentSegment = () => {
       const segBox = document.getElementById('notifications-segment');
       const seg = segBox && segBox.dataset.segment ? segBox.dataset.segment : 'notifications';
-      if (seg === 'news' || seg === 'events') {
+      if (seg === 'news' || seg === 'events' || seg === 'announcements') {
         newsState.mode = seg;
         newsState.cursor = null;
         newsState.items = [];
@@ -4957,39 +4969,41 @@
       if (qrClose) qrClose.addEventListener('click', () => qrDialog.close());
     }
 
-    /* --- выход (03 §4.7: диалог с danger-подтверждением; POST
-       /v1/auth/logout → 200 {ok} — сессия инвалидирована на сервере —
-       редирект /login). --- */
-    const logoutDialog = $('#logout-dialog');
-    const logoutOpen = $('[data-logout-open]');
-    if (logoutDialog && logoutOpen) {
-      logoutOpen.addEventListener('click', () => logoutDialog.showModal());
-      const logoutClose = logoutDialog.querySelector('[data-logout-close]');
-      if (logoutClose) logoutClose.addEventListener('click', () => logoutDialog.close());
-      const logoutConfirm = logoutDialog.querySelector('[data-logout-confirm]');
-      if (logoutConfirm) {
-        logoutConfirm.addEventListener('click', async () => {
-          if (logoutConfirm.disabled) return;
-          if (!navigator.onLine) { applyOffline(true); return; }
-          logoutConfirm.disabled = true;
-          logoutConfirm.textContent = t('profile.loggingOut', 'Выходим…');
-          let done = false;
-          try {
-            const resp = await fetch('/v1/auth/logout', {
-              method: 'POST',
-              headers: { Accept: 'application/json' }
-            });
-            done = resp.ok; /* 200 {ok:true} — сессия удалена (02 §5.2) */
-          } catch (e) { /* сеть ушла — баннер покажет каркас */ }
-          if (done) {
-            window.location.href = '/login';
-            return;
-          }
-          logoutConfirm.disabled = false;
-          logoutConfirm.textContent = t('profile.logout', 'Выйти');
-          toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
-        });
-      }
+
+  }
+
+  /* --- выход (общий: профиль студента и стол сотрудника, Р-35; 03 §4.7: диалог с danger-подтверждением; POST
+     /v1/auth/logout → 200 {ok} — сессия инвалидирована на сервере —
+     редирект /login). --- */
+  const logoutDialog = $('#logout-dialog');
+  const logoutOpen = $('[data-logout-open]');
+  if (logoutDialog && logoutOpen) {
+    logoutOpen.addEventListener('click', () => logoutDialog.showModal());
+    const logoutClose = logoutDialog.querySelector('[data-logout-close]');
+    if (logoutClose) logoutClose.addEventListener('click', () => logoutDialog.close());
+    const logoutConfirm = logoutDialog.querySelector('[data-logout-confirm]');
+    if (logoutConfirm) {
+      logoutConfirm.addEventListener('click', async () => {
+        if (logoutConfirm.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        logoutConfirm.disabled = true;
+        logoutConfirm.textContent = t('profile.loggingOut', 'Выходим…');
+        let done = false;
+        try {
+          const resp = await fetch('/v1/auth/logout', {
+            method: 'POST',
+            headers: { Accept: 'application/json' }
+          });
+          done = resp.ok; /* 200 {ok:true} — сессия удалена (02 §5.2) */
+        } catch (e) { /* сеть ушла — баннер покажет каркас */ }
+        if (done) {
+          window.location.href = '/login';
+          return;
+        }
+        logoutConfirm.disabled = false;
+        logoutConfirm.textContent = t('profile.logout', 'Выйти');
+        toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
+      });
     }
   }
 

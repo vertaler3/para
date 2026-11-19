@@ -1,6 +1,7 @@
 #include "controllers/PeopleCtrl.h"
 
 #include "utils/I18nView.h"
+#include "utils/StaffRouting.h"
 
 #include <json/json.h>
 
@@ -135,6 +136,7 @@ HttpViewData basePageData(std::string_view titleKey,
     HttpViewData data;
     const auto lang = i18n::resolveRequestLang(req);
     i18n::insertUiStrings(data, lang);
+    para::insertStaffFlag(data, req);  // навигация сотрудника (Р-35)
     data.insert("pageTitle", i18n::pageTitleOf(titleKey, lang));
     data.insert("activeTab", std::string(""));
     return data;

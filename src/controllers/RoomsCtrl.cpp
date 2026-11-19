@@ -1,6 +1,7 @@
 #include "controllers/RoomsCtrl.h"
 
 #include "utils/I18nView.h"
+#include "utils/StaffRouting.h"
 #include "services/OwnershipGuard.h"
 #include "services/RoomsService.h"
 #include "services/SessionService.h"  // utcNow — фильтр upcoming
@@ -365,6 +366,7 @@ void RoomsCtrl::roomsPage(const HttpRequestPtr& req,
     HttpViewData data;
     const auto lang = i18n::resolveRequestLang(req);
     i18n::insertUiStrings(data, lang);
+    para::insertStaffFlag(data, req);  // навигация сотрудника (Р-35)
     data.insert("pageTitle", i18n::pageTitleOf("rooms.title", lang));
     // Экран НЕ таб (03 §3.1 — вход по ghost-ссылке «Забронировать
     // аудиторию» шапки расписания, 03 §4.3/§4.9.5): пустой activeTab —

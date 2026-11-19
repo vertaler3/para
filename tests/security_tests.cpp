@@ -137,6 +137,7 @@
 #include "filters/CsrfCheck.h"
 #include "filters/SecurityHeaders.h"
 #include "utils/NotFoundPage.h"
+#include "utils/StaffRouting.h"
 #include "services/MigrationRunner.h"
 #include "services/PasswordHasher.h"
 #include "services/SessionService.h"
@@ -790,6 +791,7 @@ int main()
     para::SecurityHeaders::registerAdvice();
     // Страница «не найдено» v3 для SSR-путей (API — JSON-404 ниже).
     para::registerNotFoundPage();
+    para::registerStaffPageRedirects();
     // Неизвестные пути API — JSON 02 §5.1 (Э8 шаг 7, находка Э1-404-HTML) —
     // тот же вызов, что в main.cpp: regex-роут проверяется после
     // статических (проверка ниже: /v1/me сессией → 200, /v1/no-such →

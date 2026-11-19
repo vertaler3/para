@@ -45,7 +45,6 @@ const bool weekSeg = seg == "week";
   <div class="page-heading">
     <div>
       <h1 data-schedule-heading><%c++ $$ << @@.get<std::string>(weekSeg ? "t.schedule.weekTitle" : "t.nav.schedule"); %></h1>
-      <p data-schedule-lead><%c++ $$ << @@.get<std::string>(weekSeg ? "t.schedule.weekLead" : "t.schedule.subtitle"); %></p>
     </div>
   </div>
   <!-- Состояние «Загрузка» (schedule-states.html#loading): скелетон —

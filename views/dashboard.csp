@@ -56,9 +56,8 @@
     <div>
       <p class="eyebrow" data-today-date><%c++ $$ << @@.get<std::string>("t.nav.today"); %></p>
       <h1 class="serif"><span data-greeting><%c++ $$ << @@.get<std::string>("t.dash.greetingAfternoon"); %></span><span data-greeting-tail hidden>, <span data-account-short></span></span>.</h1>
-      <p data-dash-meta><%c++ $$ << @@.get<std::string>("t.dash.heading"); %></p>
+      <p data-dash-meta hidden></p>
     </div>
-    <div class="greeting-note"><%c++ $$ << @@.get<std::string>("t.dash.noteLine1"); %><br><%c++ $$ << @@.get<std::string>("t.dash.noteLine2"); %></div>
   </div>
   <!-- ==== Онбординг С5 (Э7 «Профиль», 03 §4.7/§4.9.4): чеклист «4 шага»
        поверх «Сейчас важно» при незавершённом onboarding_json — показывает

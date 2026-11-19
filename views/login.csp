@@ -59,23 +59,18 @@
 <circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
 </g>
 </svg></a>
-    <p class="entry-university-name"><strong><%c++ $$ << @@.get<std::string>("t.login.uniName"); %></strong><%c++ $$ << @@.get<std::string>("t.login.uniSub"); %></p>
   </div>
 </header>
 <div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>
 <main id="main" class="shell">
   <div class="entry-composition">
     <section class="university-stage" aria-label="<%c++ $$ << @@.get<std::string>("t.login.uniName"); %>">
-      <div class="university-stage-meta"><span><%c++ $$ << @@.get<std::string>("t.login.uniName"); %></span><span><%c++ $$ << @@.get<std::string>("t.login.uniMotto"); %></span></div>
       <span class="university-display" aria-hidden="true"><%c++ $$ << @@.get<std::string>("t.login.uniDisplay"); %></span>
-      <img class="university-emblem" src="/static/img/meridian-emblem.png" width="600" height="600" alt="<%c++ $$ << @@.get<std::string>("t.login.emblemAlt"); %>" fetchpriority="high">
-      <div class="university-stage-bottom"><p><%c++ $$ << @@.get<std::string>("t.login.lead"); %></p><span><%c++ $$ << @@.get<std::string>("t.shell.semester"); %></span></div>
+      <img class="university-emblem" src="/static/img/meridian-emblem.png" width="600" height="600" alt="" fetchpriority="high">
     </section>
     <div class="entry-panel">
       <div class="entry-panel-heading">
-        <p class="eyebrow"><%c++ $$ << @@.get<std::string>("t.login.subtitle"); %></p>
         <h1><%c++ $$ << @@.get<std::string>("t.login.formTitle"); %></h1>
-        <p><%c++ $$ << @@.get<std::string>("t.login.heading"); %><br><%c++ $$ << @@.get<std::string>("t.login.leadSecond"); %></p>
       </div>
       <form id="login-form" class="surface" method="post" action="/v1/auth/login" novalidate>
         <div class="field">

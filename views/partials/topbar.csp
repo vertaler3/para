@@ -10,7 +10,9 @@
    Подпись сайдбара «Моё пространство» — data-heading из словаря (в CSS эталона
    она была зашита по-русски — Р-31(д)). Строки — t.<key> из view-данных
    (Р-16: insertUiStrings ДО рендера). Вход сотрудника (staffEntry="1" — роль ИЗ
-   СЕССИИ сервера, DashboardCtrl/StaffCtrl) — staff-label + staff-nav, как раньше.
+   СЕССИИ сервера, utils/StaffRouting insertStaffFlag) — СВОЯ primary-nav (стол,
+   новости, объявления, люди, карта) вместо студенческой; студенческие страницы
+   сотруднику — 303 /staff (Р-35, фиксы 2026-11-19).
    Бывший partials/tabbar.csp — пустой совместимый партиал (primary-nav теперь здесь). */
 const std::string activeTab = @@.get<std::string>("activeTab");
 const std::string staffEntry = @@.get<std::string>("staffEntry");
@@ -37,6 +39,15 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
 <circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
 </g>
 </svg></a>
+<%c++ if (staffEntry == "1") { %>
+    <nav class="primary-nav staff-primary-nav" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.staffNav"); %>" data-heading="<%c++ $$ << @@.get<std::string>("t.staff.office"); %>">
+    <a class="nav-link" data-nav="staff" href="/staff"<%c++ if(activeTab=="staff") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/></svg><span><%c++ $$ << @@.get<std::string>("t.staff.desk"); %></span></a>
+    <a class="nav-link" data-nav="news" href="/notifications?segment=news"<%c++ if(activeTab=="news") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8V6Z"/></svg><span><%c++ $$ << @@.get<std::string>("t.notif.news"); %></span></a>
+    <a class="nav-link" data-nav="announcements" href="/notifications?segment=announcements"<%c++ if(activeTab=="announcements") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.announcements"); %></span></a>
+    <a class="nav-link" data-nav="people" href="/people"<%c++ if(activeTab=="people") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1a6.5 6.5 0 0 1 13 0v1M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 5.5V20"/></svg><span><%c++ $$ << @@.get<std::string>("t.profile.people"); %></span></a>
+    <a class="nav-link" data-nav="map" href="/map"<%c++ if(activeTab=="map") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6ZM9 3v15M15 6v15"/></svg><span><%c++ $$ << @@.get<std::string>("t.campus.map"); %></span></a>
+    </nav>
+<%c++ } else { %>
     <nav class="primary-nav" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.primaryNav"); %>" data-heading="<%c++ $$ << @@.get<std::string>("t.shell.workspace"); %>">
     <a class="nav-link" data-nav="today" href="/"<%c++ if(activeTab=="today") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.today"); %></span></a>
     <a class="nav-link" data-nav="schedule" href="/schedule"<%c++ if(activeTab=="schedule") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h1M15 15h1"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %></span></a>
@@ -44,11 +55,8 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
     <a class="nav-link" data-nav="applications" href="/applications"<%c++ if(activeTab=="applications") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></span></a>
     <a class="nav-link" data-nav="profile" href="/profile"<%c++ if(activeTab=="profile") $$ << " aria-current=\"page\""; %>><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.profile"); %></span></a>
     </nav>
-<%c++ if (staffEntry == "1") { %>
-    <span class="staff-label"><%c++ $$ << @@.get<std::string>("t.staff.office"); %></span>
-    <nav class="staff-nav" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.staffNav"); %>" data-heading="<%c++ $$ << @@.get<std::string>("t.staff.office"); %>"><a href="/staff"<%c++ if(activeTab=="staff") $$ << " aria-current=\"page\""; %>><%c++ $$ << @@.get<std::string>("t.staff.desk"); %></a></nav>
 <%c++ } %>
-    <div class="workspace-label"><span><%c++ $$ << @@.get<std::string>("t.shell.workspace"); %></span><span class="workspace-period"><%c++ $$ << @@.get<std::string>("t.shell.semester"); %></span></div>
+    <div class="workspace-label"><span><%c++ $$ << @@.get<std::string>(staffEntry == "1" ? "t.staff.office" : "t.shell.workspace"); %></span><span class="workspace-period"><%c++ $$ << @@.get<std::string>("t.shell.semester"); %></span></div>
     <div class="header-actions">
       <button type="button" class="icon-button workspace-search" data-search-open aria-label="<%c++ $$ << @@.get<std::string>("t.search.aria"); %>" aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span class="workspace-search-label"><%c++ $$ << @@.get<std::string>("t.search.button"); %></span></button>
       <span class="header-date" data-header-date></span>
@@ -56,16 +64,19 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
         <span class="notification-count" data-unread-badge hidden></span>
       </a>
-      <a class="avatar" href="/profile" data-avatar aria-label="<%c++ $$ << @@.get<std::string>("t.common.openProfile"); %>"></a>
+      <a class="avatar" href="<%c++ $$ << (staffEntry == "1" ? "/staff#account" : "/profile"); %>" data-avatar aria-label="<%c++ $$ << @@.get<std::string>("t.common.openProfile"); %>"></a>
     </div>
     <nav class="campus-nav" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.campusNav"); %>">
       <p><%c++ $$ << @@.get<std::string>("t.campus.title"); %></p>
+<%c++ if (staffEntry != "1") { %>
+      <a href="/notifications?segment=news" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8V6Z"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.newsEvents"); %></span></a>
+      <a href="/notifications?segment=announcements" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg><span><%c++ $$ << @@.get<std::string>("t.nav.announcements"); %></span></a>
+<%c++ } %>
       <a href="/library" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h7a2 2 0 0 1 2 2v15a3 3 0 0 0-3-2H3V4Zm18 0h-7a2 2 0 0 0-2 2v15a3 3 0 0 1 3-2h6V4Z"/></svg><span><%c++ $$ << @@.get<std::string>("t.campus.library"); %></span></a>
       <a href="/canteens" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v7a3 3 0 0 0 6 0V3M7 3v18M20 3c-4 2-5 5-5 9h5V3Zm0 9v9"/></svg><span><%c++ $$ << @@.get<std::string>("t.campus.canteen"); %></span></a>
       <a href="/map" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6ZM9 3v15M15 6v15"/></svg><span><%c++ $$ << @@.get<std::string>("t.campus.map"); %></span></a>
       <a href="/rooms" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16M2 21h20M14 12h1"/></svg><span><%c++ $$ << @@.get<std::string>("t.campus.rooms"); %></span></a>
       <a href="/people" data-campus-link><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1a6.5 6.5 0 0 1 13 0v1M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 5.5V20"/></svg><span><%c++ $$ << @@.get<std::string>("t.profile.people"); %></span></a>
-      <div class="sidebar-foot"><%c++ $$ << @@.get<std::string>("t.shell.sidebarFoot"); %><br><span><%c++ $$ << @@.get<std::string>("t.shell.tagline"); %></span></div>
     </nav>
   </div>
 </header>
@@ -80,20 +91,43 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
   <input type="search" id="quick-search-input" data-search-input placeholder="<%c++ $$ << @@.get<std::string>("t.search.placeholder"); %>" autocomplete="off">
   <p class="caption" id="quick-search-count" aria-live="polite" data-search-count data-one="<%c++ $$ << @@.get<std::string>("t.search.countOne"); %>" data-few="<%c++ $$ << @@.get<std::string>("t.search.countFew"); %>" data-many="<%c++ $$ << @@.get<std::string>("t.search.countMany"); %>"></p>
   <ul id="quick-search-results" class="quick-search-results" data-search-list>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/"><strong><%c++ $$ << @@.get<std::string>("t.nav.today"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dToday"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/schedule"><strong><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dSchedule"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/schedule?segment=week"><strong><%c++ $$ << @@.get<std::string>("t.schedule.weekStrip"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dSchedule"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/grades"><strong><%c++ $$ << @@.get<std::string>("t.nav.grades"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dGrades"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/gradebook"><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dGradebook"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/rating"><strong><%c++ $$ << @@.get<std::string>("t.profile.rating"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dRating"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/applications"><strong><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dApps"); %></span></a></li>
+<%c++ } %>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/applications/new"><strong><%c++ $$ << @@.get<std::string>("t.apps.formTitle"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNewApp"); %></span></a></li>
+<%c++ } %>
     <li data-search-item><a href="/rooms"><strong><%c++ $$ << @@.get<std::string>("t.campus.rooms"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dRooms"); %></span></a></li>
     <li data-search-item><a href="/map"><strong><%c++ $$ << @@.get<std::string>("t.campus.map"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dMap"); %></span></a></li>
     <li data-search-item><a href="/library"><strong><%c++ $$ << @@.get<std::string>("t.campus.library"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dLibrary"); %></span></a></li>
     <li data-search-item><a href="/canteens"><strong><%c++ $$ << @@.get<std::string>("t.campus.canteen"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dCanteen"); %></span></a></li>
+    <li data-search-item><a href="/notifications?segment=news"><strong><%c++ $$ << @@.get<std::string>("t.nav.newsEvents"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNotif"); %></span></a></li>
+    <li data-search-item><a href="/notifications?segment=announcements"><strong><%c++ $$ << @@.get<std::string>("t.nav.announcements"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNotif"); %></span></a></li>
+<%c++ if (staffEntry == "1") { %>
+    <li data-search-item><a href="/staff"><strong><%c++ $$ << @@.get<std::string>("t.staff.desk"); %></strong><span><%c++ $$ << @@.get<std::string>("t.staff.office"); %></span></a></li>
+<%c++ } %>
     <li data-search-item><a href="/notifications"><strong><%c++ $$ << @@.get<std::string>("t.notif.title"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dNotif"); %></span></a></li>
+<%c++ if (staffEntry != "1") { %>
     <li data-search-item><a href="/profile"><strong><%c++ $$ << @@.get<std::string>("t.nav.profile"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dProfile"); %></span></a></li>
+<%c++ } %>
     <li data-search-item><a href="/people"><strong><%c++ $$ << @@.get<std::string>("t.profile.people"); %></strong><span><%c++ $$ << @@.get<std::string>("t.search.dPeople"); %></span></a></li>
     <li class="search-no-results" data-search-empty hidden><%c++ $$ << @@.get<std::string>("t.search.empty"); %></li>
   </ul>

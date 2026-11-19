@@ -1021,3 +1021,40 @@ body[data-page=rooms] .calendar-toolbar{justify-content:flex-start;margin-bottom
 body[data-page=rooms] .rooms-room-line{margin:0 0 1.5rem;display:flex;flex-wrap:wrap;gap:.25rem 1rem}
 .room-slot.mine{cursor:pointer}
 .booking-summary .notice{margin:0}
+/* ---- фиксы 2026-11-19 (Р-35) ---- */
+/* Вход: один цвет фона; эмблема и «МЕРИДИАН» — полупрозрачный фон по центру, форма поверх */
+body[data-page=login],body[data-page=login] .site-header,body[data-page=login] .footer{background:var(--bg)}
+body[data-page=login] .site-header{border-bottom:0}
+body[data-page=login] .entry-composition{position:relative;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;max-width:none;min-height:calc(100vh - 200px);background:var(--clear)}
+body[data-page=login] .university-stage{position:fixed;inset:0;z-index:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;height:auto;border-radius:0;background:var(--clear);opacity:.11;pointer-events:none;overflow:hidden}
+body[data-page=login] .university-stage:before{display:none}
+body[data-page=login] .university-display{position:static;z-index:auto;font-size:clamp(3rem,11vw,9rem);line-height:1;margin:0}
+body[data-page=login] .university-emblem{width:min(78vw,560px);height:auto;margin:-.5rem 0 0}
+body[data-page=login] .site-header,body[data-page=login] .footer{position:relative;z-index:1}
+body[data-page=login] .entry-panel{position:relative;z-index:1;width:min(100%,420px);padding:2rem 0;border-radius:0;background:var(--clear);display:block}
+body[data-page=login] .entry-panel input{background:var(--surface);border:1px solid var(--border)}
+body[data-page=login] .entry-panel-heading{margin-bottom:1.5rem;text-align:center}
+@media(max-width:679px){body[data-page=login] .shell{padding:0 16px 12px}body[data-page=login] .entry-composition{min-height:calc(100vh - 160px)}body[data-page=login] .university-emblem{width:92vw}body[data-page=login] .entry-panel{padding:1rem 0}}
+/* Отменённая пара: красная, все данные зачёркнуты (метка «· Отменена» — без зачёркивания) */
+body .lesson.cancelled,body .week-board .lesson.cancelled{background:var(--danger-bg);box-shadow:inset 3px 0 0 0 var(--danger-text)}
+body .lesson.cancelled :is(.lesson-time strong,.lesson-time span,.lesson-subject,.lesson-open,.lesson-detail,.lesson-room,.lesson-room small,.lesson-room s){text-decoration:line-through;color:var(--danger-text)}
+body .lesson.cancelled .event-change{display:inline-block;text-decoration:none}
+body .week-board .lesson.moved{box-shadow:inset 3px 0 0 0 var(--danger-text)}
+/* Неделя на телефоне/планшете (<1200): список без цветной подложки, карточка дня на всю ширину */
+@media(max-width:1199px){
+ body .week-board .schedule-list{padding:0 .875rem}
+ body .week-board .lesson{background:var(--clear);border-radius:0;margin:0;padding:.875rem 0;border:0;border-bottom:1px solid var(--border)}
+ body .week-board .lesson:last-child{border-bottom:0}
+ body .week-board .lesson.moved,body .week-board .lesson.cancelled{background:var(--danger-bg);margin:0 -.875rem;padding:.875rem;border-radius:0}
+ body .week-board .lesson-time strong{font-size:.95rem}
+ body .week-board .lesson-subject,body .week-board .lesson-open{font-size:.95rem;line-height:1.3}
+ body .week-board .lesson-detail{font-size:.8rem}
+ body .week-board .lesson-room{font-size:.9rem}
+ body .week-board .day-group{margin-bottom:1rem}
+}
+@media(max-width:649px){.calendar-axis{display:none}}
+/* Таб-бар (<1024) не перекрывает низ страницы: футер с выбором темы виден целиком */
+@media(max-width:1023px){body:not(.entry-page){padding-bottom:calc(84px + env(safe-area-inset-bottom))}}
+/* Навигация сотрудника: на ≥1100 «Люди»/«Карта» уже в «В кампусе» — в верхнем блоке не дублируются; таб-бар <1024 — подписи без переноса по слогам */
+@media(min-width:1100px){.staff-primary-nav .nav-link:is([data-nav=people],[data-nav=map]){display:none}}
+@media(max-width:1023px){.staff-primary-nav .nav-link span{font-size:.62rem;line-height:1.15;text-align:center;overflow-wrap:normal;word-break:normal;hyphens:none}}

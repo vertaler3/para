@@ -49,6 +49,15 @@ void DashboardCtrl::page(const HttpRequestPtr& req,
             // нечего (02 §6.4, как views/login.csp).
             // 5.18 (шаг 3): строки словаря — ДО рендера (Р-16), язык
             // резолвится по запросу (para_lang → Accept-Language → ru).
+            // Фиксы 2026-11-19 (Р-35): у сотрудника нет студенческого
+            // «Сегодня» (группы/профиля студента нет, Р-6) — его стартовый
+            // экран «Стол сотрудника». Роль — из сессии сервера (02 §6.3).
+            if (session->role == "staff")
+            {
+                cb(HttpResponse::newRedirectionResponse("/staff",
+                                                        k303SeeOther));
+                return;
+            }
             HttpViewData data;
             i18n::insertUiStrings(data, lang);
             data.insert("pageTitle", i18n::pageTitleOf("nav.today", lang));
