@@ -90,12 +90,12 @@ void renderRatingPage(std::function<void(const HttpResponsePtr&)> cb,
     RatingService::rating(
         db, requester, std::nullopt, 0,
         [cb = std::move(cb), lang](RatingService::Result r) mutable {
-            // 5.18 (шаг 3): каркас — словарь (тело рейтинга — ru).
+            // 5.18: каркас и тело рейтинга — словарь (fe_rebuild v3, шаг 11).
             HttpViewData data;
             i18n::insertUiStrings(data, lang);
             // Каркасные view-данные (partials head/topbar/tabbar) —
             // серверные константы (02 §6.4).
-            data.insert("pageTitle", std::string("Рейтинг · Пара"));
+            data.insert("pageTitle", i18n::pageTitleOf("rating.title", lang));
             data.insert("activeTab", std::string("grades"));
             if (r.status == RatingService::Status::Ok)
             {
@@ -138,7 +138,7 @@ void RatingCtrl::ratingPage(const HttpRequestPtr& req,
                 // ошибки страницы, не данные (03 §5.3, fail-closed).
                 HttpViewData data;
                 i18n::insertUiStrings(data, lang);
-                data.insert("pageTitle", std::string("Рейтинг · Пара"));
+                data.insert("pageTitle", i18n::pageTitleOf("rating.title", lang));
                 data.insert("activeTab", std::string("grades"));
                 data.insert("failed", std::string("1"));
                 cb(HttpResponse::newHttpViewResponse("rating",

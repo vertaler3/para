@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+
+<html lang="ru"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><title>Вход · Пара</title><meta content="Войти в кабинет. Учебное пространство Пара: демонстрационный прототип с вымышленными персональными данными." name="description"/><meta content="noindex, nofollow" name="robots"/><meta content="#162256" name="theme-color"/><link rel="stylesheet" href="../assets/prototype.css"><link rel="icon" href="data:,"></head>
+<body class="entry-page" data-page="login">
+<a class="skip" href="#main">К содержимому</a>
+<header class="site-header"><div class="header-inner"><a aria-label="Пара, главная" class="brand" href="index.html"><svg aria-hidden="true" class="para-wordmark" color="#162256" fill="none" focusable="false" viewbox="0 0 306 120" xmlns="http://www.w3.org/2000/svg">
+<g aria-hidden="true" class="para-wordmark__guides" opacity=".38" stroke="currentColor" stroke-width=".75">
+<path d="M10 27H296M10 88H296M20 14V112M89 14V101M104 14V101M160 14V101M177 14V101M226 14V101M242 14V101M291 14V101" stroke-dasharray="2 5"></path>
+<path d="M40 22H75M33 57V76M53 93H76M104 57V77M114 23H147M179 32H211M235 22H275M237 57V76"></path>
+</g>
+<g class="para-wordmark__letters" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" stroke-width="7">
+<path d="M22 108V29M23 57C23 17 85 17 85 57S23 97 23 57Z"></path>
+<path d="M157 30V87M157 57C157 17 103 17 103 57S157 97 157 57Z"></path>
+<path d="M181 87V29M181 55C181 34 196 26 215 30"></path>
+<path d="M288 30V87M288 57C288 17 234 17 234 57S288 97 288 57Z"></path>
+</g>
+<g aria-hidden="true" class="para-wordmark__nodes" fill="var(--surface,#FFFFFF)" stroke="currentColor" stroke-width="1.2">
+<rect height="6" width="6" x="19" y="26"></rect><rect height="6" width="6" x="19" y="105"></rect>
+<circle cx="54" cy="27" r="2.8"></circle><circle cx="85" cy="57" r="2.8"></circle><circle cx="54" cy="87" r="2.8"></circle>
+<circle cx="103" cy="57" r="2.8"></circle><circle cx="130" cy="27" r="2.8"></circle><rect height="6" width="6" x="154" y="84"></rect>
+<rect height="6" width="6" x="178" y="26"></rect><circle cx="215" cy="30" r="2.8"></circle>
+<circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
+</g>
+</svg></a><p class="entry-university-name"><strong>Университет Меридиан</strong>Цифровое пространство студента</p><a class="entry-demo-link" href="dashboard.html">Посмотреть кабинет <span aria-hidden="true">↗</span></a></div></header>
+<div class="offline-banner" hidden="" id="offline-banner" role="status">Нет сети. Данные на 4 ноября, 09:35 · доступен просмотр</div>
+<main class="shell" id="main"><div class="entry-composition">
+<section aria-label="Вымышленный университет Меридиан" class="university-stage">
+<div class="university-stage-meta"><span>Университет Меридиан</span><span>Учиться. Исследовать. Открывать.</span></div>
+<span aria-hidden="true" class="university-display">МЕРИДИАН</span>
+<img alt="Знак вымышленного Университета Меридиан: арка, меридианы и открытая книга" class="university-emblem" fetchpriority="high" height="1280" src="../assets/img/login-1e55cae4.png" width="1280"/>
+<div class="university-stage-bottom"><p>Расписание, учёба и дела в кампусе — в одном месте.</p><span>Осенний семестр<br/>2026</span></div>
+</section>
+<div class="entry-panel">
+<div class="entry-panel-heading"><p class="eyebrow">Ваш студенческий кабинет</p><h1>Войти в кабинет</h1><p>Хороший день начинается с ясности.<br/>Продолжим с того, что важно сегодня.</p></div>
+<form class="surface" id="login-form" novalidate=""><div class="field"><label for="login">Логин</label><input aria-describedby="login-help login-error" autocomplete="username" id="login" name="login" value="anya.demo"/><p class="field-error" hidden="" id="login-error" role="alert"></p></div><div class="field"><label for="password">Пароль</label><div class="password-wrap"><input aria-describedby="password-error" autocomplete="current-password" id="password" name="password" type="password"/><button aria-label="Показать пароль" aria-pressed="false" class="icon-button" id="toggle-password" type="button"><svg aria-hidden="true" class="icon" viewbox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div><p class="field-error" hidden="" id="password-error" role="alert"></p></div><p class="caption" id="login-help">Демо-прототип: подойдёт любой непустой пароль.</p><button class="button primary full section" data-network-action="" type="submit">Войти</button></form>
+<details class="entry-role-picker" open=""><summary>Выбрать демо-роль</summary><div class="login-roles"><button aria-pressed="true" class="role-button" data-role="anya.demo"><span class="avatar">АС</span><div><strong>Аня Соколова</strong><span>1 курс · 1-ФМО · anya.demo</span></div><svg aria-hidden="true" class="icon" viewbox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg></button><button aria-pressed="false" class="role-button" data-role="mark.demo"><span class="avatar">МЛ</span><div><strong>Марк Ливанов</strong><span>4 курс · МЭО · mark.demo</span></div><svg aria-hidden="true" class="icon" viewbox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg></button><button aria-pressed="false" class="role-button" data-role="dean.demo"><span class="avatar">Д</span><div><strong>Сотрудник учебного офиса</strong><span>Рабочий кабинет · dean.demo</span></div><svg aria-hidden="true" class="icon" viewbox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg></button></div></details>
+<p class="entry-institution-note">Университет Меридиан — вымышленный вуз.<br/>Это демонстрационный студенческий кабинет.</p>
+</div>
+</div><footer class="footer"><div class="footer-top"><p class="disclaimer">концепт для хакатона, данные вымышленные<br/>Не является официальным сервисом вуза</p><span>пара · деканат в кармане</span></div><div class="footer-links"><a href="prototype.html">Все экраны</a><a href="login-states.html">Состояния</a><a href="components.html">Компоненты</a><a href="developer.html">Для разработчика</a></div></footer></main>
+<div class="toast" hidden="" id="toast" role="status"></div>
+<script src="../assets/prototype.js" defer></script></body></html>

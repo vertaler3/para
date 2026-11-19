@@ -48,7 +48,7 @@ void GradebookCtrl::gradebookPage(
     // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3);
     // книжка всегда своя — user_id только из сессии (02 §6.3).
     const auto session = req->attributes()->get<SessionInfo>("session");
-    // 5.18 (шаг 3): каркас — словарь (тело зачётки — ru, вне охвата шага 3).
+    // 5.18: каркас и тело зачётки — словарь (fe_rebuild v3, шаг 10).
     const auto lang = i18n::resolveRequestLang(req);
     GradebookService::gradebook(
         app().getDbClient("para"), session.userId,
@@ -57,7 +57,8 @@ void GradebookCtrl::gradebookPage(
             i18n::insertUiStrings(data, lang);
             // Каркасные view-данные (partials head/topbar/tabbar) —
             // серверные константы (02 §6.4).
-            data.insert("pageTitle", std::string("Зачётная книжка · Пара"));
+            data.insert("pageTitle",
+                        i18n::pageTitleOf("profile.gradebook", lang));
             data.insert("activeTab", std::string("grades"));
             if (r.status == GradebookService::Status::Ok)
             {

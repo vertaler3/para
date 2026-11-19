@@ -11,7 +11,14 @@
 FROM --platform=linux/amd64 drogonframework/drogon:v1.9.14 AS build
 WORKDIR /src
 COPY . .
-RUN apt-get update \
+# Источники apt → зеркало mirror.yandex.ru (archive/security.ubuntu.com из сети
+# владельца недоступны — таймауты; журнал 2026-11-19-fix-dockerfile-apt-mirror.md).
+# Идемпотентно, оба формата: sources.list (jammy) и *.sources (deb822, noble).
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+      [ -f "$f" ] && sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g; s|http://ru.archive.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g' "$f" || true; \
+    done; \
+    apt-get update \
  && apt-get install -y --no-install-recommends ninja-build ccache libargon2-dev \
       git zlib1g-dev fonts-dejavu-core \
  # libharu v2.4.6 из исходников (02 §8.1; лицензия zlib/libPNG, pin — Р-12):
@@ -30,7 +37,12 @@ RUN apt-get update \
 
 # ---- рантайм ----
 FROM --platform=linux/amd64 ubuntu:24.04
-RUN apt-get update \
+# Источники apt → зеркало (см. build-стадию выше).
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+      [ -f "$f" ] && sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g; s|http://ru.archive.ubuntu.com/ubuntu|http://mirror.yandex.ru/ubuntu|g' "$f" || true; \
+    done; \
+    apt-get update \
  && apt-get install -y --no-install-recommends \
       libsqlite3-0 libssl3t64 libargon2-1 ca-certificates sqlite3 tzdata \
       libc-ares2 libjsoncpp25 libpq5 libmariadb3 \

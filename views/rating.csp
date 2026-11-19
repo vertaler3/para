@@ -48,9 +48,8 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/gradebook"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
-      <h1>Рейтинг</h1>
-      <p>Место, имя и средний балл</p>
+      <a class="back" href="/gradebook"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.rating.title"); %></h1>
     </div>
   </div>
 <%c++
@@ -62,9 +61,9 @@ if (failed == "1") {
        страницы (app.js). -->
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить рейтинг</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-rating-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.rating.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-rating-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -90,6 +89,15 @@ const bool hasRows = !broken && rating.size() > 0;
 const auto esc = [](const std::string& s) {
     return HttpViewData::htmlTranslate(s);
 };
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
+const auto fill = [](std::string s, const std::string& k,
+                     const std::string& v) {
+    const auto pos = s.find(k);
+    if (pos != std::string::npos) s.replace(pos, k.size(), v);
+    return s;
+};
 const int64_t total = static_cast<int64_t>(rating.size());
 // Своя строка — по флагу self контракта (см. шапку шаблона)
 const Json::Value* self = nullptr;
@@ -101,9 +109,9 @@ if (broken) {
 %>
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить рейтинг</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-rating-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.rating.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-rating-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -115,8 +123,8 @@ if (broken) {
     <div class="surface">
       <div class="empty">
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><rect x="6" y="13" width="3" height="5"/><rect x="11" y="9" width="3" height="9"/><rect x="16" y="5" width="3" height="13"/></svg></div>
-        <h2>В рейтинге пока никого нет</h2>
-        <p>Рейтинг строят по среднему баллу — строки появятся, когда преподаватели закроют первые ведомости.</p>
+        <h2><%c++ $$ << vstr("rating.emptyTitle"); %></h2>
+        <p><%c++ $$ << vstr("rating.emptyText"); %></p>
       </div>
     </div>
   </div>
@@ -138,22 +146,50 @@ if (broken) {
 %>
     <div class="study-summary">
       <div>
-        <p class="overline">Ваша позиция</p>
-        <p class="metric"><span class="tnum"><%c++ $$ << selfRank; %></span><span class="caption"> из <%c++ $$ << total; %></span></p>
+        <p class="overline"><%c++ $$ << vstr("rating.position"); %></p>
+        <p class="metric"><span class="tnum"><%c++ $$ << selfRank; %></span><span class="caption"> <%c++ $$ << fill(vstr("rating.ofTotal"), "{n}", std::to_string(total)); %></span></p>
       </div>
-      <p class="small muted"><%c++ $$ << esc((*self)["fio"].asString()); %><br>Средний балл · <%c++ if (selfHasAverage) $$ << selfAverage; else $$ << "—"; %><%c++ if (selfHasAverage) $$ << " / 100"; %></p>
+      <p class="small muted"><%c++ $$ << esc((*self)["fio"].asString()); %><br><%c++ $$ << fill(vstr("rating.averageLine"), "{n}", selfHasAverage ? std::to_string(selfAverage) + " / 100" : std::string("—")); %></p>
     </div>
 <%c++
     } else {
         // Своей строки нет (staff; студент без оценок — Р-15 «рейтинг =
-        // студенты со средним») — финальный текст 03 §5.2.
+        // студенты со средним»): пустая позиция эталона .enh-rank-empty
 %>
-    <p class="small muted">Оценки появятся после первой аттестации</p>
+    <div class="study-summary">
+      <div>
+        <p class="overline"><%c++ $$ << vstr("rating.position"); %></p>
+        <p class="enh-rank-empty"><%c++ $$ << vstr("rating.noPosition"); %></p>
+      </div>
+      <p class="small muted"><%c++ $$ << vstr("rating.noPositionHint"); %></p>
+    </div>
 <%c++
     }
 %>
+    <!-- Поиск и «Моя строка» (эталон ranking.html .enh-toolbar): фильтр
+         уже маскированных строк в app.js (Р-15 не страдает), статус —
+         aria-live. «Моя строка» — только при своей строке; без неё —
+         правило попадания в рейтинг (RatingService.h:17-19). -->
+    <div class="enh-toolbar">
+      <div class="field enh-field">
+        <label for="ranking-search"><%c++ $$ << vstr("rating.searchLabel"); %></label>
+        <input id="ranking-search" name="ranking-search" type="search" autocomplete="off" placeholder="<%c++ $$ << vstr("rating.searchPlaceholder"); %>">
+      </div>
+<%c++
+    if (self) {
+%>
+      <button class="button" id="find-my-rank" type="button"><%c++ $$ << vstr("rating.findMine"); %></button>
+<%c++
+    } else {
+%>
+      <p class="caption"><%c++ $$ << vstr("rating.rule"); %></p>
+<%c++
+    }
+%>
+    </div>
+    <p class="caption" id="ranking-status" role="status" aria-live="polite"></p>
     <section class="section">
-      <div class="section-title"><h2>Студенты</h2><span class="caption"><%c++ $$ << total; %></span></div>
+      <div class="section-title"><h2><%c++ $$ << vstr("rating.students"); %></h2><span class="caption"><%c++ $$ << total; %></span></div>
 <%c++
         // Строки «место · имя · балл» (черновик ranking.html, каркасное
         // .ranking-row/.ranking-row.self): место и балл tnum; имя КАК
@@ -164,12 +200,12 @@ if (broken) {
             const int64_t rank = r["rank"].asInt64();
             const bool isSelf = r["self"].asBool();
             $$ << "<div class=\"ranking-row"
-               << (isSelf ? " self" : "") << "\">";
+               << (isSelf ? " self" : "") << "\" tabindex=\"-1\">";
             $$ << "<strong class=\"tnum\">"
                << (rank < 10 ? "0" : "") << rank << "</strong>";
             $$ << "<span>" << esc(r["fio"].asString());
             if (isSelf)
-                $$ << " <span class=\"badge\">вы</span>";
+                $$ << " <span class=\"badge\">" << vstr("rating.you") << "</span>";
             $$ << "</span>";
             $$ << "<strong class=\"tnum\">";
             if (r.isMember("average") && r["average"].isIntegral())
@@ -180,7 +216,7 @@ if (broken) {
             $$ << "</div>";
         }
 %>
-      <p class="caption">Чужие имена сокращены. Данные вымышленные.</p>
+      <p class="caption section"><%c++ $$ << vstr("rating.masked"); %></p>
     </section>
   </div>
 <%c++

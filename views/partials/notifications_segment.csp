@@ -30,6 +30,9 @@
 const std::string segment = @@.get<std::string>("segment");
 const bool isNews = segment == "news";
 const bool isEvents = segment == "events";
+// Фиксы 2026-11-19: «Объявления» деканата — GET /v1/announcements, тот же
+// states-каркас, что у новостей (рендер app.js, режим announcements).
+const bool isAnn = segment == "announcements";
 
 // Кнопка сегмента (03 §2.8 segmented — класс .segments каркаса: активный
 // aria-pressed + bg --surface + тень --e1 из app.css; hx-* — паттерн
@@ -52,14 +55,16 @@ const auto segButton = [&segment](const std::string& name,
 const std::string segFeed = @@.get<std::string>("t.notif.title");
 const std::string segNews = @@.get<std::string>("t.notif.news");
 const std::string segEvents = @@.get<std::string>("t.notif.events");
+const std::string segAnn = @@.get<std::string>("t.nav.announcements");
 %>
 <%c++ $$ << "<div id=\"notifications-segment\" class=\"content-narrow\" data-segment=\"" << segment << "\">" <<
       "<div class=\"segments notifications-segments\" role=\"group\" aria-label=\"" << @@.get<std::string>("t.a11y.feedSegment") << "\">" <<
       segButton("notifications", segFeed) <<
       segButton("news", segNews) <<
       segButton("events", segEvents) <<
+      segButton("announcements", segAnn) <<
       "</div>"; %>
-<%c++ if (!isNews && !isEvents) { %>
+<%c++ if (!isNews && !isEvents && !isAnn) { %>
     <!-- Фильтры + «Прочитать всё» (03 §4.6: чипы, активный — primary-soft;
          draft notifications.html — чипы и ghost-кнопка одной строкой;
          row.wrap переносит на 360px). aria-pressed проставляет app.js. -->
@@ -70,10 +75,23 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
         <button class="chip" type="button" data-feed-filter="deadline" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeDeadline"); %></button>
         <button class="chip" type="button" data-feed-filter="application" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeApplication"); %></button>
         <button class="chip" type="button" data-feed-filter="announcement" aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.typeAnnouncement"); %></button>
-        <button class="chip" type="button" data-feed-unread aria-pressed="false"><%c++ $$ << @@.get<std::string>("t.notif.unread"); %></button>
       </div>
       <button class="button ghost" type="button" data-read-all><%c++ $$ << @@.get<std::string>("t.notif.readAll"); %></button>
     </div>
+    <!-- v3 (notifications.html .enh-toolbar): поиск — на клиенте по уже
+         загруженным записям (параметра q в GET /v1/notifications нет —
+         честная подпись «среди загруженных»); «Только непрочитанные» —
+         серверный unread=1 (перезапрос первой страницы); счётчик
+         «Показано: N» — aria-live. -->
+    <div class="enh-toolbar">
+      <div class="field enh-field">
+        <label for="notification-search"><%c++ $$ << @@.get<std::string>("t.notif.search"); %></label>
+        <input id="notification-search" name="notification-search" type="search" autocomplete="off" data-feed-search aria-describedby="notification-search-hint" placeholder="<%c++ $$ << @@.get<std::string>("t.notif.searchPh"); %>">
+        <span class="caption" id="notification-search-hint"><%c++ $$ << @@.get<std::string>("t.notif.searchHint"); %></span>
+      </div>
+      <label class="enh-check"><input id="notification-unread" name="notification-unread" type="checkbox" data-feed-unread><%c++ $$ << @@.get<std::string>("t.notif.unreadOnly"); %></label>
+    </div>
+    <p class="caption" id="notification-count" role="status" aria-live="polite" data-feed-count></p>
 
     <!-- Скелетон ленты (03 §5.1: 4 строки — иконка-круг 24 + 2 строки
          текста); прячется app.js по ответу (данные/пусто/ошибка). -->
@@ -110,6 +128,10 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
     <!-- Inline-предупреждение неудачной догрузки «Ещё» (03 §5.3): текст
          ставит app.js; повтор — та же кнопка «Ещё». -->
     <p class="notice warn" data-feed-warn role="alert" hidden></p>
+    <!-- Поиск по загруженным ничего не дал (notifications.html
+         #notifications-empty: p.notice.section); текст ставит app.js —
+         с подсказкой «Ещё», если есть следующая страница. -->
+    <p class="notice section" data-feed-search-empty hidden></p>
 
     <!-- Лента: строки строит app.js из GET /v1/notifications (иконка типа,
          title, body-превью, время, точка непрочитанного — 03 §4.6).
@@ -133,7 +155,7 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
 
     <!-- Ошибка (03 §5.3): «Повторить» — повторный fetch первой страницы. -->
     <section class="section flow" data-news-error hidden role="alert">
-      <h3><%c++ $$ << (isEvents ? @@.get<std::string>("t.error.loadEvents") : @@.get<std::string>("t.error.loadNews")); %></h3>
+      <h3><%c++ $$ << (isEvents ? @@.get<std::string>("t.error.loadEvents") : isAnn ? @@.get<std::string>("t.error.loadSection") : @@.get<std::string>("t.error.loadNews")); %></h3>
       <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
       <button class="button" type="button" data-news-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
@@ -141,7 +163,10 @@ const std::string segEvents = @@.get<std::string>("t.notif.events");
     <!-- Пусто (5.17): заголовок дословно из постановки, подпись — в стиле
          03 §5.2, без действия (лента редакционная, «включать» нечего). -->
     <div class="empty" data-news-empty hidden>
-<%c++ if (isEvents) { %>
+<%c++ if (isAnn) { %>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg></div>
+      <h2><%c++ $$ << @@.get<std::string>("t.notif.annEmptyTitle"); %></h2>
+<%c++ } else if (isEvents) { %>
       <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></div>
       <h2><%c++ $$ << @@.get<std::string>("t.notif.eventsEmptyTitle"); %></h2>
       <p><%c++ $$ << @@.get<std::string>("t.notif.eventsEmptyText"); %></p>

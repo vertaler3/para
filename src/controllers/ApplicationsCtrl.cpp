@@ -4,6 +4,7 @@
 
 #include "models/Applications.h"
 #include "services/ApplicationsService.h"
+#include "services/UserService.h"
 #include "utils/ApiError.h"
 
 using namespace drogon;
@@ -323,31 +324,39 @@ void ApplicationsCtrl::listPage(
 {
     // Сессию проверил LoginFilter (303 без неё — страница, 02 §6.3).
     const auto session = req->attributes()->get<para::SessionInfo>("session");
-    // query status — тот же фильтр, что у JSON API (значение из словаря
-    // CHECK DDL). НЕИЗВЕСТНОЕ — решение шага (см. шапку заголовка): 303 на
-    // /applications — страница не отвечает голым JSON, фильтр сбрасывается.
-    std::optional<std::string> statusFilter;
+    // query status (v3, шаг 12): группа фильтра списка ИЛИ прежнее значение
+    // словаря CHECK DDL — сводится к своей группе (ссылки ?status=need_info
+    // продолжают работать). Сервис отдаёт ПОЛНЫЙ список: фильтр и поиск —
+    // клиентские поверх SSR-карточек (app.js), группа только предвыбирает
+    // фильтр и скрывает лишние карточки на SSR. НЕИЗВЕСТНОЕ → 303.
     const std::string status = req->getParameter("status");
+    std::string group;
     if (!status.empty())
     {
-        bool known = false;
-        for (const auto& s : models::kApplicationStatuses)
-            if (s == status)
+        static const std::pair<const char*, const char*> kGroupOf[] = {
+            {"active", "active"},       {"reply", "reply"},
+            {"ready", "ready"},         {"issued", "issued"},
+            {"draft", "draft"},         {"closed", "closed"},
+            {"submitted", "active"},    {"accepted", "active"},
+            {"in_progress", "active"},  {"need_info", "reply"},
+            {"rejected", "closed"},     {"cancelled", "closed"}};
+        for (const auto& g : kGroupOf)
+            if (status == g.first)
             {
-                known = true;
+                group = g.second;
                 break;
             }
-        if (!known)
+        if (group.empty())
         {
             cb(HttpResponse::newRedirectionResponse("/applications",
                                                      k303SeeOther));
             return;
         }
-        statusFilter = status;
     }
     ApplicationsService::list(
-        app().getDbClient("para"), session.userId, statusFilter,
-        [cb = std::move(cb), status = statusFilter,
+        app().getDbClient("para"), session.userId,
+        std::nullopt,  // полный список (см. выше)
+        [cb = std::move(cb), group,
          lang = i18n::resolveRequestLang(req)](
             ApplicationsService::Result r) mutable {
             // 5.18 (шаг 3): язык — para_lang → Accept-Language → ru;
@@ -365,7 +374,7 @@ void ApplicationsCtrl::listPage(
             else
             {
                 data.insert("failed", std::string("0"));
-                data.insert("statusFilter", std::string(status ? *status : ""));
+                data.insert("statusFilter", group);
                 data.insert("bodyJson", pageJson(r.body));
             }
             cb(HttpResponse::newHttpViewResponse("applications",
@@ -384,8 +393,16 @@ void ApplicationsCtrl::newPage(
     // состояния загрузки/ошибки — в шаблоне и app.js (03 §5.1/§5.3).
     // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера (Р-16).
     const auto lang = i18n::resolveRequestLang(req);
-    HttpViewData data =
-        basePageData(i18n::pageTitleOf("apps.formTitle", lang), lang);
+    // v3 (шаг 12): ?type=<ключ> — deep link сразу в форму. Фаза — только
+    // для первого кадра (заголовок h1 без мигания); валидность ключа
+    // проверяет клиент по GET /v1/application-types (неизвестный ключ —
+    // каталог), сервер ключ в разметку не выводит.
+    const bool formPhase = !req->getParameter("type").empty();
+    HttpViewData data = basePageData(
+        i18n::pageTitleOf(formPhase ? "apps.docFormTitle" : "apps.catalogTitle",
+                          lang),
+        lang);
+    data.insert("phase", std::string(formPhase ? "form" : "catalog"));
     // Имя шаблона — application_form (подчёркивание): drogon_ctl 1.9.14
     // генерирует из имени файла имя C++-класса, дефис не компилирует
     // (прецедент Э7 экрана «Расписание»: schedule_today/schedule_week).
@@ -414,38 +431,66 @@ void ApplicationsCtrl::cardPage(
     // move в одной ветке оставил бы следующей пустой std::function).
     OwnershipGuard::check(
         db, OwnershipGuard::Table::Applications, session.userId, applicationId,
-        [db, applicationId, cb, lang](OwnershipGuard::Verdict v) mutable {
+        [db, applicationId, cb, lang, userId = session.userId,
+         submitted = req->getParameter("submitted") == "1"](
+            OwnershipGuard::Verdict v) mutable {
             switch (v)
             {
                 case OwnershipGuard::Verdict::Own:
                     ApplicationsService::one(
                         db, applicationId,
-                        [cb, lang](ApplicationsService::OneResult r) mutable {
-                            HttpViewData data = basePageData("Заявка · Пара", lang);
-                            HttpStatusCode code = k200OK;
-                            switch (r.status)
+                        [db, userId, submitted, cb,
+                         lang](ApplicationsService::OneResult r) mutable {
+                            if (r.status != ApplicationsService::One::Found)
                             {
-                                case ApplicationsService::One::Found:
-                                    data.insert("mode", std::string("data"));
-                                    data.insert("bodyJson", pageJson(r.body));
-                                    break;
-                                case ApplicationsService::One::NotFound:
-                                    // Строка исчезла после Own (гонка
-                                    // удаления) — та же нейтральная
-                                    // карточка, 404.
-                                    data.insert("mode", std::string("guard"));
-                                    code = k404NotFound;
-                                    break;
-                                case ApplicationsService::One::Error:
-                                    data.insert("mode",
-                                                std::string("dberror"));
-                                    code = k500InternalServerError;
-                                    break;
+                                HttpViewData data = basePageData(
+                                    i18n::pageTitleOf("apps.cardTitle", lang),
+                                    lang);
+                                // NotFound — строка исчезла после Own (гонка
+                                // удаления): та же нейтральная карточка, 404;
+                                // Error — «Сервис не отвечает», 500.
+                                const bool nf =
+                                    r.status == ApplicationsService::One::NotFound;
+                                data.insert("mode", std::string(nf ? "guard"
+                                                                   : "dberror"));
+                                auto resp = HttpResponse::newHttpViewResponse(
+                                    "application", std::move(data));
+                                resp->setStatusCode(
+                                    nf ? k404NotFound : k500InternalServerError);
+                                cb(std::move(resp));
+                                return;
                             }
-                            auto resp = HttpResponse::newHttpViewResponse(
-                                "application", std::move(data));
-                            resp->setStatusCode(code);
-                            cb(std::move(resp));
+                            // v3 (шаг 14): заявитель (#application-owner) и
+                            // поля HTML-превью справки — тот же профиль, что
+                            // PdfCtrl кладёт в PdfBuilder::CertificateData
+                            // (UserService::loadProfile, владелец = сессия —
+                            // Own уже проверен). Сбой профиля не валит
+                            // карточку: строка заявителя и поля превью
+                            // просто пустые («—»).
+                            UserService::loadProfile(
+                                db, userId,
+                                [body = std::move(r.body), submitted, cb,
+                                 lang](std::optional<Json::Value> profile) mutable {
+                                    const std::string title =
+                                        body.get("type_title", "").asString();
+                                    HttpViewData data = basePageData(
+                                        title.empty()
+                                            ? i18n::pageTitleOf("apps.cardTitle",
+                                                                lang)
+                                            : title + " · " +
+                                                  std::string(i18n::t(
+                                                      "app.title", lang)),
+                                        lang);
+                                    data.insert("mode", std::string("data"));
+                                    data.insert("bodyJson", pageJson(body));
+                                    data.insert("submitted",
+                                                std::string(submitted ? "1" : "0"));
+                                    data.insert("profileJson",
+                                                profile ? pageJson(*profile)
+                                                        : std::string("{}"));
+                                    cb(HttpResponse::newHttpViewResponse(
+                                        "application", std::move(data)));
+                                });
                         });
                     return;
                 case OwnershipGuard::Verdict::NotFound:
@@ -453,7 +498,8 @@ void ApplicationsCtrl::cardPage(
                 {
                     // Обе ситуации — одна нейтральная карточка «Не нашли то,
                     // что искали» (03 §5.3); коды статуса разные.
-                    HttpViewData data = basePageData("Заявка · Пара", lang);
+                    HttpViewData data = basePageData(
+                        i18n::pageTitleOf("apps.cardTitle", lang), lang);
                     data.insert("mode", std::string("guard"));
                     auto resp = HttpResponse::newHttpViewResponse(
                         "application", std::move(data));
@@ -467,7 +513,8 @@ void ApplicationsCtrl::cardPage(
                 {
                     // Ошибка БД — fail-closed (разрешением не считается):
                     // карточка «Сервис не отвечает», 500.
-                    HttpViewData data = basePageData("Заявка · Пара", lang);
+                    HttpViewData data = basePageData(
+                        i18n::pageTitleOf("apps.cardTitle", lang), lang);
                     data.insert("mode", std::string("dberror"));
                     auto resp = HttpResponse::newHttpViewResponse(
                         "application", std::move(data));

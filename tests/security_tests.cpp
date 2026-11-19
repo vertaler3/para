@@ -136,6 +136,8 @@
 
 #include "filters/CsrfCheck.h"
 #include "filters/SecurityHeaders.h"
+#include "utils/NotFoundPage.h"
+#include "utils/StaffRouting.h"
 #include "services/MigrationRunner.h"
 #include "services/PasswordHasher.h"
 #include "services/SessionService.h"
@@ -787,6 +789,9 @@ int main()
     // что в main.cpp (SecurityHeaders::registerAdvice — advice на
     // создание ответа, самая ранняя точка).
     para::SecurityHeaders::registerAdvice();
+    // Страница «не найдено» v3 для SSR-путей (API — JSON-404 ниже).
+    para::registerNotFoundPage();
+    para::registerStaffPageRedirects();
     // Неизвестные пути API — JSON 02 §5.1 (Э8 шаг 7, находка Э1-404-HTML) —
     // тот же вызов, что в main.cpp: regex-роут проверяется после
     // статических (проверка ниже: /v1/me сессией → 200, /v1/no-such →
@@ -1525,12 +1530,18 @@ int main()
         auto lostPage = get(anon, "/no-such-" + randomHex(6));
         expectStatus(lostPage,
                      drogon::k404NotFound,
-                     "GET /no-such-<hex> → 404 — HTML-заглушка (SSR-сторона)",
+                     "GET /no-such-<hex> → 404 — HTML-страница «не найдено» (SSR-сторона)",
                      "GET несуществующий SSR-путь");
         expectHeader(lostPage,
                      "X-Content-Type-Options",
                      "nosniff",
                      "HTML-404 роутера: nosniff");
+        // fe_rebuild v3: SSR-404 — страница «не найдено» дизайна v3 (NotFoundPage),
+        // не заглушка Drogon; API-404 выше остаётся JSON.
+        check(lostPage != nullptr &&
+                  std::string(lostPage->getBody()).find("data-page=\"not-found\"") !=
+                      std::string::npos,
+              "GET /no-such-<hex> → страница «не найдено» v3 (data-page=not-found)");
 
         // 7) Авторизованные страницы (живая сессия Ани): главная и
         //    /schedule — заголовки на месте после входа.

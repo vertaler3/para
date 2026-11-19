@@ -191,7 +191,7 @@ long civilDays(const std::string& ymd)
 // с date (deep_link /schedule?date=…, канон Э6 и тапа по переносу Р-17) —
 // dayBody на эту дату. «Неделя»: offset из query, а при наличии date —
 // неделя, СОДЕРЖАЩАЯ дату (разница понедельников; date приоритетнее offset).
-// Неделя = week + changeList(days=7) последовательно; оба колбэка в каждой
+// Неделя = week (изменения — из её событий, в партиале); оба колбэка в каждой
 // ветке копируются (урок Э2 шаг 1: move в одной ветке оставил бы второму
 // пустой std::function → bad_function_call на error-пути БД).
 void fetchSegment(const SegRequest& q,
@@ -241,28 +241,20 @@ void fetchSegment(const SegRequest& q,
                                    civilDays(todayMonday)) /
                                   7);
     }
+    // «Неделя» (v3, шаг 4): изменения недели строит партиал из событий
+    // ПОКАЗАННОЙ недели (status != normal) — прежний changeList(days=7)
+    // давал «последние 7 суток до сегодня» и при offset≠0 не совпадал с
+    // сеткой (аудит B, W12).
     ScheduleService::week(
         db, userId, offset, &ScheduleCache::instance(), today,
-        [db, userId, today, onDone,
-         onError](ScheduleService::Result r) {
+        [onDone, onError](ScheduleService::Result r) {
             if (!r.ok)
             {
                 onError(internalError());
                 return;
             }
-            // Копия тела недели — внутренняя лямбда переживает внешний
-            // колбэк (см. комментарий ScheduleService::week).
-            const Json::Value weekBody = r.body;
-            ScheduleService::changeList(
-                db, userId, 7, today,
-                [weekBody, onDone, onError](ScheduleService::Result r2) {
-                    if (!r2.ok)
-                    {
-                        onError(internalError());
-                        return;
-                    }
-                    onDone(weekBody, r2.body);
-                });
+            static const Json::Value kNoChanges(Json::arrayValue);
+            onDone(r.body, kNoChanges);
         });
 }
 
@@ -360,9 +352,10 @@ void ScheduleCtrl::page(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+        [cb, q, dayIso, realToday = today,
+         lang = i18n::resolveRequestLang(req)](
             const Json::Value& body,
-            const Json::Value& changes) mutable {
+            const Json::Value& /*changes*/) mutable {
             // 5.18 (шаг 3): строки словаря — в view-данные ДО рендера
             // (Р-16); язык — para_lang → Accept-Language → ru.
             HttpViewData data;
@@ -371,8 +364,11 @@ void ScheduleCtrl::page(const HttpRequestPtr& req,
             data.insert("activeTab", std::string("schedule"));
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
+            // Реальное «сегодня» (UTC проекта) отдельно от показанного дня:
+            // aria-current="date" полосы недели — выбранный день (todayIso),
+            // точка «сегодня» и колонка «Сегодня» — реальный день (v3, шаг 3).
+            data.insert("realTodayIso", realToday);
             data.insert("bodyJson", toJson(body));
-            data.insert("changesJson", toJson(changes));
             cb(HttpResponse::newHttpViewResponse("schedule",
                                                  std::move(data)));
         },
@@ -402,9 +398,10 @@ void ScheduleCtrl::segment(const HttpRequestPtr& req,
         q.segment == "week" ? today : (q.date.empty() ? today : q.date);
     fetchSegment(
         q, session.userId, today,
-        [cb, q, dayIso, lang = i18n::resolveRequestLang(req)](
+        [cb, q, dayIso, realToday = today,
+         lang = i18n::resolveRequestLang(req)](
             const Json::Value& body,
-            const Json::Value& changes) mutable {
+            const Json::Value& /*changes*/) mutable {
             // 5.18 (шаг 3): htmx-фрагмент несёт те же словарные строки
             // (сегментные кнопки/подписи дней) — бандл в view-данные
             // ДО рендера (Р-16).
@@ -412,8 +409,11 @@ void ScheduleCtrl::segment(const HttpRequestPtr& req,
             i18n::insertUiStrings(data, lang);
             data.insert("segment", q.segment);
             data.insert("todayIso", dayIso);
+            // Реальное «сегодня» (UTC проекта) отдельно от показанного дня:
+            // aria-current="date" полосы недели — выбранный день (todayIso),
+            // точка «сегодня» и колонка «Сегодня» — реальный день (v3, шаг 3).
+            data.insert("realTodayIso", realToday);
             data.insert("bodyJson", toJson(body));
-            data.insert("changesJson", toJson(changes));
             // Имя шаблона — класс сгенерированного партиала (файл без
             // расширения; дефис в имени файла drogon_ctl в класс не
             // допускает — schedule_today, не schedule-today).

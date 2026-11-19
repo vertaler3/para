@@ -1,32 +1,18 @@
 <%c++
-/* Столовые — меню с ценами и КБЖУ (Э7, экран «Столовые» 3 из 4;
-   03 §4.9.6/5.13, design-drafts/cafeteria.html). Страница НЕ содержит
-   данных: список столовых и меню выбранной грузит клиент — fetch GET
-   /v1/canteens и GET /v1/canteens/{id}/menu (ТЕ ЖЕ JSON-роуты
-   CanteensCtrl, что стоят за API, 02 §5.2; паттерн views/rooms.csp и
-   library.csp). Контент строит static/js/app.js (только
-   createElement/textContent — 02 §6.4).
-   Чипы столовых — «название · корпус · часы» (02 §5.2); активный —
-   aria-pressed (.chip[aria-pressed=true] app.css). Меню выбранной:
-   комплексные (is_combo) — блоки .combo черновика (overline «Комбо»,
-   цена справа, состав в details/summary — раскрывается, 03 §4.9.6
-   «у комбо — раскрытие состава и строка КБЖУ caption»); остальные
-   позиции сгруппированы по category (словарь DDL combo|main|soup|
-   drink|bakery → «Горячее/Первое/Напитки/Выпечка») строками .list-row:
-   название, строка КБЖУ caption, цена справа (.price, tnum — общая
-   настройка body). КБЖУ nullable: null — строка НЕ рисуется (вода без
-   КБЖУ, фикстуры Э6б; постановка «не рисовать пустое»).
-   Пустое меню — «Меню пока не опубликовано» (в 03 §5.2 отдельной строки
-   для столовых нет — текст в духе пустых состояний раздела).
-   Состояния (03 §5): скелетон — только если ответ дольше 300 мс
-   (03 §5.1, таймер в app.js); пусто; ошибка с «Повторить» (повторный
-   fetch, 03 §5.3); офлайн — баннер каркаса (topbar + applyOffline,
-   03 §5.4 — fetchJSON сам переводит каркас в офлайн-режим).
-   «Столовые» — НЕ таб (03 §3.1, вход из профиля): CanteensCtrl::
-   canteensPage ставит пустой activeTab. Синтаксис drogon v1.9.14:
-   {{}} НЕ существует (Р-16) — строк-данных в шаблон не вставляется,
-   страница статична. htmx не нужен (без сегментов) — только app.js
-   (defer, локальный путь — AGENTS: без npm/CDN). */
+/* Столовые (5.13; дизайн v3 — design-drafts/v3/pages/cafeteria.html,
+   fe_rebuild шаг 20). Страница статична: список (GET /v1/canteens) и меню
+   выбранной столовой (GET /v1/canteens/{id}/menu) грузит static/js/app.js
+   (только createElement/textContent — 02 §6.4).
+   Раскладка эталона: чипы «Название · Корпус», строка часов работы,
+   комбо-блоки .combo (цена, details «КБЖУ», «Добавить +»), группы
+   категорий .list-row с КБЖУ caption, ценой и «Добавить +». Панель
+   «Ваш обед» (.enh-panel) — калькулятор суммы цены и КБЖУ ТОЛЬКО в памяти
+   страницы (без localStorage и без отправки; степпер −/+, «Очистить»),
+   null-КБЖУ — «нет данных», не ноль. Фильтр диет, состав и граммовка,
+   дата меню и «Сохранить набор» эталона не переносятся — нет полей /
+   хранение было бы демо-localStorage. Состояния (03 §5): скелетон при
+   ответе > 300 мс, пусто, ошибка с «Повторить», офлайн — баннер каркаса.
+   Строки — словарь canteens.* ×3 (5.18). */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js подключает страница
@@ -37,50 +23,58 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Профиль</a>
-      <h1>Что сегодня на обед</h1>
-      <p>Меню и состав — до того, как вы встали в очередь</p>
+      <a class="back" href="<%c++ $$ << (@@.get<std::string>("staffEntry") == "1" ? "/staff" : "/profile"); %>"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>(@@.get<std::string>("staffEntry") == "1" ? "t.staff.desk" : "t.common.back"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.canteens.title"); %></h1>
     </div>
   </div>
   <div class="content-narrow">
 
-    <!-- Чипы столовых (название · корпус · часы): строит app.js из
-         GET /v1/canteens; aria-pressed проставляет app.js -->
-    <div class="chips" role="group" aria-label="Столовые" data-canteen-chips></div>
+    <!-- Чипы столовых «Название · Корпус» (строит app.js из GET /v1/canteens) -->
+    <div class="chips" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.canteens.list"); %>" data-canteen-chips></div>
 
-    <!-- Часы выбранной столовой (02 §5.2 hours; дублируют чип) -->
+    <!-- Часы выбранной столовой (эталон: caption над меню) -->
     <p class="caption section" data-canteen-hours hidden></p>
 
-    <!-- Скелетон (03 §5.1): блок комбо + 3 строки; показывается app.js
-         ТОЛЬКО если ответ дольше 300 мс. -->
-    <div class="section stack" data-menu-loading hidden aria-busy="true" aria-label="Загружаем меню">
-      <div class="skeleton card"></div>
+    <!-- Скелетон (03 §5.1): показывается app.js ТОЛЬКО при ответе > 300 мс -->
+    <div class="section stack" data-menu-loading hidden aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.canteens.loading"); %>">
+      <div class="skeleton block"></div>
       <div class="skeleton card"></div>
       <div class="skeleton card"></div>
       <div class="skeleton card"></div>
     </div>
 
-    <!-- Пусто (03 §5.2/§5.3) -->
-    <div class="surface" data-menu-empty hidden>
-      <div class="empty">
-        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v7a2 2 0 0 0 2 2h2V3M4 3H2m2 0h6m1 0v9a4 4 0 0 0 8 0V3m-4 0v18m4-18h-2"/></svg></div>
-        <h2>Меню пока не опубликовано</h2>
-        <p>Загляните позже — меню обновляется ежедневно.</p>
-      </div>
+    <div class="empty" data-menu-empty hidden>
+      <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v7a3 3 0 0 0 6 0V3M7 3v18M20 3c-4 2-5 5-5 9h5V3Zm0 9v9"/></svg></div>
+      <h2><%c++ $$ << @@.get<std::string>("t.canteens.emptyTitle"); %></h2>
+      <p><%c++ $$ << @@.get<std::string>("t.canteens.emptyText"); %></p>
     </div>
 
-    <!-- Ошибка (03 §5.3): «Повторить» реально перезапрашивает -->
     <section class="section flow" data-menu-error hidden role="alert">
-      <h3>Не получилось загрузить меню</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-menu-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.canteens.errorMenu"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-menu-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
 
-    <!-- Меню выбранной столовой: комбо-блоки и группы категорий строит
-         app.js (.combo/.list-row/.price — черновик cafeteria.html) -->
+    <!-- Меню: комбо-блоки и группы категорий строит app.js -->
     <div data-menu-body hidden></div>
 
-    <p class="caption section">Цены, блюда и КБЖУ вымышленные.</p>
+    <p class="caption section"><%c++ $$ << @@.get<std::string>("t.canteens.fictional"); %></p>
+
+    <!-- «Ваш обед» (эталон #meal-planner): только память страницы -->
+    <section class="section enh-panel" aria-labelledby="meal-title" data-meal>
+      <div class="section-title">
+        <h2 id="meal-title"><%c++ $$ << @@.get<std::string>("t.canteens.mealTitle"); %></h2>
+        <span class="enh-demo-label"><%c++ $$ << @@.get<std::string>("t.canteens.mealLabel"); %></span>
+      </div>
+      <div aria-live="polite" data-meal-items>
+        <p class="small muted"><%c++ $$ << @@.get<std::string>("t.canteens.mealEmpty"); %></p>
+      </div>
+      <div class="enh-meal-total" data-meal-total hidden></div>
+      <div class="actions section">
+        <button class="button ghost" type="button" data-meal-clear disabled><%c++ $$ << @@.get<std::string>("t.canteens.clear"); %></button>
+      </div>
+      <p class="caption" role="status" data-meal-status><%c++ $$ << @@.get<std::string>("t.canteens.planNote"); %></p>
+    </section>
 
   </div>
 </main>

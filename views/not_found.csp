@@ -1,0 +1,71 @@
+<%c++
+/* Пара · страница «не найдено» (дизайн v3, эталон design-drafts/v3/pages/404.html).
+   Рендерит src/utils/NotFoundPage.cpp — кастомный обработчик ошибок Drogon для
+   router-miss вне /v1|/ws (API-пути отвечают JSON 02 §5.1, regex-роут main.cpp).
+   Сессию не читает: в эталоне на 404 навигация скрыта (body[data-page=not-found]),
+   поэтому шапка — вордмарк, а действия ведут на «/» и «/schedule» (гостя LoginFilter
+   сам отправит на вход). Строки — t.<key> по языку запроса (Р-16). Арт — контурный
+   SVG эталона, цвета через currentColor/CSS (.para-error-art__*). */
+%>
+<%view head %>
+<script defer src="/static/js/app.js"></script>
+<body class="entry-page" data-page="not-found">
+<a class="skip" href="#main"><%c++ $$ << @@.get<std::string>("t.a11y.skipToContent"); %></a>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.brandHome"); %>"><svg aria-hidden="true" class="para-wordmark" fill="none" focusable="false" viewBox="0 0 306 120" xmlns="http://www.w3.org/2000/svg">
+<g aria-hidden="true" class="para-wordmark__guides" opacity=".38" stroke="currentColor" stroke-width=".75">
+<path d="M10 27H296M10 88H296M20 14V112M89 14V101M104 14V101M160 14V101M177 14V101M226 14V101M242 14V101M291 14V101" stroke-dasharray="2 5"></path>
+<path d="M40 22H75M33 57V76M53 93H76M104 57V77M114 23H147M179 32H211M235 22H275M237 57V76"></path>
+</g>
+<g class="para-wordmark__letters" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" stroke-width="7">
+<path d="M22 108V29M23 57C23 17 85 17 85 57S23 97 23 57Z"></path>
+<path d="M157 30V87M157 57C157 17 103 17 103 57S157 97 157 57Z"></path>
+<path d="M181 87V29M181 55C181 34 196 26 215 30"></path>
+<path d="M288 30V87M288 57C288 17 234 17 234 57S288 97 288 57Z"></path>
+</g>
+<g aria-hidden="true" class="para-wordmark__nodes" stroke="currentColor" stroke-width="1.2">
+<rect height="6" width="6" x="19" y="26"></rect><rect height="6" width="6" x="19" y="105"></rect>
+<circle cx="54" cy="27" r="2.8"></circle><circle cx="85" cy="57" r="2.8"></circle><circle cx="54" cy="87" r="2.8"></circle>
+<circle cx="103" cy="57" r="2.8"></circle><circle cx="130" cy="27" r="2.8"></circle><rect height="6" width="6" x="154" y="84"></rect>
+<rect height="6" width="6" x="178" y="26"></rect><circle cx="215" cy="30" r="2.8"></circle>
+<circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
+</g>
+</svg></a>
+  </div>
+</header>
+<div id="offline-banner" class="offline-banner" role="status" hidden><span data-offline-text><%c++ $$ << @@.get<std::string>("t.offline.banner"); %></span> <button type="button" class="offline-retry" data-offline-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></div>
+<main id="main" class="shell">
+  <section class="not-found-page" aria-labelledby="not-found-heading">
+    <svg aria-labelledby="para-error-title" class="para-error-art" fill="none" role="img" viewBox="0 0 660 280" xmlns="http://www.w3.org/2000/svg">
+<title id="para-error-title"><%c++ $$ << @@.get<std::string>("t.notFound.artTitle"); %></title>
+<g aria-hidden="true" class="para-error-art__grid" stroke="currentColor" stroke-width="1">
+<path d="M30 46H630M30 218H630M48 18V250M198 18V250M246 18V250M414 18V250M462 18V250M612 18V250" stroke-dasharray="2 6"></path>
+</g>
+<g class="para-error-art__outlines" stroke="currentColor" stroke-linejoin="round" stroke-width="1.6">
+<path d="M48 164 126 46H150V164H183V188H150V218H126V188H48ZM77 164H126V89Z"></path>
+<path class="para-error-art__zero" d="M244 132C244 15 416 15 416 132S244 249 244 132ZM271 132C271 48 389 48 389 132S271 216 271 132Z"></path>
+<path d="M462 164 540 46H564V164H597V188H564V218H540V188H462ZM491 164H540V89Z"></path>
+</g>
+<g aria-hidden="true" class="para-error-art__handles" opacity=".5" stroke="currentColor" stroke-width="1">
+<path d="M262 44H398M283 68H377M244 79V185M416 79V185M271 99V165M389 99V165M262 220H398M126 21V71M104 218H172M540 21V71M518 218H586"></path>
+<path d="m262 40 4 4-4 4-4-4Zm136 0 4 4-4 4-4-4ZM240 79l4-4 4 4-4 4Zm172 0 4-4 4 4-4 4ZM240 185l4-4 4 4-4 4Zm172 0 4-4 4 4-4 4ZM262 216l4 4-4 4-4-4Zm136 0 4 4-4 4-4-4Z"></path>
+</g>
+<g aria-hidden="true" class="para-error-art__nodes" stroke="currentColor" stroke-width="1.5">
+<circle cx="330" cy="44" r="3.5"></circle><circle cx="330" cy="68" r="3.5"></circle><circle cx="244" cy="132" r="3.5"></circle><circle cx="416" cy="132" r="3.5"></circle><circle cx="271" cy="132" r="3.5"></circle><circle cx="389" cy="132" r="3.5"></circle><circle cx="330" cy="220" r="3.5"></circle>
+<rect height="6" width="6" x="45" y="161"></rect><rect height="6" width="6" x="123" y="43"></rect><rect height="6" width="6" x="147" y="215"></rect>
+<rect height="6" width="6" x="459" y="161"></rect><rect height="6" width="6" x="537" y="43"></rect><rect height="6" width="6" x="561" y="215"></rect>
+</g>
+</svg>
+    <p class="eyebrow"><%c++ $$ << @@.get<std::string>("t.notFound.eyebrow"); %></p>
+    <h1 id="not-found-heading"><%c++ $$ << @@.get<std::string>("t.notFound.title"); %></h1>
+    <p><%c++ $$ << @@.get<std::string>("t.notFound.text"); %></p>
+    <div class="actions">
+      <a class="button primary" href="/"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6M8 12h13" fill="none" stroke="currentColor" stroke-width="1.7"/></svg><%c++ $$ << @@.get<std::string>("t.common.toHome"); %></a>
+      <a class="button ghost" href="/schedule"><%c++ $$ << @@.get<std::string>("t.common.openSchedule"); %></a>
+    </div>
+  </section>
+</main>
+<%view footer %>
+</body>
+</html>

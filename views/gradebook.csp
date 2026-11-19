@@ -55,9 +55,8 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> Назад</a>
-      <h1>Зачётная книжка</h1>
-      <p>Итоги по дисциплинам</p>
+      <a class="back" href="/grades"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <h1><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></h1>
     </div>
   </div>
 <%c++
@@ -69,9 +68,9 @@ if (failed == "1") {
        страницы (app.js). -->
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить зачётную книжку</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-gradebook-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.gradebook.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-gradebook-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -100,11 +99,24 @@ const auto esc = [](const std::string& s) {
 };
 // Тип контроля дисциплины — словарь CHECK 0002; бейджи 03 §4.4:
 // «экзамен» info, «зачёт» success, «дифзачёт» neutral (без модификатора)
-const auto controlBadge = [&esc](const std::string& ct) -> std::string {
-    if (ct == "exam") return "<span class=\"badge info\">Экзамен</span>";
-    if (ct == "credit") return "<span class=\"badge success\">Зачёт</span>";
+const auto vstr = [&](const char* key) {
+    return @@.get<std::string>(std::string("t.") + key);
+};
+const auto fill = [](std::string s, const std::string& k,
+                     const std::string& v) {
+    const auto pos = s.find(k);
+    if (pos != std::string::npos) s.replace(pos, k.size(), v);
+    return s;
+};
+const auto controlBadge = [&esc, &vstr](const std::string& ct) -> std::string {
+    if (ct == "exam")
+        return "<span class=\"badge info\">" + vstr("control.exam") + "</span>";
+    if (ct == "credit")
+        return "<span class=\"badge success\">" + vstr("control.credit") +
+               "</span>";
     if (ct == "graded_credit")
-        return "<span class=\"badge\">Дифзачёт</span>";
+        return "<span class=\"badge\">" + vstr("control.gradedCredit") +
+               "</span>";
     return "<span class=\"badge\">" + esc(ct) + "</span>";
 };
 // Счётчики контракта counters{disciplines, works} — подпись справа от
@@ -126,9 +138,9 @@ if (broken) {
 %>
   <div class="content-narrow">
     <section class="section flow" role="alert">
-      <h3>Не получилось загрузить зачётную книжку</h3>
-      <p class="muted">Проверьте интернет — и попробуем ещё раз.</p>
-      <button class="button" type="button" data-gradebook-retry>Повторить</button>
+      <h3><%c++ $$ << @@.get<std::string>("t.gradebook.loadError"); %></h3>
+      <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+      <button class="button" type="button" data-gradebook-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
   </div>
 <%c++
@@ -141,9 +153,9 @@ if (broken) {
     <div class="surface">
       <div class="empty">
         <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 9 10-5 10 5-10 5-10-5Zm4 3v5c4 3 8 3 12 0v-5M22 9v8"/></svg></div>
-        <h2>Оценки появятся после первой аттестации</h2>
-        <p>Как только преподаватели закроют ведомости, здесь появится средний балл и итоги по дисциплинам. Пока можно проверить расписание и включить уведомления о дедлайнах.</p>
-        <a class="button" href="/schedule">Открыть расписание</a>
+        <h2><%c++ $$ << vstr("grades.emptyTitle"); %></h2>
+        <p><%c++ $$ << vstr("gradebook.emptyText"); %></p>
+        <a class="button primary" href="/schedule"><%c++ $$ << vstr("grades.viewSchedule"); %></a>
       </div>
     </div>
   </div>
@@ -158,14 +170,22 @@ if (broken) {
          Справа — реальные счётчики counters (см. шапку шаблона). -->
     <div class="study-summary">
       <div>
-        <p class="overline">Средний балл</p>
+        <p class="overline"><%c++ $$ << vstr("grades.average"); %></p>
         <p class="metric"><span class="tnum"><%c++ $$ << average; %></span><span class="caption"> / 100</span></p>
       </div>
-      <p class="small muted">Дисциплин: <%c++ $$ << counterDisciplines; %><br>Работ: <%c++ $$ << counterWorks; %></p>
+      <p class="small muted"><%c++ $$ << fill(vstr("gradebook.counterSubjects"), "{n}", std::to_string(counterDisciplines)) << "<br>" << fill(vstr("gradebook.counterWorks"), "{n}", std::to_string(counterWorks)); %></p>
     </div>
     <section class="section">
-      <div class="section-title"><h2>Дисциплины</h2><span class="caption"><%c++ $$ << disciplines.size(); %></span></div>
-      <div class="grade-list">
+      <div class="section-title"><h2><%c++ $$ << vstr("grades.subjects"); %></h2><span class="caption"><%c++ $$ << disciplines.size(); %></span></div>
+      <!-- Поиск по дисциплине (эталон recordbook.html #recordbook-search):
+           фильтр уже отрендеренных строк в app.js, счётчик — aria-live.
+           select «Семестр» эталона не рисуется: семестра в данных нет (R2). -->
+      <div class="field">
+        <label for="recordbook-search"><%c++ $$ << vstr("gradebook.searchLabel"); %></label>
+        <input id="recordbook-search" name="recordbook-search" type="search" autocomplete="off" placeholder="<%c++ $$ << vstr("gradebook.searchPlaceholder"); %>">
+      </div>
+      <p class="caption" id="recordbook-count" role="status" aria-live="polite"></p>
+      <div class="grade-list" data-grade-list>
 <%c++
         // Строки — каркасное .list-row (черновик recordbook.html):
         // название + код, бейдж типа контроля, итог tnum. Полей «семестр»
@@ -173,7 +193,7 @@ if (broken) {
         // (см. шапку шаблона).
         for (const auto& d : disciplines)
         {
-            $$ << "<div class=\"list-row\">";
+            $$ << "<div class=\"list-row\" data-grade-row>";
             $$ << "<div><strong>"
                << esc(d["discipline"].asString()) << "</strong><p>"
                << esc(d["code"].asString()) << "</p></div>";
@@ -189,9 +209,14 @@ if (broken) {
     <!-- «Посмотреть рейтинг» (черновик recordbook.html) → /rating:
          страница собирается следующим коммитом — переходное состояние
          Э7 между коммитами (см. шапку шаблона). -->
-    <div class="actions">
-      <a class="button primary" href="/rating">Посмотреть рейтинг</a>
-    </div>
+    <a class="button primary section" href="/rating"><%c++ $$ << vstr("gradebook.toRating"); %></a>
+    <!-- «Как считается средний балл» (эталон: details.section) — текст
+         ПРОД-правила GradebookService/GradesService::summary, а не
+         5-балльной шкалы эталона (R6) -->
+    <details class="section">
+      <summary><%c++ $$ << vstr("gradebook.averageHow"); %></summary>
+      <div><p class="small muted"><%c++ $$ << vstr("gradebook.averageRule"); %></p></div>
+    </details>
   </div>
 <%c++
     }

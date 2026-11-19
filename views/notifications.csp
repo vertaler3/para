@@ -56,7 +56,6 @@
   <div class="page-heading">
     <div>
       <h1><%c++ $$ << @@.get<std::string>("t.notif.title"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.notif.subtitle"); %></p>
     </div>
   </div>
   <!-- Скелетон-индикатор сегментных htmx-запросов (hx-indicator кнопок

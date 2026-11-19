@@ -135,6 +135,10 @@ set(PARA_APP_SOURCES
                # 5.18 шаг 3: мост словаря в HttpViewData (строки в view-данные
                # ДО рендера, Р-16) + JSON-бандл для app.js.
                src/utils/I18nView.cpp
+               # fe_rebuild v3: страница «не найдено» (кастомный обработчик 404 SSR-путей).
+               src/utils/NotFoundPage.cpp
+               # фиксы 2026-11-19 (Р-35): навигация/редиректы сотрудника.
+               src/utils/StaffRouting.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
                src/filters/SecurityHeaders.cpp

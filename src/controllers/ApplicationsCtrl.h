@@ -35,11 +35,14 @@ using namespace drogon;
 // Страничная плоскость (Э7, экран «Заявки» 1 из 4; путь вне /v1/ — по
 // постановке 02 §3.2, как /schedule и /grades — Р-19):
 //   GET /applications         — views/applications.csp: список «Мои заявки»,
-//                               чипы-фильтры ?status= (значение из словаря
-//                               kApplicationStatuses; НЕИЗВЕСТНОЕ → 303 на
-//                               /applications — решение шага: страница не
-//                               отвечает голым JSON 400, невалидный фильтр
-//                               просто сбрасывается на «Все»);
+//                               фильтр ?status= (v3, fe_rebuild шаг 12):
+//                               группа active|reply|ready|issued|draft|closed
+//                               ИЛИ прежнее значение kApplicationStatuses
+//                               (сводится к своей группе). Сервис отдаёт
+//                               ПОЛНЫЙ список, группа только предвыбирает
+//                               фильтр (клиентский фильтр и поиск — app.js).
+//                               НЕИЗВЕСТНОЕ → 303 на /applications (страница
+//                               не отвечает голым JSON 400);
 //   GET /applications/new     — views/application_form.csp: каталог типов +
 //                               форма 1–2 вопроса (данные грузит клиент:
 //                               GET /v1/application-types и /v1/me).

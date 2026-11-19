@@ -20,8 +20,8 @@
      сводка      — GET /v1/staff/dashboard: счётчики очереди (5 активных
                    статусов) + «свежие изменения» (последние 5 переносов/
                    отмен «было → стало»); скелетон → данные | ошибка с
-                   «Повторить» (03 §5.1/§5.3); тап по изменению → день
-                   расписания /schedule?date=<день> (канон deep_link Э6);
+                   «Повторить» (03 §5.1/§5.3); строки информационные —
+                   студенческое расписание сотруднику недоступно (Р-35);
      очередь     — GET /v1/staff/applications?status=&type=&overdue=1:
                    чипы-фильтры (aria-pressed ведёт app.js), строки-карточки
                    (.app-card: тип, бейдж статуса, «Срок горит» — danger,
@@ -88,7 +88,6 @@ else
   <div class="page-heading">
     <div>
       <h1>Стол сотрудника</h1>
-      <p>Заявки, переносы пар и объявления — рабочий кабинет учебного офиса</p>
     </div>
   </div>
   <!-- Демо-роль: логин сессии (страница знает его из view-данных;
@@ -284,6 +283,21 @@ $$ << esc(login.empty() ? "сотрудник учебного офиса" : log
     <p class="widget-error" data-feed-error hidden>Не получилось загрузить ленту. <button type="button" class="offline-retry" data-feed-retry>Повторить</button></p>
     <button class="button" type="button" data-feed-more hidden>Показать ещё</button>
   </section>
+  <!-- Фиксы 2026-11-19 (Р-35): аккаунт сотрудника — студенческого профиля у
+       него нет (/profile → 303 /staff), выход живёт здесь; аватар шапки ведёт
+       сюда (#account). Логика выхода — общий обработчик app.js
+       [data-logout-open] + #logout-dialog (как в профиле студента). -->
+  <section id="account" class="section">
+    <button class="button full" type="button" data-logout-open><%c++ $$ << @@.get<std::string>("t.profile.logout"); %></button>
+  </section>
+  <dialog id="logout-dialog" class="lesson-sheet" aria-labelledby="logout-title">
+    <h2 id="logout-title"><%c++ $$ << @@.get<std::string>("t.profile.logoutTitle"); %></h2>
+    <p><%c++ $$ << @@.get<std::string>("t.profile.logoutText"); %></p>
+    <div class="actions">
+      <button class="button" type="button" data-logout-close><%c++ $$ << @@.get<std::string>("t.profile.stay"); %></button>
+      <button class="button danger-button" type="button" data-logout-confirm><%c++ $$ << @@.get<std::string>("t.profile.logout"); %></button>
+    </div>
+  </dialog>
 <%c++ }  // else (mode == "page") %>
 </main>
 <%view tabbar %>

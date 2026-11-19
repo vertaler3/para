@@ -28,62 +28,93 @@
    далее автосохранение PUT /v1/applications/{id} раз в ~10 с и по
    visibilitychange — ТОЛЬКО пока status=draft; 409 — молча прекратить,
    С7) и «Отправить заявку» (POST submit:true → редирект на карточку;
-   loading «Отправляем…», 03 §5.1:984). */
+   loading «Отправляем…», 03 §5.1:984).
+   v3 (fe_rebuild шаг 12, application-catalog.html + application-form.html):
+   body.document-flow; каталог — отдельная фаза («Какой документ нужен?»,
+   лист .stack из a.document-type с deep link ?type=<ключ>), «Назад» —
+   из формы в каталог (history), из каталога — в список; форма —
+   paper-form с секциями «01 / Данные заявки» и «02 / Получение
+   документа», select типа, счётчик символов, сводка ошибок
+   .validation-summary, живое резюме .request-summary. Серверный черновик
+   продолжается: ?draft=<id> или последний черновик того же типа из
+   GET /v1/applications?status=draft — поля заполняются, автосохранение
+   и подача (PUT submit:true, 8.i) идут в него. Подача → /applications/
+   {id}?submitted=1. Первый кадр фазы — view-переменная phase. */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js — сама страница
      (defer, локальный путь — AGENTS: без npm/CDN). -->
 <script defer src="/static/js/app.js"></script>
-<body data-page="application-form">
+<body class="document-flow" data-page="application-form">
 <%view topbar %>
+<%c++
+const bool formPhase = @@.get<std::string>("phase") == "form";
+%>
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <a class="back" href="/applications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.apps.title"); %></a>
-      <h1><%c++ $$ << @@.get<std::string>("t.apps.formTitle"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.apps.formSubtitle"); %></p>
+      <a class="back" href="/applications" data-form-back><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg> <%c++ $$ << @@.get<std::string>("t.common.back"); %></a>
+      <div class="document-symbol" aria-hidden="true" data-form-only<%c++ if (!formPhase) $$ << " hidden"; %>><svg class="icon" viewBox="0 0 24 24"><path d="M14 2H5v20h14V7L14 2ZM14 2v6h5M8 12h8M8 16h6"></path></svg></div>
+      <h1 data-form-heading data-catalog-title="<%c++ $$ << @@.get<std::string>("t.apps.catalogTitle"); %>" data-form-title="<%c++ $$ << @@.get<std::string>("t.apps.docFormTitle"); %>"><%c++ $$ << @@.get<std::string>(formPhase ? "t.apps.docFormTitle" : "t.apps.catalogTitle"); %></h1>
     </div>
+    <p class="form-intro" data-form-only<%c++ if (!formPhase) $$ << " hidden"; %>><%c++ $$ << @@.get<std::string>("t.apps.docFormIntro"); %></p>
   </div>
-  <div class="content-form flow">
-    <!-- Профиль: автозаполнение из GET /v1/me (read-only); сбой — карточка
-         скрыта, форму не блокирует (решение в шапке шаблона) -->
-    <div class="notice" data-profile-card hidden>
-      <strong data-profile-fio></strong>
-      <p data-profile-meta></p>
-      <p class="caption"><%c++ $$ << @@.get<std::string>("t.apps.profileNote"); %></p>
-    </div>
 
-    <!-- Состояние «Загрузка» (03 §5.1): скелетоны каталога + профиля;
-         aria-busy на контейнере (03 §6.4). Скрыты при ответе (app.js). -->
-    <div data-form-loading aria-busy="true">
-      <div class="skeleton card"></div>
-      <div class="skeleton card"></div>
-      <div class="skeleton short"></div>
-    </div>
+  <!-- Состояние «Загрузка» (03 §5.1, applications-states.html #loading):
+       скелетоны каталога + профиля; aria-busy. Скрыты при ответе (app.js). -->
+  <div class="content-narrow" data-form-loading aria-busy="true" aria-label="<%c++ $$ << @@.get<std::string>("t.common.loading"); %>">
+    <div class="skeleton card"></div>
+    <div class="skeleton card"></div>
+    <div class="skeleton short"></div>
+  </div>
 
-    <!-- Состояние «Ошибка» (03 §5.3): каталог не загрузился; «Повторить»
-         реально перезапрашивает (app.js, [data-form-retry]). -->
-    <section class="section flow" data-form-error hidden role="alert">
+  <!-- Состояние «Ошибка» (03 §5.3): каталог не загрузился; «Повторить»
+       реально перезапрашивает (app.js, [data-form-retry]). -->
+  <div class="content-narrow" data-form-error hidden>
+    <section class="section flow" role="alert">
       <h3><%c++ $$ << @@.get<std::string>("t.error.loadCatalog"); %></h3>
       <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
       <button class="button" type="button" data-form-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
+  </div>
 
-    <!-- Каталог типов: строки строит app.js из GET /v1/application-types
-         (значения НЕ захардкожены — постановка Э7); тап → форма типа -->
-    <div class="stack" data-catalog hidden></div>
+  <!-- Фаза «Каталог» (application-catalog.html): лист a.document-type;
+       строки строит app.js из GET /v1/application-types (значения НЕ
+       захардкожены — постановка Э7); href ?type=<ключ> — deep link -->
+  <div class="content-narrow stack" data-catalog hidden></div>
 
-    <!-- Форма типа: поля строит app.js по выбранному типу (1–2 вопроса,
-         03 §4.5.3); скрыта, пока тип не выбран -->
-    <form id="application-form" class="flow" data-form hidden>
-      <p class="caption"><span data-type-title></span> · <button type="button" class="offline-retry" data-type-back><%c++ $$ << @@.get<std::string>("t.apps.chooseOther"); %></button></p>
-      <div data-type-fields></div>
-      <p class="field-error" data-form-error hidden></p>
-      <div class="actions section">
-        <button class="button" type="button" data-save-draft data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineDraft"); %>"><%c++ $$ << @@.get<std::string>("t.apps.saveDraft"); %></button>
-        <button class="button primary" type="submit" data-submit-app data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineSubmit"); %>"><%c++ $$ << @@.get<std::string>("t.apps.submitApp"); %></button>
+  <!-- Фаза «Форма» (application-form.html): paper-form -->
+  <div class="content-form flow paper-form" data-paper hidden>
+    <!-- Профиль: автозаполнение из GET /v1/me (read-only); сбой — карточка
+         скрыта, форму не блокирует -->
+    <div class="notice applicant-summary" data-profile-card hidden>
+      <strong data-profile-fio></strong>
+      <p data-profile-meta></p>
+      <p class="caption"><%c++ $$ << @@.get<std::string>("t.apps.profileNote"); %></p>
+    </div>
+    <p class="notice success" role="status" data-draft-restored hidden><%c++ $$ << @@.get<std::string>("t.apps.draftRestored"); %></p>
+    <form id="application-form" data-form novalidate>
+      <div class="validation-summary" tabindex="-1" role="alert" data-validation-summary hidden>
+        <strong><%c++ $$ << @@.get<std::string>("t.apps.checkData"); %></strong>
+        <ul data-validation-list></ul>
       </div>
-      <p class="caption" role="status" data-draft-status><%c++ $$ << @@.get<std::string>("t.apps.usualTime"); %></p>
+      <p class="form-section-label"><%c++ $$ << @@.get<std::string>("t.apps.section01"); %></p>
+      <div class="field">
+        <label for="document-type"><%c++ $$ << @@.get<std::string>("t.apps.docType"); %></label>
+        <select id="document-type" name="type" data-type-select></select>
+      </div>
+      <div data-type-fields></div>
+      <p class="form-section-label" data-section-02 hidden><%c++ $$ << @@.get<std::string>("t.apps.section02"); %></p>
+      <div data-type-fields-02></div>
+      <div class="request-summary" aria-live="polite" data-request-summary>
+        <strong data-summary-title></strong>
+        <p data-summary-line></p>
+        <p class="caption"><%c++ $$ << @@.get<std::string>("t.apps.summaryNote"); %></p>
+      </div>
+      <p class="field-error" role="alert" data-form-error-inline hidden></p>
+      <button class="button primary full section" type="submit" data-submit-app data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineSubmit"); %>"><%c++ $$ << @@.get<std::string>("t.apps.submitArrow"); %></button>
+      <button class="button ghost full" type="button" data-save-draft data-network-action data-offline-label="<%c++ $$ << @@.get<std::string>("t.apps.offlineDraft"); %>"><%c++ $$ << @@.get<std::string>("t.apps.saveDraft"); %></button>
+      <p class="caption" id="draft-status" role="status" data-draft-status><%c++ $$ << @@.get<std::string>("t.apps.usualTime"); %></p>
     </form>
   </div>
 </main>

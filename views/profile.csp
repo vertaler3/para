@@ -39,22 +39,24 @@
 <main id="main" class="shell">
   <div class="page-heading">
     <div>
-      <h1><%c++ $$ << @@.get<std::string>("t.nav.profile"); %></h1>
-      <p><%c++ $$ << @@.get<std::string>("t.profile.subtitle"); %></p>
+      <h1><%c++ $$ << @@.get<std::string>("t.profile.heading"); %></h1>
     </div>
   </div>
-  <div class="content-narrow">
+  <div>
 
-    <!-- ==== Личные данные (GET /v1/me): скелетон → карточка | ошибка ==== -->
+    <!-- ==== Личные данные (GET /v1/me): скелетон → карточка | ошибка.
+         v3 (profile.html): .profile-summary без карточки-подложки над
+         двухколоночной .settings-grid; QR-карточки (5.9/5.12) — прод. ==== -->
     <div data-profile-loading aria-busy="true">
-      <div class="skeleton card"></div>
+      <div class="skeleton title"></div>
+      <div class="skeleton short"></div>
     </div>
     <section class="section flow" data-profile-error hidden role="alert">
       <h3><%c++ $$ << @@.get<std::string>("t.error.loadProfile"); %></h3>
       <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
       <button class="button" type="button" data-profile-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
     </section>
-    <section class="surface flow" data-profile-body hidden aria-labelledby="account-title">
+    <section class="flow profile-head" data-profile-body hidden aria-labelledby="account-title">
       <div class="profile-summary">
         <div class="avatar large" data-avatar-initials aria-hidden="true"></div>
         <div>
@@ -69,7 +71,7 @@
         <button class="button" type="button" data-qr-student><%c++ $$ << @@.get<std::string>("t.profile.showQrCard"); %></button>
       </div>
       <!-- Читательский билет (5.12): GET /v1/library/my-card; нет билета
-           (404 — office.demo) → блок остаётся скрытым (постановка экрана). -->
+           (404 — office.demo) → блок остаётся скрытым. -->
       <div class="library-row" data-library-block hidden>
         <div>
           <strong><%c++ $$ << @@.get<std::string>("t.profile.libraryCard"); %></strong>
@@ -79,148 +81,161 @@
       </div>
     </section>
 
-    <!-- ==== Уведомления (GET/PUT /v1/notifications/settings; 03 §4.7).
-         Якорь #notifications — цель «Включить уведомления» ленты. ==== -->
-    <section class="section" id="notifications" aria-labelledby="notifications-title">
-      <div class="section-title"><h2 id="notifications-title"><%c++ $$ << @@.get<std::string>("t.notif.title"); %></h2></div>
-      <div data-settings-loading aria-busy="true">
-        <div class="skeleton short"></div>
-        <div class="skeleton"></div>
-      </div>
-      <section class="section flow" data-settings-error hidden role="alert">
-        <h3><%c++ $$ << @@.get<std::string>("t.error.loadSettings"); %></h3>
-        <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
-        <button class="button" type="button" data-settings-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
-      </section>
-      <div class="stack" data-settings-body hidden>
-        <label class="option"><input type="checkbox" data-setting="notify_schedule"><%c++ $$ << @@.get<std::string>("t.settings.schedule"); %></label>
-        <label class="option"><input type="checkbox" data-setting="notify_deadlines"><%c++ $$ << @@.get<std::string>("t.settings.deadlines"); %></label>
-        <label class="option"><input type="checkbox" data-setting="notify_applications"><%c++ $$ << @@.get<std::string>("t.settings.applications"); %></label>
-        <div class="quiet-row">
-          <span id="quiet-label"><%c++ $$ << @@.get<std::string>("t.settings.quietHours"); %></span>
-          <div class="quiet-inputs">
-            <input type="time" data-quiet-from aria-labelledby="quiet-label" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.quietFrom"); %>">
-            <span aria-hidden="true">—</span>
-            <input type="time" data-quiet-to aria-labelledby="quiet-label" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.quietTo"); %>">
+    <div class="settings-grid">
+      <div>
+        <!-- ==== «Ваш кампус» (profile.html): только живые маршруты прода —
+             /rooms, /gradebook, /rating, /library, /canteens, /map,
+             /people и якорь #calendar этой же страницы. ==== -->
+        <section class="section" aria-labelledby="campus-title">
+          <div class="section-title"><h2 id="campus-title"><%c++ $$ << @@.get<std::string>("t.profile.yourCampus"); %></h2></div>
+        <a class="list-row" href="/rooms">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.profile.myBookings"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.myBookingsHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/gradebook">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.gradebookHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/rating">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.profile.rating"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.ratingHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/library">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.campus.library"); %></strong><p><%c++ $$ << @@.get<std::string>("t.campus.libraryHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/canteens">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.campus.canteen"); %></strong><p><%c++ $$ << @@.get<std::string>("t.campus.canteenHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/map">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.campus.map"); %></strong><p><%c++ $$ << @@.get<std::string>("t.campus.mapHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="/people">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.profile.people"); %></strong><p><%c++ $$ << @@.get<std::string>("t.campus.peopleHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        <a class="list-row" href="#calendar">
+          <div><strong><%c++ $$ << @@.get<std::string>("t.profile.calendar"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.calendarHint"); %></p></div>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </a>
+        </section>
+
+        <!-- ==== Подписка на календарь (5.4; calendar.html): при загрузке
+             GET /v1/ics/token (200 — активная подписка, 404 — нет);
+             POST — создать/перевыпустить (ротация токена), DELETE — отозвать.
+             Якорь #calendar — цель «Подписка на календарь» расписания. ==== -->
+        <section class="section" id="calendar" aria-labelledby="calendar-title">
+          <div class="section-title"><h2 id="calendar-title"><%c++ $$ << @@.get<std::string>("t.profile.calendar"); %></h2></div>
+          <div class="surface flow ics-card" data-ics-state="<%c++ $$ << @@.get<std::string>("icsState"); %>">
+            <h3><%c++ $$ << @@.get<std::string>("t.profile.icsTitle"); %></h3>
+            <p class="muted small"><%c++ $$ << @@.get<std::string>("t.profile.icsHint"); %></p>
+            <div data-ics-loading aria-busy="true"><div class="skeleton"></div><div class="skeleton short"></div></div>
+            <div class="flow" data-ics-error hidden role="alert">
+              <p class="small"><%c++ $$ << @@.get<std::string>("t.error.loadIcs"); %></p>
+              <button class="button" type="button" data-ics-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+            </div>
+            <div class="flow" data-ics-none hidden>
+              <button class="button primary full" type="button" data-ics-create data-network-action><%c++ $$ << @@.get<std::string>("t.profile.icsCreate"); %></button>
+            </div>
+            <div class="flow" data-ics-active hidden>
+              <p class="notice success" role="status" data-ics-status></p>
+              <a class="button primary full" data-ics-webcal href="#"><%c++ $$ << @@.get<std::string>("t.profile.icsAdd"); %></a>
+              <div class="field">
+                <label for="ics-url"><%c++ $$ << @@.get<std::string>("t.profile.icsLinkLabel"); %></label>
+                <div class="ics-link-row">
+                  <input id="ics-url" type="text" readonly data-ics-url aria-describedby="ics-private">
+                  <button class="button" type="button" data-ics-copy><%c++ $$ << @@.get<std::string>("t.profile.icsCopy"); %></button>
+                </div>
+                <span class="caption" id="ics-private"><%c++ $$ << @@.get<std::string>("t.profile.icsPrivate"); %></span>
+              </div>
+              <div class="actions">
+                <button class="button" type="button" data-ics-create data-network-action><%c++ $$ << @@.get<std::string>("t.profile.icsReissue"); %></button>
+                <button class="button danger-button" type="button" data-ics-revoke data-network-action><%c++ $$ << @@.get<std::string>("t.profile.icsRevoke"); %></button>
+              </div>
+            </div>
+            <div class="ics-steps">
+              <h4><%c++ $$ << @@.get<std::string>("t.profile.icsHowTitle"); %></h4>
+              <ol class="enh-simple-list">
+                <li><%c++ $$ << @@.get<std::string>("t.profile.icsStep1"); %></li>
+                <li><%c++ $$ << @@.get<std::string>("t.profile.icsStep2"); %></li>
+                <li><%c++ $$ << @@.get<std::string>("t.profile.icsStep3"); %></li>
+              </ol>
+            </div>
+            <p class="caption"><%c++ $$ << @@.get<std::string>("t.profile.icsNote"); %></p>
           </div>
-          <p class="caption"><%c++ $$ << @@.get<std::string>("t.settings.quietHint"); %></p>
-        </div>
-        <p class="caption"><%c++ $$ << @@.get<std::string>("t.settings.announcementsHint"); %></p>
+        </section>
+
+        <!-- ==== Онбординг С5 (onboarding_json — массив закрытых шагов). ==== -->
+        <section class="section" aria-labelledby="onboarding-title">
+          <div class="section-title"><h2 id="onboarding-title"><%c++ $$ << @@.get<std::string>("t.onboarding.profileTitle"); %></h2></div>
+          <section class="surface flow" data-ob-card>
+            <p class="overline"><%c++ $$ << @@.get<std::string>("t.onboarding.steps"); %> · <span class="tnum" data-ob-count>0/4</span></p>
+            <div class="progress ob-progress" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.obProgress"); %>" data-ob-bar></div>
+            <div class="ob-steps" data-ob-steps></div>
+            <p class="caption" data-ob-done hidden><%c++ $$ << @@.get<std::string>("t.onboarding.done"); %></p>
+          </section>
+        </section>
       </div>
-    </section>
 
-    <!-- ==== Оформление: тема — сегмент 03 §4.7; смена применяется сразу
-         (data-theme на <html> — токены читают :root[data-theme=dark] /
-         prefers-color-scheme, tokens.css) и сохраняется PUT-ом. Язык
-         интерфейса (5.18) — второй сегмент секции по тому же прецеденту
-         (03 §4.7 «🌐 Язык (Рус | EN | 中文) ← сегмент 3»): автонимы не
-         переводятся (i18n.h lang.*); выбор ставит cookie para_lang
-         мини-роутом /lang (сервер) и сохраняется PUT {lang}; после смены
-         страница перезагружается — переводы рендерит сервер (шаг 3). ==== -->
-    <section class="section" aria-labelledby="theme-title">
-      <div class="section-title"><h2 id="theme-title"><%c++ $$ << @@.get<std::string>("t.profile.appearance"); %></h2></div>
-      <div class="stack">
-        <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.themeGroup"); %>" data-theme-group hidden>
-          <button type="button" data-theme-choice="light"><%c++ $$ << @@.get<std::string>("t.profile.themeLight"); %></button>
-          <button type="button" data-theme-choice="dark"><%c++ $$ << @@.get<std::string>("t.profile.themeDark"); %></button>
-          <button type="button" data-theme-choice="system"><%c++ $$ << @@.get<std::string>("t.profile.themeSystem"); %></button>
-        </div>
-        <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.langGroup"); %>" data-lang-group hidden>
-          <button type="button" data-lang-choice="ru">Рус</button>
-          <button type="button" data-lang-choice="en">EN</button>
-          <button type="button" data-lang-choice="zh">中文</button>
-        </div>
+      <div>
+        <!-- ==== Уведомления (GET/PUT /v1/notifications/settings; 03 §4.7).
+             Якорь #notifications — цель «Включить уведомления» ленты.
+             Тихие часы — форма эталона: подписи «с / до», строка статуса
+             (aria-live) и явное сохранение PUT quiet_hours_json. ==== -->
+        <section class="section" id="notifications" aria-labelledby="notifications-title">
+          <div class="section-title"><h2 id="notifications-title"><%c++ $$ << @@.get<std::string>("t.notif.title"); %></h2></div>
+          <div data-settings-loading aria-busy="true">
+            <div class="skeleton short"></div>
+            <div class="skeleton block"></div>
+          </div>
+          <section class="section flow" data-settings-error hidden role="alert">
+            <h3><%c++ $$ << @@.get<std::string>("t.error.loadSettings"); %></h3>
+            <p class="muted"><%c++ $$ << @@.get<std::string>("t.error.checkInternet"); %></p>
+            <button class="button" type="button" data-settings-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button>
+          </section>
+          <div data-settings-body hidden>
+            <label class="option"><input type="checkbox" data-setting="notify_schedule"><%c++ $$ << @@.get<std::string>("t.settings.schedule"); %></label>
+            <label class="option"><input type="checkbox" data-setting="notify_deadlines"><%c++ $$ << @@.get<std::string>("t.settings.deadlines"); %></label>
+            <label class="option"><input type="checkbox" data-setting="notify_applications"><%c++ $$ << @@.get<std::string>("t.settings.applications"); %></label>
+            <form class="enh-quiet-form" id="quiet-hours-form" data-quiet-form novalidate>
+              <div class="enh-two-fields">
+                <div class="field"><label for="quiet-start"><%c++ $$ << @@.get<std::string>("t.settings.quietFrom"); %></label><input id="quiet-start" name="quiet-start" type="time" required data-quiet-from></div>
+                <div class="field"><label for="quiet-end"><%c++ $$ << @@.get<std::string>("t.settings.quietTo"); %></label><input id="quiet-end" name="quiet-end" type="time" required data-quiet-to></div>
+              </div>
+              <p class="caption"><%c++ $$ << @@.get<std::string>("t.settings.quietHint"); %></p>
+              <button class="button" type="submit" data-quiet-save data-network-action><%c++ $$ << @@.get<std::string>("t.settings.quietSave"); %></button>
+              <p class="caption" id="quiet-hours-status" role="status" aria-live="polite" data-quiet-status></p>
+            </form>
+            <p class="caption"><%c++ $$ << @@.get<std::string>("t.settings.announcementsHint"); %></p>
+          </div>
+        </section>
+
+        <!-- ==== Оформление: тема и язык — прод-сегменты (Р-31); смена темы
+             применяется сразу и сохраняется PUT-ом, язык — мини-роут /lang. ==== -->
+        <section class="section" aria-labelledby="theme-title">
+          <div class="section-title"><h2 id="theme-title"><%c++ $$ << @@.get<std::string>("t.profile.appearance"); %></h2></div>
+          <div class="stack">
+            <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.themeGroup"); %>" data-theme-group hidden>
+              <button type="button" data-theme-choice="light"><%c++ $$ << @@.get<std::string>("t.profile.themeLight"); %></button>
+              <button type="button" data-theme-choice="dark"><%c++ $$ << @@.get<std::string>("t.profile.themeDark"); %></button>
+              <button type="button" data-theme-choice="system"><%c++ $$ << @@.get<std::string>("t.profile.themeSystem"); %></button>
+            </div>
+            <div class="segments" role="group" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.langGroup"); %>" data-lang-group hidden>
+              <button type="button" data-lang-choice="ru">Рус</button>
+              <button type="button" data-lang-choice="en">EN</button>
+              <button type="button" data-lang-choice="zh">中文</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==== Выход (03 §4.7: диалог с danger-подтверждением). ==== -->
+        <section class="section">
+          <button class="button full" type="button" data-logout-open><%c++ $$ << @@.get<std::string>("t.profile.logout"); %></button>
+        </section>
       </div>
-    </section>
-
-    <!-- ==== Подписка на календарь (5.4): POST /v1/ics/token (201 {token} —
-         повторное создание РОТИРУЕТ токен: прежняя ссылка перестаёт
-         обновляться — подсказка ниже), DELETE — 204. Якорь #calendar —
-         цель «Подписка на календарь» расписания и «В календарь»
-         успеваемости. ==== -->
-    <section class="section" id="calendar" aria-labelledby="calendar-title">
-      <div class="section-title"><h2 id="calendar-title"><%c++ $$ << @@.get<std::string>("t.profile.calendar"); %></h2></div>
-      <div class="stack" data-ics-none>
-        <p class="muted small"><%c++ $$ << @@.get<std::string>("t.profile.icsHint"); %></p>
-        <div class="actions">
-          <button class="button primary" type="button" data-ics-create><%c++ $$ << @@.get<std::string>("t.profile.icsCreate"); %></button>
-        </div>
-      </div>
-      <div class="stack" data-ics-active hidden>
-        <div class="actions">
-          <a class="button primary" data-ics-webcal href="#"><%c++ $$ << @@.get<std::string>("t.profile.icsAdd"); %></a>
-        </div>
-        <p class="small ics-url" data-ics-url></p>
-        <div class="actions">
-          <button class="button danger-button" type="button" data-ics-revoke><%c++ $$ << @@.get<std::string>("t.profile.icsRevoke"); %></button>
-        </div>
-      </div>
-      <p class="caption"><%c++ $$ << @@.get<std::string>("t.profile.icsNote"); %></p>
-    </section>
-
-    <!-- ==== Кампус: «Мои брони» → /rooms (03 §4.7, экран rooms.csp);
-         fix — строка «Люди» → /people (каталог 5.11, 03 §4.9.6; входа в
-         навигации не было — на /people вёл только «назад» из person.csp;
-         в черновике profile.html сервисные строки сгруппированы в «Ваш
-         кампус» — здесь вторая строка секции «Кампус», как карточка
-         «Найти человека» — четвёртая в «В кампусе» дашборда; href сверен
-         — PeopleCtrl.h:76 ADD_METHOD_TO "/people", LoginFilter).
-         Разметка-константа — view-данных не нужно (Р-16); цвета —
-         токены .list-row (тёмная тема красит автоматически). ==== -->
-    <section class="section" aria-labelledby="campus-title">
-      <div class="section-title"><h2 id="campus-title"><%c++ $$ << @@.get<std::string>("t.profile.campus"); %></h2></div>
-      <a class="list-row" href="/rooms">
-        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.myBookings"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.myBookingsHint"); %></p></div>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-      </a>
-      <a class="list-row" href="/people">
-        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.people"); %></strong><p><%c++ $$ << @@.get<std::string>("t.campus.peopleHint"); %></p></div>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-      </a>
-    </section>
-
-    <!-- ==== Зачётка и рейтинг (5.15/5.14) — точка входа: страницы
-         вёрстились Батчем 4, входов на них не было (в брифе Батча 4
-         не значились; fix). В черновике profile.html вход «Зачётная
-         книжка и рейтинг» — строкой среди ссылок («Ваш кампус»);
-         здесь — отдельным блоком рядом с «Кампусом», стиль соседних
-         блоков — .list-row. Подписи строк — заголовки страниц-
-         приёмников (gradebook.csp:60 «Итоги по дисциплинам»,
-         rating.csp:53 «Место, имя и средний балл»); href — реальные
-         маршруты /gradebook (GradebookCtrl.h:32) и /rating
-         (RatingCtrl.h:42), оба LoginFilter. Разметка-константа —
-         view-данных не нужно (Р-16). Цвета — только токены
-         .list-row (тёмная тема красит автоматически). ==== -->
-    <section class="section" aria-labelledby="recordbook-title">
-      <div class="section-title"><h2 id="recordbook-title"><%c++ $$ << @@.get<std::string>("t.profile.records"); %></h2></div>
-      <a class="list-row" href="/gradebook">
-        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.gradebook"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.gradebookHint"); %></p></div>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-      </a>
-      <a class="list-row" href="/rating">
-        <div><strong><%c++ $$ << @@.get<std::string>("t.profile.rating"); %></strong><p><%c++ $$ << @@.get<std::string>("t.profile.ratingHint"); %></p></div>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-      </a>
-    </section>
-
-    <!-- ==== Онбординг С5 (onboarding_json — массив закрытых шагов,
-         дефолт DDL «[]»; шаги именует FE: login/schedule/application/
-         notifications). Здесь — управление: выполненные отмечены,
-         шаг отмечается кнопкой. ==== -->
-    <section class="section" aria-labelledby="onboarding-title">
-      <div class="section-title"><h2 id="onboarding-title"><%c++ $$ << @@.get<std::string>("t.onboarding.profileTitle"); %></h2></div>
-      <section class="surface flow" data-ob-card>
-        <p class="overline"><%c++ $$ << @@.get<std::string>("t.onboarding.steps"); %> · <span class="tnum" data-ob-count>0/4</span></p>
-        <div class="progress ob-progress" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.obProgress"); %>" data-ob-bar></div>
-        <div class="ob-steps" data-ob-steps></div>
-        <p class="caption" data-ob-done hidden><%c++ $$ << @@.get<std::string>("t.onboarding.done"); %></p>
-      </section>
-    </section>
-
-    <!-- ==== Выход (03 §4.7: диалог с danger-подтверждением). ==== -->
-    <section class="section">
-      <button class="button full" type="button" data-logout-open><%c++ $$ << @@.get<std::string>("t.profile.logout"); %></button>
-    </section>
+    </div>
   </div>
 
   <!-- QR-карточка (5.9: sheet на весь тап, QR ~240px, имя и номер под ним,

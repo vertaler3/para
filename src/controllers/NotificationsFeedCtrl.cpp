@@ -1,6 +1,7 @@
 #include "controllers/NotificationsFeedCtrl.h"
 
 #include "utils/I18nView.h"
+#include "utils/StaffRouting.h"
 
 #include "services/NotificationsFeedService.h"
 #include "utils/ApiError.h"
@@ -172,7 +173,8 @@ bool parseSegment(const HttpRequestPtr& req, std::string& out)
     out = req->getParameter("segment");
     if (out.empty())
         out = "notifications";
-    return out == "notifications" || out == "news" || out == "events";
+    return out == "notifications" || out == "news" || out == "events" ||
+           out == "announcements";  // фиксы 2026-11-19: лента объявлений
 }
 
 // 400 по 02 §5.1: страница — JSON {error:{code,message}}; htmx-запросу —
@@ -180,7 +182,7 @@ bool parseSegment(const HttpRequestPtr& req, std::string& out)
 HttpResponsePtr badSegment(bool htmx)
 {
     const std::string message =
-        "segment — notifications|news|events";
+        "segment — notifications|news|events|announcements";
     if (!htmx)
         return api::errorResponse("bad_request", message, k400BadRequest);
     auto resp = HttpResponse::newHttpResponse();
@@ -209,10 +211,15 @@ void NotificationsFeedCtrl::page(
     HttpViewData data;
     const auto lang = i18n::resolveRequestLang(req);
     i18n::insertUiStrings(data, lang);
+    para::insertStaffFlag(data, req);  // навигация сотрудника (Р-35)
     data.insert("pageTitle", i18n::pageTitleOf("notif.title", lang));
     // Экран НЕ таб (03 §3.2: пять табов, колокольчик — в шапке): пустой
     // activeTab → ни один пункт таб-бара не получает aria-current.
-    data.insert("activeTab", std::string(""));
+    // Фиксы 2026-11-19: у сотрудника «Новости»/«Объявления» — пункты его
+    // навигации (topbar), активный подсвечивается по сегменту.
+    data.insert("activeTab", (segment == "news" || segment == "announcements")
+                                 ? segment
+                                 : std::string(""));
     // Сегмент «Уведомления | Новости | События» (5.17): партиал читает и
     // рисует переключатель с нужным aria-pressed; данные — клиент (шапка
     // NotificationsFeedCtrl.h).

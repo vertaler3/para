@@ -32,6 +32,13 @@
   };
   const LANG = document.documentElement.lang || 'ru';
   const LOCALE = { ru: 'ru-RU', en: 'en-GB', zh: 'zh-CN' }[LANG] || 'ru-RU';
+  /* plural по словарю: ключи <base>.one|few|many ({n}); Intl.PluralRules
+     LOCALE — ru one/few/many, en/zh other → .many (fe_rebuild шаг 18) */
+  const PLURAL = new Intl.PluralRules(LOCALE);
+  const tn = (base, n, fallback) => {
+    const r = PLURAL.select(n);
+    return t(base + '.' + (r === 'one' ? 'one' : r === 'few' ? 'few' : 'many'), fallback).replace('{n}', String(n));
+  };
 
   /* ---------- тост (app.css .toast; позиция — над таб-баром, 03 §2.8) ---------- */
   /* Второй аргумент — действие справа (03 §2.8: «действие справа»):
@@ -70,7 +77,7 @@
       banner.hidden = !offline;
       if (offline && bannerText) {
         bannerText.textContent = lastSyncAt
-          ? t('offline.bannerStale', 'Нет сети. Показываем данные на момент ') + lastSyncAt
+          ? t('offline.bannerStale', 'Нет сети. Показываем данные на момент').trimEnd() + ' ' + lastSyncAt
           : t('offline.banner', 'Нет сети. Проверьте подключение — и попробуйте ещё раз.');
       }
     }
@@ -189,7 +196,7 @@
         if (resp.status >= 500) toast(message);
         return null;
       }
-      lastSyncAt = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      lastSyncAt = new Date().toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
       return await resp.json();
     } catch (e) {
       applyOffline(true);
@@ -210,10 +217,10 @@
       const label = count >= 20 ? '20+' : String(count);
       badge.textContent = label;
       badge.hidden = false;
-      if (bellLink) bellLink.setAttribute('aria-label', 'Уведомления, непрочитанных: ' + label);
+      if (bellLink) bellLink.setAttribute('aria-label', t('a11y.notifications', 'Уведомления') + ': ' + label);
     } else {
       badge.hidden = true;
-      if (bellLink) bellLink.setAttribute('aria-label', 'Уведомления');
+      if (bellLink) bellLink.setAttribute('aria-label', t('a11y.notifications', 'Уведомления'));
     }
   };
   const refreshUnreadBadge = async () => {
@@ -253,7 +260,10 @@
     if (!s) return;
     authedSettings = true;
     if (s.theme) applyTheme(s.theme);
-    markLang(s.lang);
+    markFooterTheme(s.theme || 'system');
+    /* активный язык — тот, на котором сервер отрисовал страницу (<html lang>: cookie
+       para_lang → Accept-Language → ru), а не сохранённый в настройках */
+    markLang(document.documentElement.lang || s.lang);
   });
 
   /* ---------- язык интерфейса (5.18): сегмент в профиле + компактный
@@ -289,7 +299,121 @@
       location.href = '/lang?lang=' + lang + '&next=' + encodeURIComponent(next);
     });
   });
-  markLang(paraLang());
+  markLang(document.documentElement.lang || paraLang());
+
+  /* ---------- каркас v3 (fe_rebuild шаг 4, Р-31): тема в footer, дата недели,
+     аватар, активный пункт «В кампусе» ---------- */
+  /* Тема из footer: та же механика, что сегмент профиля — applyTheme сразу,
+     авторизованному PUT {theme}; гостю — только на текущей странице
+     (локального хранилища нет — конвенция каркаса). */
+  function markFooterTheme(theme) {
+    document.querySelectorAll('[data-footer-theme]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.footerTheme === theme));
+    });
+  }
+  markFooterTheme(document.documentElement.getAttribute('data-theme') || 'system');
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest && e.target.closest('[data-footer-theme]');
+    if (!btn) return;
+    const theme = btn.dataset.footerTheme;
+    if (!/^(light|dark|system)$/.test(theme)) return;
+    applyTheme(theme);
+    markFooterTheme(theme);
+    document.querySelectorAll('[data-theme-choice]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.themeChoice === theme));
+    });
+    if (authedSettings) {
+      const saved = await putSettings({ theme });
+      toast(saved ? t('toast.themeSaved', 'Оформление сохранено')
+                  : t('toast.failTheme', 'Не получилось сохранить тему'));
+    }
+  });
+  /* Дата в шапке — текущая учебная неделя «пн–вс» в формате языка страницы
+     (<html lang>, Intl; без строк словаря — месяцы локализует браузер). */
+  (() => {
+    const el = document.querySelector('[data-header-date]');
+    if (!el || typeof Intl === 'undefined') return;
+    const now = new Date();
+    const mon = new Date(now); mon.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    const lang = document.documentElement.lang || 'ru';
+    try {
+      const f = new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'long' });
+      el.textContent = f.formatRange ? f.formatRange(mon, sun) : f.format(mon) + ' – ' + f.format(sun);
+    } catch (_) { /* старый браузер — дата просто не показывается */ }
+  })();
+  /* Аватар — инициалы ФИО из GET /v1/me (гость/ошибка — кружок пустой,
+     ссылка на профиль работает). */
+  /* GET /v1/me — один запрос на страницу: аватар каркаса и подзаголовок
+     «Сегодня» (группа) читают общий промис. */
+  let meRequest = null;
+  const getMe = () => meRequest || (meRequest = fetchJSON('/v1/me'));
+  (() => {
+    const av = document.querySelector('[data-avatar]');
+    if (!av) return;
+    getMe().then((me) => {
+      const fio = me && me.profile && me.profile.fio ? String(me.profile.fio) : '';
+      const parts = fio.trim().split(/\s+/).filter(Boolean);
+      let ini = parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2);
+      /* сотрудник: студенческого профиля нет — инициалы из логина
+         («dean.demo» → «DE», как в списке демо-доступов входа, Р-35) */
+      if (!ini && me && typeof me.login === 'string') ini = me.login.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2);
+      av.textContent = ini.toUpperCase();
+    });
+  })();
+  /* Быстрый поиск «Куда перейти?» (эталон v3): фильтр серверного списка разделов по
+     словам подписи/описания (ё→е, грубая основа слова — как в эталоне), Ctrl/⌘+K,
+     ↓ — к первой ссылке, Enter — открыть первую. */
+  (() => {
+    const dlg = document.querySelector('[data-search-dialog]');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    const input = dlg.querySelector('[data-search-input]');
+    const items = Array.from(dlg.querySelectorAll('[data-search-item]'));
+    const empty = dlg.querySelector('[data-search-empty]');
+    const count = dlg.querySelector('[data-search-count]');
+    const stem = (w) => w.toLowerCase().replace(/ё/g, 'е').replace(/(ами|ями|ого|ему|ов|ев|ия|ии|ую|а|ы|и|у|е)$/u, '');
+    const plural = (n) => {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return count.dataset.one;
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return count.dataset.few;
+      return count.dataset.many;
+    };
+    const render = () => {
+      const terms = input.value.trim().split(/\s+/).filter(Boolean).map(stem);
+      let n = 0;
+      items.forEach((li) => {
+        const words = li.textContent.toLowerCase().split(/[\s,·]+/).map(stem);
+        const ok = terms.every((t) => words.some((w) => w.indexOf(t) !== -1));
+        li.hidden = !ok; if (ok) n += 1;
+      });
+      if (empty) empty.hidden = n > 0;
+      if (count) count.textContent = n + ' ' + plural(n);
+    };
+    let prevFocus = null;
+    const open = () => { prevFocus = document.activeElement; input.value = ''; render(); dlg.showModal(); input.focus(); };
+    document.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('[data-search-open]')) open();
+      else if (e.target.closest && e.target.closest('[data-search-close]')) dlg.close();
+      else if (e.target === dlg) dlg.close();
+    });
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', (e) => {
+      const first = items.find((li) => !li.hidden);
+      const link = first && first.querySelector('a');
+      if (e.key === 'ArrowDown' && link) { e.preventDefault(); link.focus(); }
+      if (e.key === 'Enter' && link) { e.preventDefault(); link.click(); }
+    });
+    dlg.addEventListener('close', () => { if (prevFocus && prevFocus.isConnected) prevFocus.focus(); });
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (dlg.open) dlg.close(); else open(); }
+    });
+  })();
+  document.querySelectorAll('[data-campus-link]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (href && (location.pathname === href || location.pathname.indexOf(href + '/') === 0)) {
+      a.setAttribute('aria-current', 'page');
+    }
+  });
 
   /* ---------- онбординг С5 (03 §4.7/§4.9.4) ---------- */
   /* Состояние чеклиста — onboarding_json настроек: массив КЛЮЧЕЙ закрытых
@@ -365,6 +489,7 @@
       const login = $('#login');
       if (!login) return;
       login.value = button.getAttribute('data-demo-login');
+      login.dispatchEvent(new Event('input')); // снять «Введите логин»
       const password = $('#password');
       if (password) password.focus();
       document.querySelectorAll('[data-demo-login]').forEach((x) => {
@@ -382,20 +507,22 @@
       const show = password.type === 'password';
       password.type = show ? 'text' : 'password';
       togglePassword.setAttribute('aria-pressed', String(show));
-      togglePassword.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+      togglePassword.setAttribute('aria-label', show ? t('a11y.hidePassword', 'Скрыть пароль') : t('a11y.showPassword', 'Показать пароль'));
     });
   }
 
   /* ---------- форма входа (views/login.csp; 03 §4.1, §5.1/§5.3) ---------- */
   /* POST /v1/auth/login JSON {login,password} (02 §5.2, Content-Type:
-     application/json). Успех 200 — редирект на «Сегодня» (/). Ошибка —
-     сообщение у формы из {error:{code,message}} (02 §5.1):
-     invalid_credentials — нейтральный текст без деталей, что именно
-     неверно (фокус в пароль, поля не очищаются — 03 §5.3);
+     application/json). Успех 200 — редирект на «Сегодня» (/). Ошибки —
+     по полям эталона v3 (login-states.html, шаг 6): пустые логин/пароль —
+     до запроса, под полем + aria-invalid; по коду {error:{code}} (02 §5.1):
+     invalid_credentials — под паролем, нейтральный текст без деталей, что
+     именно неверно (фокус в пароль, поля не очищаются — 03 §5.3);
      too_many_attempts — блокировка входа (03 §4.1/§5.3): паузу ведёт
      сервер (LoginLimiter 15→30→60… с), клиент читает Retry-After и
      показывает отсчёт на disabled-кнопке «Подождите N с» до её
-     разблокировки; прочие — message из ответа. Пока идёт запрос —
+     разблокировки (текст — #form-error под кнопкой); прочие — строка
+     словаря со статусом (message сервера русский). Пока идёт запрос —
      кнопка disabled «Входим…» (03 §5.1: кнопка с async-действием в
      состоянии loading). Офлайн-кнопка — helper «Нужна сеть для входа»
      (03 §5.4, через applyOffline + data-offline-label). Сетевой сброс —
@@ -405,8 +532,36 @@
   if (loginForm) {
     const loginInput = $('#login');
     const passwordInput = $('#password');
-    const formError = $('#login-error');
+    const formError = $('#form-error');
     const submitButton = loginForm.querySelector('button[type="submit"]');
+    const submitLabel = () => t('login.submit', 'Войти');
+    const fmtN = (key, fallback, n) => t(key, fallback).replace('{n}', String(n));
+    /* ошибки по полям (login-states.html, L-1): текст в p.field-error под
+       полем, aria-invalid на поле (aria-describedby уже связывает их в
+       разметке). input снимает ошибку своего поля. */
+    const fieldErrorEl = (input) => input && $('#' + input.id + '-error');
+    const setFieldError = (input, text) => {
+      const el = fieldErrorEl(input);
+      if (!input || !el) return;
+      el.textContent = text;
+      el.hidden = false;
+      input.setAttribute('aria-invalid', 'true');
+    };
+    const clearFieldError = (input) => {
+      const el = fieldErrorEl(input);
+      if (!input || !el) return;
+      el.textContent = '';
+      el.hidden = true;
+      input.removeAttribute('aria-invalid');
+    };
+    const clearErrors = () => {
+      clearFieldError(loginInput);
+      clearFieldError(passwordInput);
+      if (formError) { formError.textContent = ''; formError.hidden = true; }
+    };
+    [loginInput, passwordInput].forEach((input) => {
+      if (input) input.addEventListener('input', () => clearFieldError(input));
+    });
     const showFormError = (text) => {
       if (!formError) return;
       formError.textContent = text;
@@ -428,13 +583,13 @@
       /* если офлайн-режим уже владеет подписью (data-was-label стоит,
          helper-текст на кнопке) — тики и старт отсчёта её не перебивают */
       if (!submitButton.hasAttribute('data-was-label')) {
-        submitButton.textContent = 'Подождите ' + remain + ' с';
+        submitButton.textContent = fmtN('login.wait', 'Подождите {n} с', remain);
       }
       countdownTimer = setInterval(() => {
         remain -= 1;
         if (remain > 0) {
           if (!submitButton.hasAttribute('data-was-label')) {
-            submitButton.textContent = 'Подождите ' + remain + ' с';
+            submitButton.textContent = fmtN('login.wait', 'Подождите {n} с', remain);
           }
           return;
         }
@@ -446,14 +601,15 @@
              Record ОБНОВЛЯЕТСЯ на «Войти» — иначе восстановится
              устаревший текст отсчёта, захваченный applyOffline в момент
              offline-события (гонка раунда 2 ревью, 03 §5.4) */
-          submitButton.setAttribute('data-was-label', 'Войти');
+          submitButton.setAttribute('data-was-label', submitLabel());
           submitButton.setAttribute('data-was-disabled', '0');
           if (!offlineOwnsLabel) {
-            submitButton.textContent = 'Войти';
+            submitButton.textContent = submitLabel();
           }
           return;
         }
-        submitButton.textContent = 'Войти';
+        if (formError) { formError.textContent = ''; formError.hidden = true; }
+        submitButton.textContent = submitLabel();
         submitButton.disabled = false;
       }, 1000);
     };
@@ -465,7 +621,17 @@
         applyOffline(true);
         return;
       }
-      if (formError) formError.hidden = true;
+      clearErrors();
+      /* пустые поля — до запроса (L-1), фокус на первое ошибочное */
+      const emptyLogin = !loginInput || !loginInput.value.trim();
+      const emptyPassword = !passwordInput || !passwordInput.value;
+      if (emptyLogin) setFieldError(loginInput, t('login.errLoginEmpty', 'Введите логин'));
+      if (emptyPassword) setFieldError(passwordInput, t('login.errPasswordEmpty', 'Введите пароль'));
+      if (emptyLogin || emptyPassword) {
+        const first = emptyLogin ? loginInput : passwordInput;
+        if (first) first.focus();
+        return;
+      }
       const previousLabel = submitButton ? submitButton.textContent : '';
       let wentOffline = false; // сетевой сброс во время запроса (03 §5.4)
       let blockedFor = 0;      // Retry-After из 429 (03 §4.1/§5.3)
@@ -487,23 +653,23 @@
           return;
         }
         let code = '';
-        let message = 'Ошибка ' + resp.status;
         try {
           const body = await resp.json();
-          if (body && body.error) {
-            code = body.error.code || '';
-            if (body.error.message) message = body.error.message;
-          }
+          if (body && body.error) code = body.error.code || '';
         } catch (e) { /* тело не JSON — остаётся текст со статусом */ }
         if (code === 'invalid_credentials') {
-          message = 'Неверный логин или пароль';
+          /* под паролем (login-states.html «Ошибка»): текст нейтральный —
+             не раскрывает, какое из полей неверно (03 §5.3) */
+          setFieldError(passwordInput, t('login.errInvalid', 'Неверный логин или пароль'));
           if (passwordInput) passwordInput.focus();
-        } else if (code === 'too_many_attempts') {
+        } else if (code === 'too_many_attempts' || resp.status === 429) {
           const raw = parseInt(resp.headers.get('Retry-After'), 10);
           blockedFor = Number.isFinite(raw) && raw > 0 ? raw : 15; // стартовая пауза 03 §4.1
-          message = 'Слишком много попыток входа. Подождите ' + blockedFor + ' секунд и попробуйте снова.';
+          showFormError(fmtN('login.errTooMany', 'Слишком много попыток входа. Подождите {n} с и попробуйте снова.', blockedFor));
+        } else {
+          /* message сервера — по-русски (02 §5.1): на en/zh — словарь со статусом */
+          showFormError(fmtN('login.errStatus', 'Не получилось войти (ошибка {n}). Попробуйте ещё раз.', resp.status));
         }
-        showFormError(message);
       } catch (e) {
         wentOffline = true;
         if (submitButton) {
@@ -548,6 +714,118 @@
     if (gradesRetry) gradesRetry.addEventListener('click', () => window.location.reload());
   }
 
+  /* ---------- поиск в зачётной книжке (views/gradebook.csp; эталон
+     recordbook.html #recordbook-search) ---------- */
+  /* Фильтр уже отрендеренных строк [data-grade-row] по тексту (дисциплина
+     и код), регистр — по языку страницы; счётчик #recordbook-count —
+     aria-live в разметке. Семестра в данных нет — фильтра семестра нет. */
+  const recordbookSearch = document.getElementById('recordbook-search');
+  if (recordbookSearch) {
+    const rows = Array.from(document.querySelectorAll('[data-grade-row]'));
+    const count = document.getElementById('recordbook-count');
+    const filter = () => {
+      const q = recordbookSearch.value.trim().toLocaleLowerCase(LANG);
+      let visible = 0;
+      rows.forEach((row) => {
+        row.hidden = !!q && !row.textContent.toLocaleLowerCase(LANG).includes(q);
+        if (!row.hidden) visible += 1;
+      });
+      const list = document.querySelector('[data-grade-list]');
+      if (list) list.hidden = visible === 0;
+      if (!count) return;
+      if (!q) { count.textContent = ''; return; }
+      count.textContent = visible
+        ? t('gradebook.searchShown', 'Дисциплин: {n} из {m}').replace('{n}', String(visible)).replace('{m}', String(rows.length))
+        : t('gradebook.searchNone', 'По этому запросу дисциплин нет');
+    };
+    recordbookSearch.addEventListener('input', filter);
+    filter();
+  }
+
+  /* ---------- поиск и «Моя строка» в рейтинге (views/rating.csp; эталон
+     ranking.html #ranking-search/#find-my-rank) ---------- */
+  /* Фильтр уже отрендеренных строк .ranking-row по тексту (место или
+     маскированное имя — Р-15: ищем только по тому, что пришло с сервера);
+     статус #ranking-status — aria-live в разметке. «Моя строка»: сброс
+     поиска, прокрутка к .ranking-row.self (smooth, при reduced motion —
+     мгновенно) и фокус (у строк tabindex=-1). */
+  const rankingSearch = document.getElementById('ranking-search');
+  if (rankingSearch) {
+    const rows = Array.from(document.querySelectorAll('.ranking-row'));
+    const status = document.getElementById('ranking-status');
+    const filter = () => {
+      const q = rankingSearch.value.trim().toLocaleLowerCase(LANG);
+      let visible = 0;
+      rows.forEach((row) => {
+        row.hidden = !!q && !row.textContent.toLocaleLowerCase(LANG).includes(q);
+        if (!row.hidden) visible += 1;
+      });
+      if (!status) return;
+      if (!q) { status.textContent = ''; return; }
+      status.textContent = visible
+        ? t('rating.shown', 'Показано: {n} из {m}').replace('{n}', String(visible)).replace('{m}', String(rows.length))
+        : t('rating.searchNone', 'По запросу никого не нашли. Попробуйте фамилию без инициалов.');
+    };
+    rankingSearch.addEventListener('input', filter);
+    const findMine = document.getElementById('find-my-rank');
+    if (findMine) {
+      findMine.addEventListener('click', () => {
+        const mine = document.querySelector('.ranking-row.self');
+        if (!mine) return;
+        rankingSearch.value = '';
+        filter();
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        mine.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+        mine.focus({ preventScroll: true });
+      });
+    }
+    filter();
+  }
+
+  /* ---------- «План до допуска» (views/grades_discipline.csp; эталон
+     discipline.html #admission-result) ---------- */
+  /* Ползунки — по прод-компонентам с недобором, диапазон [score..max]
+     (сервер кладёт data-plan-base). Итог = score_sum + Σ(значение − base),
+     порог — max_sum сводки (демо-правило GradesService). Только прогноз на
+     клиенте: ничего не сохраняется и не отправляется. Текст — словарь
+     discipline.plan* (aria-live — в разметке). */
+  const admissionPlan = document.querySelector('[data-admission-plan]');
+  if (admissionPlan) {
+    const result = admissionPlan.querySelector('#admission-result');
+    const base = Number(admissionPlan.dataset.planScore) || 0;
+    const threshold = Number(admissionPlan.dataset.planThreshold) || 0;
+    const pluralPts = (n) => {
+      const m10 = n % 10, m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return t('plural.pointOne', 'балл');
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return t('plural.pointFew', 'балла');
+      return t('plural.pointMany', 'баллов');
+    };
+    const fill = (s, map) => Object.keys(map).reduce((acc, k) => acc.replace('{' + k + '}', String(map[k])), s);
+    const calculate = () => {
+      let total = base;
+      admissionPlan.querySelectorAll('input[type=range][data-plan-base]').forEach((input) => {
+        const v = Number(input.value);
+        total += v - Number(input.dataset.planBase);
+        const out = admissionPlan.querySelector('#' + input.id + '-value');
+        if (out) out.textContent = String(v);
+      });
+      const left = Math.max(0, threshold - total);
+      const head = fill(t('discipline.planTotal', 'Итого {n} из {m}.'), { n: total, m: threshold });
+      const tail = left > 0
+        ? fill(t('discipline.planLeft', 'До допуска ещё {n} {pts}.'), { n: left, pts: pluralPts(left) })
+        : t('discipline.planReached', 'Порог допуска достигнут — прогноз положительный.');
+      if (result) {
+        result.textContent = head + ' ' + tail;
+        result.classList.toggle('danger', left > 0);
+        result.classList.toggle('success', left === 0);
+      }
+    };
+    admissionPlan.addEventListener('input', (e) => {
+      if (e.target.matches('input[type=range][data-plan-base]')) calculate();
+    });
+    calculate();
+  }
+
   /* ---------- экран «Сегодня» (views/dashboard.csp; 03 §4.2, §5) ---------- */
   /* Данные — один fetch GET /v1/dashboard (контракт DashboardService.h):
      виджеты «Следующая пара»/«Сегодня» (ScheduleService), «Дедлайны»
@@ -588,8 +866,31 @@
     }
     const dateEl = $$('[data-today-date]');
     if (dateEl) {
-      dateEl.textContent = new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' });
+      /* эталон v3: «Среда, 18 ноября 2026» — с годом, день недели с заглавной */
+      const full = new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      const clean = full.replace(/\s*г\.$/u, ''); // ru: «… 2026 г.» → «… 2026», как в эталоне
+      dateEl.textContent = clean.charAt(0).toUpperCase() + clean.slice(1);
     }
+    /* подзаголовок эталона «1-ФМО · всё важное на сегодня» — группа из
+       GET /v1/me (profile.group); у сотрудника профиля нет — остаётся
+       серверная строка dash.heading */
+    const metaEl = $$('[data-dash-meta]');
+    if (metaEl) {
+      getMe().then((me) => {
+        const group = me && me.profile && me.profile.group ? String(me.profile.group) : '';
+        metaEl.textContent = group; /* фиксы 2026-11-19: без слогана-хвоста */
+        metaEl.hidden = !group;
+      });
+    }
+    /* aria-busy секции виджета на время загрузки (dashboard-states.html:
+       скелетон с aria-busy); снимается при отрисовке данных/ошибки */
+    const setBusy = (name, on) => {
+      const w = $$('[data-widget="' + name + '"]');
+      if (!w) return;
+      if (on) w.setAttribute('aria-busy', 'true');
+      else w.removeAttribute('aria-busy');
+    };
+    const BUSY_WIDGETS = ['next-class', 'today', 'deadlines', 'applications', 'news'];
 
     /* словари-константы словарей CHECK DDL (0002/0003/0004) — метки FE */
     /* метки словарей CHECK DDL — из словаря 5.18 (t: бандл сервера);
@@ -682,19 +983,36 @@
     const updateNextMeta = (next) => {
       const meta = $$('[data-next-meta]');
       if (!meta) return;
+      /* эталон v3: «Следующая пара · через 25 минут» — подпись внутри next-meta */
+      const lead = t('dash.nextClass', 'Следующая пара') + ' · ';
       const started = new Date(next.starts_at).getTime() <= Date.now();
       if (started) {
-        meta.textContent = t('dash.inProgressNow', 'идёт сейчас') + ' · ' + t('dash.until', 'до') + ' ' + timeOf(next.ends_at);
+        meta.textContent = lead + t('dash.inProgressNow', 'идёт сейчас') + ' · ' + t('dash.until', 'до') + ' ' + timeOf(next.ends_at);
         return;
       }
       const mins = minutesUntil(next.starts_at);
-      meta.textContent = mins >= 1
+      meta.textContent = lead + (mins >= 1
         ? t('dash.inMinutes', 'через {n}').replace('{n}', mins + ' ' + plural(mins, t('plural.minuteOne', 'минуту'), t('plural.minuteFew', 'минуты'), t('plural.minuteMany', 'минут')))
-        : t('dash.lessMinute', 'меньше минуты');
+        : t('dash.lessMinute', 'меньше минуты'));
     };
+    /* ФИО «Фамилия Имя Отчество» → «И. О. Фамилия» (эталон teacher-line) и
+       инициалы аватара «ИФ» (как аватар каркаса) */
+    const shortFio = (fio) => {
+      const parts = String(fio || '').trim().split(/\s+/).filter(Boolean);
+      return parts.length === 3 ? parts[1][0] + '. ' + parts[2][0] + '. ' + parts[0] : parts.join(' ');
+    };
+    const initialsOf = (fio) => {
+      const parts = String(fio || '').trim().split(/\s+/).filter(Boolean);
+      return (parts.length > 1 ? parts[1][0] + parts[0][0] : (parts[0] || '').slice(0, 2)).toUpperCase();
+    };
+    const mapHref = (room) => '/map?q=' + encodeURIComponent(room || '');
+    const withBuilding = (room, building) => (building ? room + ' · ' + building : room);
+    const PEOPLE_OFFSET = 1000; // профиль человека = teacher_id + 1000 (Р-15)
+    let teacherSeq = 0;
     const renderNext = (next, failed) => {
       show('[data-next-loading]', false);
       show('[data-next-error]', Boolean(failed));
+      setBusy('next-class', false);
       stopCountdown();
       const widget = $$('[data-widget="next-class"]');
       const body = $$('[data-next-body]');
@@ -715,8 +1033,42 @@
       if (time) time.textContent = timeOf(next.starts_at) + '–' + timeOf(next.ends_at);
       const discipline = $$('[data-next-discipline]');
       if (discipline) discipline.textContent = next.discipline || '';
+      /* next-location эталона: «Аудитория 1207» + корпус (этажа в данных
+         нет — не выводится) + «На карте» → /map?q=<аудитория> */
       const room = $$('[data-next-room]');
-      if (room) room.textContent = next.room || '—';
+      if (room) room.textContent = t('dash.roomTitle', 'Аудитория {room}').replace('{room}', next.room || '—');
+      const building = $$('[data-next-building]');
+      if (building) {
+        building.textContent = next.building || '';
+        building.hidden = !next.building;
+      }
+      const map = $$('[data-next-map]');
+      if (map) {
+        map.hidden = !next.room;
+        map.href = mapHref(next.room);
+      }
+      const sched = $$('[data-next-schedule]');
+      if (sched) sched.href = dateOf(next.starts_at) ? '/schedule?date=' + dateOf(next.starts_at) : '/schedule';
+      /* teacher-line: ФИО из GET /v1/people/{teacher_id+1000} (как диалог
+         расписания; ответ плоский — fio на верхнем уровне). Нет teacher_id
+         или запрос не удался — строка скрыта. */
+      const teacher = $$('[data-next-teacher]');
+      if (!teacher) return;
+      teacher.hidden = true;
+      const tid = parseInt(next.teacher_id, 10);
+      if (!Number.isFinite(tid)) return;
+      const seq = ++teacherSeq;
+      fetchJSON('/v1/people/' + (tid + PEOPLE_OFFSET)).then((person) => {
+        if (seq !== teacherSeq) return;
+        const fio = person && (person.fio || (person.person && person.person.fio));
+        if (!fio) return;
+        teacher.href = '/people/' + (tid + PEOPLE_OFFSET);
+        const name = teacher.querySelector('[data-next-teacher-name]');
+        if (name) name.textContent = shortFio(fio);
+        const ini = teacher.querySelector('[data-next-teacher-initials]');
+        if (ini) ini.textContent = initialsOf(fio);
+        teacher.hidden = false;
+      });
     };
 
     /* --- виджет «Сегодня»: все пары дня, прошедшие — приглушённы,
@@ -724,6 +1076,7 @@
     const renderToday = (events, failed) => {
       show('[data-today-loading]', false);
       show('[data-today-error]', Boolean(failed));
+      setBusy('today', false);
       const body = $$('[data-today-body]');
       const title = $$('[data-today-title]');
       if (!body) return;
@@ -743,35 +1096,94 @@
       body.hidden = false;
       body.replaceChildren();
       events.forEach((e) => {
-        const row = el('a', 'lesson');
-        /* тап → объект: обычная пара — /schedule; перенос/отмена — день
-           расписания с этим переносом (канон deep_link фикстур Э6;
-           карточка изменения §4.9.1 — экран Э7, который ещё не собран) */
-        row.href = e.status && e.status !== 'normal' && dateOf(e.starts_at)
-          ? '/schedule?date=' + dateOf(e.starts_at)
-          : '/schedule';
+        /* эталон v3: div.lesson (+ .moved/.cancelled/.substituted), предмет —
+           ссылка на день расписания, аудитория — a.lesson-room → карта с
+           корпусом в <small>; изменение — span.event-change «· Перенос» */
+        const status = e.status === 'moved' || e.status === 'cancelled' || e.status === 'substituted' ? e.status : '';
+        const row = el('div', 'lesson' + (status ? ' ' + status : ''));
         if (timeOf(e.ends_at) && new Date(e.ends_at).getTime() < Date.now()) row.classList.add('is-past');
         const time = el('div', 'lesson-time');
         time.append(el('strong', null, timeOf(e.starts_at)));
         if (timeOf(e.ends_at)) time.append(el('span', null, timeOf(e.ends_at)));
         const mid = el('div');
-        mid.append(el('div', 'lesson-subject', e.discipline || ''));
+        const subject = el('div', 'lesson-subject');
+        const subjectLink = el('a', null, e.discipline || '');
+        subjectLink.href = dateOf(e.starts_at) ? '/schedule?date=' + dateOf(e.starts_at) : '/schedule';
+        subject.append(subjectLink);
+        mid.append(subject);
         const detail = el('p', 'lesson-detail', LESSON_KIND[e.kind] || '');
-        if (e.status === 'moved') detail.append(' ', el('span', 'badge', 'Перенос'));
-        if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+        const CHANGE = {
+          moved: t('schedule.sheetChange', 'Перенос'),
+          cancelled: t('lesson.cancelled', 'Отменена'),
+          substituted: t('lesson.substituted', 'Замена')
+        };
+        if (status) detail.append(' ', el('span', 'event-change', '· ' + CHANGE[status]));
         mid.append(detail);
-        const room = el('div', 'lesson-room');
-        if (e.status === 'cancelled') {
+        let room;
+        if (status === 'cancelled') {
+          room = el('span', 'lesson-room');
           room.append(el('s', null, e.room || '—'));
-          room.append(el('small', null, 'отменена'));
-        } else if (e.status === 'moved' && e.prev_room) {
-          room.append(el('s', null, e.prev_room));
-          room.append(document.createTextNode(' → ' + (e.room || '—')));
         } else {
-          room.append(el('span', null, e.room || '—'));
+          room = el('a', 'lesson-room', e.room || '—');
+          room.href = mapHref(e.room);
         }
+        if (e.building) room.append(el('small', null, e.building));
         row.append(time, mid, room);
         body.append(row);
+      });
+    };
+
+    /* --- «Что изменилось» (эталон v3 change-block): события дня со
+       статусом moved/cancelled/substituted из data.today. Причины переноса
+       в данных нет — не выводится; «Подробнее» → день расписания (там
+       диалог пары; отдельной страницы изменения в проде нет). --------- */
+    const dayShort = (iso) => {
+      const d = new Date(iso);
+      const s = d.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    };
+    const renderChanges = (events, failed) => {
+      const sec = $$('[data-widget="changes"]');
+      const body = $$('[data-changes-body]');
+      if (!sec || !body) return;
+      body.replaceChildren();
+      const changed = failed ? [] : events.filter((e) => e.status === 'moved' || e.status === 'cancelled' || e.status === 'substituted');
+      sec.hidden = !changed.length;
+      changed.forEach((e) => {
+        const box = el('div', 'change-block');
+        box.setAttribute('data-change-block', '');
+        box.append(el('h3', null, timeOf(e.starts_at) + ' · ' + (e.discipline || '')));
+        const span = timeOf(e.starts_at) + '–' + timeOf(e.ends_at);
+        let label = t('schedule.changeSub', 'Замена преподавателя');
+        let caption = span;
+        const route = el('div', 'change-route');
+        if (e.status === 'moved') {
+          const prev = e.prev_starts_at || '';
+          const sameTime = !prev || (dateOf(prev) === dateOf(e.starts_at) && timeOf(prev) === timeOf(e.starts_at));
+          label = sameTime ? t('schedule.changeRoomMoved', 'Перенос аудитории') : t('schedule.changeClassMoved', 'Перенос занятия');
+          if (e.prev_room && e.prev_room !== e.room) {
+            const arrow = el('span', null, '→');
+            arrow.setAttribute('aria-hidden', 'true');
+            route.append(el('s', null, withBuilding(e.prev_room, e.prev_building)), arrow);
+          }
+          const now = el('a', null, withBuilding(e.room || '—', e.building));
+          now.href = mapHref(e.room);
+          now.setAttribute('data-change-room', '');
+          route.append(now);
+          caption = sameTime
+            ? t('schedule.changeSameTime', 'Время прежнее') + ' · ' + span
+            : t('schedule.changeWas', 'Было:') + ' ' + (dateOf(prev) !== dateOf(e.starts_at) ? dayShort(prev) + ', ' : '') + timeOf(prev);
+        } else if (e.status === 'cancelled') {
+          label = t('schedule.changeCancelled', 'Занятие отменено');
+          route.append(el('s', null, withBuilding(e.room || '—', e.building)));
+        }
+        box.append(el('span', 'change-label', label));
+        if (route.childNodes.length) box.append(route);
+        box.append(el('p', 'caption', caption));
+        const more = el('a', 'change-detail', e.status === 'moved' ? t('schedule.changeMore', 'Подробнее о переносе') : t('schedule.changeMoreAny', 'Подробнее об изменении'));
+        more.href = dateOf(e.starts_at) ? '/schedule?date=' + dateOf(e.starts_at) : '/schedule';
+        box.append(more);
+        body.append(box);
       });
     };
 
@@ -779,6 +1191,7 @@
     const renderDeadlines = (items, failed) => {
       show('[data-deadlines-loading]', false);
       show('[data-deadlines-error]', Boolean(failed));
+      setBusy('deadlines', false);
       const body = $$('[data-deadlines-body]');
       if (!body) return;
       if (failed) { body.hidden = true; return; }
@@ -787,24 +1200,32 @@
       show('[data-deadlines-empty]', false);
       body.hidden = false;
       body.replaceChildren();
+      /* эталон v3: срочный (сегодня/завтра) — p.deadline-time без .calm
+         (CSS красит строку красной плашкой), остальные — .calm; подпись —
+         вид события сессии и аудитория (заданий в данных нет: это
+         session_plan — экзамены, зачёты, консультации, пересдачи) */
       future.forEach((d) => {
         const diff = dayDiff(d.starts_at);
-        const urgency = diff <= 1 ? 'dot-danger' : diff <= 3 ? 'dot-warn' : 'dot-ok';
         const row = el('li');
-        const link = el('a');
+        const link = el('a', null, d.discipline || '');
         link.href = '/grades';
-        link.append(el('span', 'deadline-dot ' + urgency));
-        link.append(document.createTextNode((EXAM_KIND[d.kind] || '') + ' · ' + (d.discipline || '')));
-        const time = el('p', 'deadline-time calm', dayLabel(d.starts_at) + (timeOf(d.starts_at) ? ' · ' + timeOf(d.starts_at) : ''));
+        const when = dayLabel(d.starts_at);
+        const time = el('p', 'deadline-time' + (diff <= 1 ? '' : ' calm'),
+          when.charAt(0).toUpperCase() + when.slice(1) + (timeOf(d.starts_at) ? ' · ' + timeOf(d.starts_at) : ''));
+        const kind = EXAM_KIND[d.kind] || '';
+        const caption = [kind, d.room ? t('dash.roomLabel', 'аудитория') + ' ' + d.room : ''].filter(Boolean).join(' · ');
         row.append(link, time);
+        if (caption) row.append(el('p', 'caption', caption));
         body.append(row);
       });
     };
 
     /* --- виджет «Заявки»: активные → /applications/{id} ----------------- */
+    const STAGE_OF = { submitted: 1, accepted: 2, in_progress: 3, need_info: 3, ready: 4, issued: 5 };
     const renderApplications = (items, failed) => {
       show('[data-applications-loading]', false);
       show('[data-applications-error]', Boolean(failed));
+      setBusy('applications', false);
       const body = $$('[data-applications-body]');
       if (!body) return;
       if (failed) { body.hidden = true; return; }
@@ -818,7 +1239,20 @@
         link.href = '/applications/' + a.id;
         const status = APP_STATUS[a.status] || a.status || '';
         const stamp = shortStamp(a.updated_at);
-        row.append(link, el('p', 'caption', status + (stamp ? ' · ' + stamp : '')));
+        row.append(link);
+        /* mini-progress эталона: 5 этапов заявки по status (issued в виджет
+           не попадает — только активные); need_info — этап «В работе» +
+           красная строка «Требуется ответ» (текста вопроса в списке нет) */
+        const stage = STAGE_OF[a.status] || 0;
+        if (stage) {
+          const bar = el('div', 'mini-progress');
+          bar.setAttribute('role', 'img');
+          bar.setAttribute('aria-label', t('apps.stagesPrefix', 'Пройдено этапов:') + ' ' + stage + ' ' + t('apps.stagesTotal', 'из 5'));
+          for (let i = 1; i <= 5; i += 1) bar.append(el('span', i <= stage ? 'done' : null));
+          row.append(bar);
+        }
+        if (a.status === 'need_info') row.append(el('p', 'small red', t('dash.needReply', 'Требуется ответ') + (stamp ? ' · ' + stamp : '')));
+        else row.append(el('p', 'caption', status + (stamp ? ' · ' + stamp : '')));
         body.append(row);
       });
     };
@@ -837,6 +1271,7 @@
     const renderNews = (items, failed, unreadCount, freshNews) => {
       show('[data-news-loading]', false);
       show('[data-news-error]', Boolean(failed));
+      setBusy('news', false);
       const body = $$('[data-news-body]');
       const title = $$('[data-news-title]');
       if (!body) return;
@@ -857,21 +1292,21 @@
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
         link.href = '/notifications?segment=news';
-        const caption = el('p', 'caption', (NEWS_CATEGORY[n.category] || t('news.one', 'Новость')) + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
-        row.append(link, caption);
+        const caption = el('span', 'caption', (NEWS_CATEGORY[n.category] || t('news.one', 'Новость')) + (n.published_at ? ' · ' + shortStamp(n.published_at) : ''));
+        row.append(caption, link); // эталон: подпись (дата · источник) над заголовком
         body.append(row);
       });
       items.forEach((n) => {
         const row = el('div', 'news-row');
         const link = el('a', null, n.title || '');
         link.href = '/notifications';
-        const caption = el('p', 'caption', (NEWS_TYPE[n.type] || '') + (n.created_at ? ' · ' + shortStamp(n.created_at) : ''));
+        const caption = el('span', 'caption', (NEWS_TYPE[n.type] || '') + (n.created_at ? ' · ' + shortStamp(n.created_at) : ''));
         if (!n.read_at) {
           const dot = el('span', 'unread-mark');
           dot.setAttribute('aria-hidden', 'true');
           caption.append(' ', dot);
         }
-        row.append(link, caption);
+        row.append(caption, link);
         body.append(row);
       });
     };
@@ -909,15 +1344,15 @@
       body.hidden = false;
       body.replaceChildren();
       rows.forEach((r) => {
-        const row = el('a', 'lesson');
+        const row = el('a', 'lesson' + (r.status === 'cancelled' || r.status === 'moved' ? ' ' + r.status : ''));
         row.href = r.href;
         const time = el('div', 'lesson-time');
         time.append(el('strong', null, r.time));
         const mid = el('div');
         mid.append(el('div', 'lesson-subject', r.title));
         const detail = el('p', 'lesson-detail', EXAM_KIND[r.kind] || LESSON_KIND[r.kind] || '');
-        if (r.status === 'moved') detail.append(' ', el('span', 'badge', t('schedule.sheetChange', 'Перенос')));
-        if (r.status === 'cancelled') detail.append(' ', el('span', 'badge danger', t('lesson.cancelled', 'Отменена')));
+        if (r.status === 'moved') detail.append(' ', el('span', 'event-change', '· ' + t('schedule.sheetChange', 'Перенос')));
+        if (r.status === 'cancelled') detail.append(' ', el('span', 'event-change', '· ' + t('lesson.cancelled', 'Отменена')));
         mid.append(detail);
         row.append(time, mid);
         body.append(row);
@@ -953,6 +1388,7 @@
     const widgetErrors = ['[data-next-error]', '[data-today-error]', '[data-deadlines-error]', '[data-applications-error]', '[data-news-error]'];
     const loadDashboard = async () => {
       loaders.forEach((sel) => show(sel, true));
+      BUSY_WIDGETS.forEach((w) => setBusy(w, true));
       show('[data-tomorrow-loading]', true);
       widgetErrors.forEach((sel) => show(sel, false));
       show('[data-dashboard-error]', false);
@@ -962,6 +1398,7 @@
       ['[data-today-body]', '[data-tomorrow-body]', '[data-deadlines-body]', '[data-applications-body]', '[data-news-body]'].forEach((sel) => { const n = $$(sel); if (n) { n.hidden = true; n.replaceChildren(); } });
       show('[data-next-body]', false);
       show('[data-today-empty]', false);
+      show('[data-widget="changes"]', false);
       show('[data-deadlines-empty]', false);
       show('[data-applications-empty]', false);
       show('[data-news-empty]', false);
@@ -972,6 +1409,7 @@
         /* офлайн (баннер уже показал каркас) или ошибка API — экранная
            ошибка с «Повторить»; скелетоны скрыть (03 §5.3) */
         loaders.forEach((sel) => show(sel, false));
+        BUSY_WIDGETS.forEach((w) => setBusy(w, false));
         show('[data-dashboard-error]', true);
         return;
       }
@@ -987,6 +1425,7 @@
       const hit = (k) => degraded.indexOf(k) !== -1;
       renderNext(data.next_class || null, hit('next_class'));
       renderToday(Array.isArray(data.today) ? data.today : [], hit('today'));
+      renderChanges(Array.isArray(data.today) ? data.today : [], hit('today'));
       renderDeadlines(Array.isArray(data.deadlines) ? data.deadlines : [], hit('deadlines'));
       renderApplications(Array.isArray(data.applications) ? data.applications : [], hit('applications'));
       /* 5.17: свежие новости для «Что нового» — отдельный GET /v1/news
@@ -1069,63 +1508,206 @@
       cancelled: t('lesson.cancelled', 'Отменена'),
       substituted: t('lesson.substituted', 'Замена')
     };
+    const segment = () => document.getElementById('schedule-segment');
 
-    /* --- sheet «Детали пары» (03 §4.3: тап по паре → bottom-sheet;
-       <dialog> в views/schedule.csp, закрытие — кнопка/Esc). Имя
-       преподавателя — GET /v1/people/{teacher_id+1000} (Э6а, Р-15);
-       страница /people/{id} — следующий экран Э7, ссылка уже ведёт
-       туда; без teacher_id (или если профиль не отвечает) — ссылка
-       «Открыть профиль» скрыта/нейтральна, «—» в строке. --- */
-    const setField = (sel, text) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.textContent = text; };
-    const showRow = (sel, on) => { const n = sheet ? sheet.querySelector(sel) : null; if (n) n.hidden = !on; };
-    const openSheet = async (card) => {
+    /* --- диалог занятия (эталон .lesson-dialog/.detail-list, v3 шаг 3).
+       Источник — data-атрибуты карточки [data-event] (сервер); вставка —
+       только textContent/createElement (02 §6.4). Блок «было → стало» —
+       эквивалент schedule-change.html (отдельной страницы в проде нет).
+       Имя преподавателя — GET /v1/people/{teacher_id+1000} (Р-15). --- */
+    const sheetPart = (sel) => (sheet ? sheet.querySelector(sel) : null);
+    const setField = (sel, text) => { const n = sheetPart(sel); if (n) n.textContent = text; };
+    const withBuilding = (room, building) => (building ? room + ' · ' + building : room);
+    let sheetOpener = null;
+    let sheetSeq = 0;
+    const openSheet = async (card, opener) => {
       if (!sheet) return;
+      const d = card.dataset;
+      const seq = ++sheetSeq;
+      sheetOpener = opener || null;
       const subject = card.querySelector('.lesson-subject');
-      setField('[data-sheet-title]', subject ? subject.textContent : t('lesson.title', 'Пара'));
-      setField('[data-sheet-kind]', KIND[card.dataset.kind] || '');
-      setField('[data-sheet-when]', [card.dataset.date, card.dataset.start, card.dataset.end].filter(Boolean).join(' · '));
-      setField('[data-sheet-room]', t('dash.roomLabel', 'аудитория') + ' ' + (card.dataset.room || '—'));
-      const changed = [];
-      if (card.dataset.prevRoom) changed.push(t('dash.roomLabel', 'аудитория') + ' ' + card.dataset.prevRoom + ' → ' + (card.dataset.room || '—'));
-      if (card.dataset.prevStart && card.dataset.prevStart !== card.dataset.start) changed.push(t('schedule.timeLabel', 'время') + ' ' + card.dataset.prevStart + ' → ' + card.dataset.start);
-      showRow('[data-sheet-change-row]', changed.length > 0);
-      if (changed.length) setField('[data-sheet-change]', t('schedule.wasToLabel', 'было → стало:') + ' ' + changed.join(' · '));
-      setField('[data-sheet-status]', STATUS[card.dataset.status] || card.dataset.status || '');
-      const link = sheet.querySelector('[data-sheet-teacher]');
-      const fallback = sheet.querySelector('[data-sheet-teacher-empty]');
-      const teacherId = parseInt(card.dataset.teacherId || '', 10);
+      setField('[data-sheet-title]', subject ? subject.textContent.trim() : t('lesson.title', 'Пара'));
+      setField('[data-sheet-time]', [d.start, d.end].filter(Boolean).join('–'));
+      setField('[data-sheet-when]', d.dateLabel || d.date || '');
+      setField('[data-sheet-room]', withBuilding(d.room || '—', d.building));
+      const map = sheetPart('[data-sheet-map]');
+      if (map) {
+        map.href = '/map?q=' + encodeURIComponent(d.room || '');
+        map.hidden = !d.room || d.status === 'cancelled';
+      }
+      setField('[data-sheet-kind]', KIND[d.kind] || '—');
+      setField('[data-sheet-status]', STATUS[d.status] || d.status || '');
+      /* «было → стало» */
+      const changeRow = sheetPart('[data-sheet-change-row]');
+      const route = sheetPart('[data-sheet-change]');
+      const changed = d.status === 'moved' || d.status === 'cancelled' || d.status === 'substituted';
+      if (changeRow) changeRow.hidden = !changed;
+      if (changed && route) {
+        route.replaceChildren();
+        const sameTime = !d.prevStart || (d.prevStart === d.start && !d.prevDateLabel);
+        let label = t('schedule.changeSub', 'Замена преподавателя');
+        let note = (d.start || '') + '–' + (d.end || '');
+        if (d.status === 'moved') {
+          label = sameTime ? t('schedule.changeRoomMoved', 'Перенос аудитории') : t('schedule.changeClassMoved', 'Перенос занятия');
+          if (d.prevRoom && d.prevRoom !== d.room) {
+            const was = document.createElement('s');
+            was.textContent = withBuilding(d.prevRoom, d.prevBuilding);
+            const arrow = document.createElement('span');
+            arrow.setAttribute('aria-hidden', 'true');
+            arrow.textContent = '→';
+            route.append(was, arrow);
+          }
+          const now = document.createElement('a');
+          now.href = '/map?q=' + encodeURIComponent(d.room || '');
+          now.textContent = withBuilding(d.room || '—', d.building);
+          route.append(now);
+          note = sameTime
+            ? t('schedule.changeSameTime', 'Время прежнее') + ' · ' + note
+            : t('schedule.changeWas', 'Было:') + ' ' + [d.prevDateLabel, d.prevStart].filter(Boolean).join(', ');
+        } else if (d.status === 'cancelled') {
+          label = t('schedule.changeCancelled', 'Занятие отменено');
+          const was = document.createElement('s');
+          was.textContent = withBuilding(d.room || '—', d.building);
+          route.append(was);
+        }
+        route.hidden = route.childNodes.length === 0;
+        setField('[data-sheet-change-label]', label);
+        setField('[data-sheet-change-note]', note);
+      }
+      const link = sheetPart('[data-sheet-teacher]');
+      const fallback = sheetPart('[data-sheet-teacher-empty]');
+      const teacherId = parseInt(d.teacherId || '', 10);
+      if (!sheet.open) sheet.showModal();
       if (link && Number.isFinite(teacherId)) {
-        const href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
-        link.href = href;
+        link.href = '/people/' + (teacherId + PEOPLE_ID_OFFSET);
         link.textContent = t('common.loading', 'Загрузка…');
         link.hidden = false;
         if (fallback) fallback.hidden = true;
         const person = await fetchJSON('/v1/people/' + (teacherId + PEOPLE_ID_OFFSET));
-        link.textContent = person && person.person && person.person.fio ? person.person.fio : t('common.openProfile', 'Открыть профиль');
+        if (seq !== sheetSeq) return; // открыт уже другой урок
+        /* GET /v1/people/{id} отдаёт карточку плоско ({fio, …}); прежнее
+           чтение person.person.fio всегда давало «Открыть профиль» */
+        const fio = person && (person.fio || (person.person && person.person.fio));
+        link.textContent = fio || t('common.openProfile', 'Открыть профиль');
       } else if (link && fallback) {
         link.hidden = true;
         fallback.hidden = false;
       }
-      sheet.showModal();
     };
-    /* делегирование: контейнер сегмента перерисовывается htmx —
-       слушатель на документе переживает обмен */
+    /* делегирование (сегмент перерисовывается htmx — слушатель на документе
+       переживает обмен): кнопка .lesson-open, «Подробнее» блока изменения
+       ([data-open-event]) или клик по карточке мимо ссылок. Ссылки внутри
+       карточки (аудитория → карта) не перехватываются. */
     document.addEventListener('click', (event) => {
-      const card = event.target.closest('[data-event]');
-      if (card && sheet) {
-        event.preventDefault();
-        openSheet(card);
+      const target = event.target;
+      if (!(target instanceof Element) || !sheet) return;
+      const more = target.closest('[data-open-event]');
+      if (more) {
+        const box = segment();
+        const card = box ? box.querySelector('[data-event][data-event-id="' + CSS.escape(more.dataset.openEvent) + '"]') : null;
+        if (card) openSheet(card, more);
+        return;
       }
+      if (target.closest('a')) return;
+      const card = target.closest('[data-event]');
+      if (!card) return;
+      const opener = card.querySelector('.lesson-open') || card;
+      openSheet(card, opener);
     });
-    const sheetClose = sheet ? sheet.querySelector('[data-sheet-close]') : null;
-    if (sheetClose) sheetClose.addEventListener('click', () => sheet.close());
+    if (sheet) {
+      sheet.querySelectorAll('[data-sheet-close]').forEach((b) => b.addEventListener('click', () => sheet.close()));
+      sheet.addEventListener('close', () => {
+        if (sheetOpener && sheetOpener.isConnected) sheetOpener.focus();
+        sheetOpener = null;
+      });
+      /* клик по подложке закрывает диалог */
+      sheet.addEventListener('click', (e) => { if (e.target === sheet) sheet.close(); });
+    }
 
-    /* --- состояния сегмента (03 §5.3/§5.4) ---------------------------- */
+    /* --- выбор дня: «Дата занятия» (input[type=date]) — htmx-обмен сегмента
+       на выбранный день + адрес /schedule?date=… в истории; вне окна
+       min/max — сообщение словаря. «Выбрать день» пустого дня — фокус в
+       поле даты. --- */
+    const loadDay = (ymd) => {
+      if (!window.htmx) { window.location.href = '/schedule?date=' + ymd; return; }
+      window.htmx.ajax('GET', '/schedule/segment?segment=today&date=' + encodeURIComponent(ymd), {
+        target: '#schedule-segment', swap: 'outerHTML', indicator: '#schedule-indicator'
+      }).then(() => {
+        history.pushState({}, '', '/schedule?date=' + ymd);
+        const input = document.getElementById('schedule-date');
+        if (input) input.focus();
+      });
+    };
+    document.addEventListener('change', (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || !input.matches('[data-schedule-date]')) return;
+      input.setCustomValidity('');
+      if (!input.value || !input.checkValidity()) {
+        input.setCustomValidity(input.dataset.invalidMessage || t('schedule.dateInvalid', 'Выберите дату в пределах четырёх недель от текущей.'));
+        input.reportValidity();
+        return;
+      }
+      loadDay(input.value);
+    });
+    document.addEventListener('input', (event) => {
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-schedule-date]')) event.target.setCustomValidity('');
+    });
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element ? event.target.closest('[data-focus-date]') : null;
+      if (!btn) return;
+      const input = document.getElementById('schedule-date');
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      if (typeof input.showPicker === 'function') { try { input.showPicker(); } catch (e) { /* без жеста — просто фокус */ } }
+    });
+
+    /* --- «Показать: Все занятия / Лекции / Семинары» (Неделя): фильтр на
+       клиенте по data-kind карточек (реальные виды DDL), счётчик «N занятий»
+       — формы plural из data-one/few/many (словарь сервера) по
+       Intl.PluralRules. Выбор переживает htmx-обмен (стрелки недель). --- */
+    let lessonKind = '';
+    const applyLessonFilter = () => {
+      const box = segment();
+      const select = box ? box.querySelector('[data-lesson-filter]') : null;
+      if (!box || !select) return;
+      if (select.value !== lessonKind) select.value = lessonKind;
+      if (select.value !== lessonKind) { lessonKind = ''; select.value = ''; }
+      let shown = 0;
+      box.querySelectorAll('.lesson[data-kind]').forEach((card) => {
+        const on = !lessonKind || card.dataset.kind === lessonKind;
+        card.hidden = !on;
+        if (on) shown += 1;
+      });
+      const count = box.querySelector('[data-lesson-count]');
+      if (count) {
+        const rule = new Intl.PluralRules(LOCALE).select(shown);
+        const form = rule === 'one' ? count.dataset.one : rule === 'few' ? count.dataset.few : count.dataset.many;
+        count.textContent = shown + ' ' + (form || '');
+      }
+    };
+    document.addEventListener('change', (event) => {
+      const select = event.target;
+      if (!(select instanceof HTMLSelectElement) || !select.matches('[data-lesson-filter]')) return;
+      lessonKind = select.value;
+      applyLessonFilter();
+    });
+
+    /* --- заголовок страницы следует за сегментом (День/Неделя) --- */
+    const syncHeading = () => {
+      const box = segment();
+      if (!box) return;
+      const h1 = document.querySelector('[data-schedule-heading]');
+      const lead = document.querySelector('[data-schedule-lead]');
+      if (h1 && box.dataset.heading) h1.textContent = box.dataset.heading;
+      if (lead && box.dataset.lead) lead.textContent = box.dataset.lead;
+    };
+
+    /* --- состояния сегмента (schedule-states.html) --------------------- */
     /* Ошибка (ответ не 2xx или сеть) — блок «Не получилось загрузить
        расписание» с «Повторить», перезапускающим запрос исходного
-       элемента (03 §5.3: «Повторить» всегда реально перезапрашивает);
-       офлайн — баннер каркаса; истёкшая сессия (фильтр отвечает 303 →
-       /login, XHR следует редиректу) — браузерный переход на вход. */
+       элемента; офлайн — баннер каркаса; истёкшая сессия (фильтр отвечает
+       303 → /login, XHR следует редиректу) — браузерный переход на вход. */
     let retryElt = null;
     document.body.addEventListener('htmx:afterRequest', (e) => {
       if (!errBox) return;
@@ -1153,26 +1735,23 @@
     const scheduleRetry = document.querySelector('[data-schedule-retry]');
     if (scheduleRetry) {
       scheduleRetry.addEventListener('click', () => {
-        if (retryElt) retryElt.click();
+        if (retryElt && retryElt.isConnected && retryElt.matches('[hx-get]')) retryElt.click();
         else window.location.reload();
       });
     }
 
-    /* --- сегмент «Неделя» (03 §4.3): автоскролл к сегодняшнему дню и
-       свайп влево/вправо = ‹/› неделя. Скролл — к .day-group.is-today,
-       только если он вне вьюпорта; при reduced-motion — без анимации.
-       Свайп — тап-жест по контейнеру сегмента: |dX| ≥ 56px и горизонтальнее
-       вертикали, иначе это скролл страницы; кнопки-стрелки сами disabled
-       на границе окна [-4..4].
-       ВАЖНО: контейнер #schedule-segment свапается htmx ЦЕЛИКОМ
-       (hx-swap="outerHTML" в партиалах), поэтому ссылку на него нельзя
-       кэшировать в замыкании — после первого же обмена она указывала бы
-       на отсоединённый узел (свайп умер бы, автоскролл искал бы в старом
-       дереве). getElementById перезапрашивается в каждом обработчике. --- */
+    /* --- сегмент «Неделя»: автоскролл к сегодняшнему дню (только когда
+       дни идут стопкой, <1200px — на сетке вся неделя видна) и свайп
+       влево/вправо = ‹/› неделя. Стрелки ищутся по data-week-prev/next
+       (не по aria-label: он переводится, 5.18). Контейнер
+       #schedule-segment свапается htmx целиком — ссылка на него
+       перезапрашивается в каждом обработчике. --- */
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const gridWeek = window.matchMedia('(min-width: 1200px)');
     const scrollTodayIntoView = () => {
-      const segBox = document.getElementById('schedule-segment');
-      const todayGroup = segBox ? segBox.querySelector('.day-group.is-today') : null;
+      if (gridWeek.matches) return;
+      const box = segment();
+      const todayGroup = box ? box.querySelector('.day-group.is-today') : null;
       if (!todayGroup) return;
       const r = todayGroup.getBoundingClientRect();
       if (r.top >= 0 && r.bottom <= window.innerHeight) return;
@@ -1180,29 +1759,29 @@
     };
     scrollTodayIntoView();
     document.body.addEventListener('htmx:afterSwap', () => {
+      syncHeading();
+      applyLessonFilter();
       setTimeout(scrollTodayIntoView, 0);
     });
     let touchX = 0, touchY = 0, swipeArmed = false;
     document.addEventListener('touchstart', (e) => {
-      const segBox = document.getElementById('schedule-segment');
-      swipeArmed = Boolean(segBox) && segBox.contains(e.target) && !(sheet && sheet.open);
+      const box = segment();
+      swipeArmed = Boolean(box) && box.contains(e.target) && !(sheet && sheet.open);
       if (!swipeArmed) return;
-      const t = e.touches[0];
-      touchX = t.clientX;
-      touchY = t.clientY;
+      const p = e.touches[0];
+      touchX = p.clientX;
+      touchY = p.clientY;
     }, { passive: true });
     document.addEventListener('touchend', (e) => {
       if (!swipeArmed) return;
       swipeArmed = false;
-      const segBox = document.getElementById('schedule-segment');
-      if (!segBox) return;
-      const t = e.changedTouches[0];
-      const dX = t.clientX - touchX;
-      const dY = t.clientY - touchY;
+      const box = segment();
+      if (!box) return;
+      const p = e.changedTouches[0];
+      const dX = p.clientX - touchX;
+      const dY = p.clientY - touchY;
       if (Math.abs(dX) < 56 || Math.abs(dY) >= Math.abs(dX)) return;
-      const arrow = segBox.querySelector(dX < 0
-        ? '[aria-label="Следующая неделя"]'
-        : '[aria-label="Предыдущая неделя"]');
+      const arrow = box.querySelector(dX < 0 ? '[data-week-next]' : '[data-week-prev]');
       if (arrow && !arrow.disabled) arrow.click();
     }, { passive: true });
   }
@@ -1212,9 +1791,54 @@
      фильтр ?status= — чипы-ссылки). Здесь только «Повторить» состояния
      ошибки: реально перезапрашивает — перезагрузка страницы (03 §5.3);
      офлайн обслуживает баннер каркаса (topbar + applyOffline, 03 §5.4). */
+  /* v3 (шаг 12): поиск по названию и витринному номеру (data-search карточки
+     — только то, что уже отрисовал сервер) + select групп статусов
+     (data-group, группы — шапка applications.csp); счётчик с plural
+     (data-one/few/many — словарь сервера), «Сбросить фильтры» → фокус в
+     поиск; группа синхронизируется с ?status= (replaceState). */
   if (document.body.dataset.page === 'applications') {
     const applicationsRetry = document.querySelector('[data-applications-retry]');
     if (applicationsRetry) applicationsRetry.addEventListener('click', () => window.location.reload());
+    const search = document.getElementById('application-search');
+    const filter = document.getElementById('application-filter');
+    const list = document.getElementById('application-list');
+    const count = document.querySelector('[data-apps-count]');
+    const filteredEmpty = document.querySelector('[data-apps-filtered-empty]');
+    const reset = document.querySelector('[data-apps-reset]');
+    if (search && filter && list) {
+      const cards = Array.from(list.querySelectorAll('.app-card'));
+      const norm = (v) => String(v || '').toLowerCase().replace(/ё/g, 'е').trim();
+      const plural = (n) => {
+        if (!count) return '';
+        if (LANG !== 'ru') return n === 1 ? count.dataset.one : count.dataset.many;
+        const m10 = n % 10, m100 = n % 100;
+        if (m10 === 1 && m100 !== 11) return count.dataset.one;
+        if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return count.dataset.few;
+        return count.dataset.many;
+      };
+      const render = () => {
+        const q = norm(search.value);
+        const g = filter.value;
+        let n = 0;
+        cards.forEach((card) => {
+          const ok = (!g || card.dataset.group === g) && (!q || norm(card.dataset.search).indexOf(q) !== -1);
+          card.hidden = !ok;
+          if (ok) n += 1;
+        });
+        list.hidden = n === 0;
+        if (filteredEmpty) filteredEmpty.hidden = n > 0;
+        if (count) count.textContent = n + ' ' + plural(n);
+      };
+      const syncUrl = () => {
+        const url = new URL(window.location.href);
+        if (filter.value) url.searchParams.set('status', filter.value); else url.searchParams.delete('status');
+        history.replaceState(null, '', url.pathname + url.search);
+      };
+      search.addEventListener('input', render);
+      filter.addEventListener('change', () => { syncUrl(); render(); });
+      if (reset) reset.addEventListener('click', () => { search.value = ''; filter.value = ''; syncUrl(); render(); search.focus(); });
+      render();
+    }
   }
 
   /* ---------- экран «Новая заявка» (views/application-form.csp; 03
@@ -1228,11 +1852,11 @@
      раз в ~10 с и по visibilitychange (hidden) — ТОЛЬКО пока статус
      draft; ответ 409 (статус ушёл с черновика) — АВТОСОХРАНЕНИЕ МОЛЧА
      ПРЕКРАЩАЕТСЯ, без всплывающих ошибок (постановка Э7; try/catch).
-     «Отправить заявку» → POST {submit:true} → редирект на карточку;
-     ошибка — inline «Заявка не отправилась…» (03 §5.3). Автосохранённый
-     черновик при подаче остаётся в списке черновиков — у студента нет
-     эндпоинта submit существующей строки (02 §5.2: submit — только при
-     POST-создании) — решение задокументировано в журнале сессии.
+     «Отправить заявку»: есть сохранённый черновик — PUT /v1/applications/{id}
+     {payload_json, submit:true} (8.i, Р-29: подача существующего черновика
+     одним вызовом, fe_rebuild шаг 5); черновика нет (или 409 — уже не
+     черновик) — POST {submit:true}; затем редирект на карточку; ошибка —
+     inline «Заявка не отправилась…» (03 §5.3).
      Вставка — только createElement/textContent (02 §6.4); innerHTML —
      НИКОГДА для данных сервера, только статические svg-константы ниже. */
   if (document.body.dataset.page === 'application-form') {
@@ -1243,61 +1867,83 @@
       if (text != null) node.textContent = text;
       return node;
     };
+    const fill = (s, map) => Object.keys(map).reduce((acc, k) => acc.replace('{' + k + '}', String(map[k])), s);
     /* статические иконки строк каталога (по мотивам Lucide; НЕ данные) */
     const ICON = {
       file: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></svg>',
       pen: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
       arrow: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>'
     };
-    /* 1–2 вопроса на тип: наборы полей — payload-примеры sql/fixtures.sql
-       ({"copies":2,"delivery":"office"}, {"purpose":…,"copies":1,"delivery":"pdf"},
-       {"topic":…,"supervisor":…}); подсказки строк каталога — 03 §4.5.2 */
+    /* Поля по типу (payload-примеры sql/fixtures.sql), v3 (шаг 12) — по
+       секциям эталона: «01 / Данные заявки» и «02 / Получение документа».
+       У справок к copies/delivery добавлен НЕОБЯЗАТЕЛЬНЫЙ comment эталона
+       (Р-34: обязательных вопросов по-прежнему 1–2). purpose в форме нет
+       (правило «1–2 вопроса», 03 §4.5.3:626) — поле живёт в «Деталях». */
     const TYPE_FIELDS = {
-      study_certificate: ['copies', 'delivery'],
-      period_certificate: ['copies', 'delivery'],
-      /* academic_certificate — ровно 2 вопроса, как в вайрфрейме 03
-         §4.5.3:597–625 («Количество экземпляров» + «Как получить»);
-         «purpose» в форме НЕТ (правило «1–2 вопроса максимум» —
-         03 §4.5.3:626), поле остаётся в примере payload фикстур
-         ({"purpose":…}) и отображается в «Деталях заявки» карточки */
-      academic_certificate: ['copies', 'delivery'],
-      thesis_topic: ['topic', 'supervisor'],
-      other: ['comment']
+      study_certificate: [['copies'], ['delivery', 'comment']],
+      period_certificate: [['copies'], ['delivery', 'comment']],
+      academic_certificate: [['copies'], ['delivery', 'comment']],
+      thesis_topic: [['topic', 'supervisor'], []],
+      other: [['statement'], []]
     };
-    const TYPE_HINT = {
-      study_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      period_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      academic_certificate: 'Обычно до 3 рабочих дней · PDF или в деканате',
-      thesis_topic: 'Согласование темы и научного руководителя',
-      other: 'Свободный текст заявления'
-    };
+    const REQUIRED = { topic: 'apps.errTopic', supervisor: 'apps.errSupervisor', statement: 'apps.errStatement' };
+    const REQUIRED_FB = { topic: 'Укажите тему ВКР', supervisor: 'Укажите научного руководителя', statement: 'Опишите, что нужно в заявлении' };
+    const typeHint = (key) => (key === 'thesis_topic'
+      ? t('apps.hintThesis', 'Согласование темы и научного руководителя')
+      : key === 'other' ? t('apps.hintOther', 'Свободный текст заявления')
+        : t('apps.hintCert', 'Обычно до 3 рабочих дней · PDF или в деканате'));
+    /* payload-ключ поля: «Текст заявления» другого типа — comment (как в БД) */
+    const payloadKey = (name) => (name === 'statement' ? 'comment' : name);
+    const allFields = (key) => (TYPE_FIELDS[key] ? TYPE_FIELDS[key][0].concat(TYPE_FIELDS[key][1]) : []);
 
-    const state = { typeKey: null, typeTitle: '', draftId: null, draftStopped: false };
+    const state = { typeKey: null, typeTitle: '', draftId: null, draftStopped: false, types: [] };
     let saveTimer = 0;
+    let selectSeq = 0;
     const stopTimer = () => { if (saveTimer) { clearInterval(saveTimer); saveTimer = 0; } };
+    const statusLine = () => document.querySelector('[data-draft-status]');
+    const nowHM = () => new Date().toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 
-    /* --- сборка payload из полей активного типа (JSON-строка) ---------- */
+    /* --- сборка payload из полей активного типа (JSON-объект) ---------- */
     const field = (name) => document.querySelector('[data-field="' + name + '"]');
+    const control = (name) => document.getElementById('app-field-' + name);
     const collectPayload = () => {
       const p = {};
-      (TYPE_FIELDS[state.typeKey] || []).forEach((name) => {
+      allFields(state.typeKey).forEach((name) => {
         const f = field(name);
         if (!f) return;
         if (f.dataset.kind === 'radios') {
           const checked = f.querySelector('input:checked');
-          p[name] = checked ? checked.value : '';
-          if (name === 'copies' && p.copies !== '') p.copies = Number(p.copies);
-        } else if (f.value) {
-          p[name] = f.value;
+          if (checked) p[name] = checked.value;
+        } else {
+          const c = control(name);
+          if (!c) return;
+          if (name === 'copies') p.copies = Number(c.value) || 1;
+          else if (c.value.trim()) p[payloadKey(name)] = c.value.trim();
         }
       });
       return p;
     };
+    /* заполнение полей из payload серверного черновика */
+    const applyPayload = (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      allFields(state.typeKey).forEach((name) => {
+        const v = payload[payloadKey(name)];
+        if (v == null) return;
+        const f = field(name);
+        if (!f) return;
+        if (f.dataset.kind === 'radios') {
+          const input = f.querySelector('input[value="' + String(v).replace(/"/g, '') + '"]');
+          if (input) input.checked = true;
+        } else {
+          const c = control(name);
+          if (c) { c.value = String(v); c.dispatchEvent(new Event('input', { bubbles: true })); }
+        }
+      });
+    };
 
     /* --- автосохранение черновика (С7): raw fetch — нужен статус 409;
-       сетевой сбой/офлайн молча пропускается (баннер показывает каркас);
-       409 «Править можно только черновик» — статус ушёл, автосохранение
-       прекращается навсегда до перезагрузки (постановка Э7) ------------ */
+       сетевой сбой/офлайн молча пропускается; 409 — статус ушёл,
+       автосохранение прекращается до перезагрузки (постановка Э7) ------ */
     const autosaveNow = async () => {
       if (!state.draftId || state.draftStopped) return null;
       try {
@@ -1309,80 +1955,67 @@
         if (resp.status === 409) {
           state.draftStopped = true;
           stopTimer();
-          const statusLine = document.querySelector('[data-draft-status]');
-          if (statusLine) statusLine.textContent = 'Черновик больше не черновик — правки не сохраняются';
+          const line = statusLine();
+          if (line) line.textContent = t('apps.draftNotDraft', 'Черновик больше не черновик — правки не сохраняются');
           return false;
         }
-        if (resp.status === 404) {
-          /* заявка исчезла — автосохранению некуда писать; молча прекращаем */
-          state.draftStopped = true;
-          stopTimer();
-          return false;
-        }
+        if (resp.status === 404) { state.draftStopped = true; stopTimer(); return false; }
         return resp.ok;
       } catch (e) { return null; } /* сети нет — молча (03 §5.4) */
     };
-    const startAutosave = () => {
-      if (!saveTimer) saveTimer = setInterval(autosaveNow, 10000);
-    };
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) autosaveNow();
-    });
+    const startAutosave = () => { if (!saveTimer) saveTimer = setInterval(autosaveNow, 10000); };
+    document.addEventListener('visibilitychange', () => { if (document.hidden) autosaveNow(); });
 
-    /* --- поля формы: 1–2 вопроса, значения по умолчанию — как в
-       черновике 03 §4.5.3 (copies 1, delivery pdf) --------------------- */
-    const buildField = (name) => {
-      if (name === 'copies') {
-        const wrap = el('fieldset');
-        wrap.dataset.field = 'copies';
-        wrap.dataset.kind = 'radios';
-        wrap.append(el('legend', null, 'Количество экземпляров'));
-        [['1', '1 экземпляр', true], ['2', '2 экземпляра', false]].forEach(([v, label, on]) => {
-          const opt = el('label', 'option');
-          const input = document.createElement('input');
-          input.type = 'radio';
-          input.name = 'copies';
-          input.value = v;
-          input.checked = on;
-          opt.append(input, document.createTextNode(label));
-          wrap.append(opt);
-        });
-        return wrap;
-      }
-      if (name === 'delivery') {
-        const wrap = el('fieldset');
-        wrap.dataset.field = 'delivery';
-        wrap.dataset.kind = 'radios';
-        wrap.append(el('legend', null, 'Как получить'));
-        [['pdf', 'PDF в кабинете', true], ['office', 'В деканате', false]].forEach(([v, label, on]) => {
-          const opt = el('label', 'option');
-          const input = document.createElement('input');
-          input.type = 'radio';
-          input.name = 'delivery';
-          input.value = v;
-          input.checked = on;
-          opt.append(input, document.createTextNode(label));
-          wrap.append(opt);
-        });
-        return wrap;
-      }
-      const wrap = el('div', 'field');
-      wrap.dataset.field = name;
-      const text = {
-        purpose: ['Куда нужна справка', 'Например, в университет-партнёр'],
-        topic: ['Тема ВКР', 'Тема выпускной квалификационной работы'],
-        supervisor: ['Научный руководитель', 'ФИО руководителя'],
-        comment: ['Комментарий · необязательно', 'Например, куда нужна справка']
-      }[name] || [name, ''];
-      wrap.append(el('label', null, text[0]));
-      const input = name === 'comment' ? document.createElement('textarea') : document.createElement('input');
-      if (name === 'comment') input.setAttribute('rows', '4');
-      input.maxLength = 1000;
-      input.placeholder = text[1];
-      wrap.append(input);
-      return wrap;
+    /* --- ошибки: по полю (aria-invalid/aria-describedby) + сводка ------ */
+    const clearFieldErrors = () => {
+      document.querySelectorAll('[data-form] .field-error[data-for]').forEach((n) => n.remove());
+      document.querySelectorAll('[data-form] [aria-invalid]').forEach((n) => { n.removeAttribute('aria-invalid'); n.removeAttribute('aria-describedby'); });
+      show('[data-validation-summary]', false);
     };
-
+    const fieldError = (name, text) => {
+      const c = control(name);
+      if (!c) return;
+      const id = 'err-' + name;
+      const p = el('p', 'field-error', text);
+      p.id = id;
+      p.dataset.for = name;
+      p.setAttribute('role', 'alert');
+      c.setAttribute('aria-invalid', 'true');
+      c.setAttribute('aria-describedby', id);
+      c.parentNode.insertBefore(p, c.nextSibling);
+    };
+    const summary = (errors) => {
+      const box = document.querySelector('[data-validation-summary]');
+      const list = document.querySelector('[data-validation-list]');
+      if (!box || !list) return;
+      list.replaceChildren();
+      errors.forEach(([name, text]) => {
+        const li = el('li');
+        const a = el('a', null, text);
+        a.href = '#app-field-' + name;
+        a.addEventListener('click', (e) => { e.preventDefault(); const c = control(name); if (c) c.focus(); });
+        li.append(a);
+        list.append(li);
+      });
+      box.hidden = false;
+      box.focus();
+    };
+    const validate = () => {
+      clearFieldErrors();
+      const errors = [];
+      allFields(state.typeKey).forEach((name) => {
+        const c = control(name);
+        if (!c || c.tagName === 'SELECT') return;
+        const v = c.value.trim();
+        if (REQUIRED[name] && !v) errors.push([name, t(REQUIRED[name], REQUIRED_FB[name])]);
+        else if (v.length > 1000) errors.push([name, t('apps.errTooLong', 'Сократите текст до 1000 символов')]);
+      });
+      errors.forEach(([name, text]) => fieldError(name, text));
+      if (errors.length) summary(errors);
+      return errors.length === 0;
+    };
+    /* дефект до v3: узла [data-form-error-inline] в разметке не было —
+       ошибки сервера/сети молча терялись; узел добавлен в шаблон */
     const setFormError = (text) => {
       const box = document.querySelector('[data-form-error-inline]');
       if (!box) return;
@@ -1390,71 +2023,235 @@
       box.hidden = !text;
     };
 
-    /* --- выбор типа: каталог → форма; смена типа СБРАСЫВАЕТ привязку
-       автосохранения (PUT чужого типа в старый черновик недопустим;
-       сохранённый черновик остаётся в «Черновиках» списка) ------------- */
-    const selectType = (key, title) => {
-      if (state.typeKey !== key) stopTimer();
+    /* --- живое резюме (request-summary эталона) ------------------------ */
+    const renderSummary = () => {
+      const title = document.querySelector('[data-summary-title]');
+      const line = document.querySelector('[data-summary-line]');
+      if (title) title.textContent = state.typeTitle;
+      if (!line) return;
+      const p = collectPayload();
+      const parts = [];
+      if (p.copies) parts.push(p.copies === 2 ? t('apps.copiesTwo', '2 экземпляра') : t('apps.copiesOne', '1 экземпляр'));
+      if (p.delivery) parts.push(p.delivery === 'office' ? t('apps.deliveryOffice', 'В деканате') : t('apps.deliveryPdf', 'PDF в кабинете'));
+      if (!parts.length) parts.push(typeHint(state.typeKey));
+      line.textContent = parts.join(' · ');
+    };
+
+    /* --- поля формы ---------------------------------------------------- */
+    const radios = (name, legendKey, legendFb, options) => {
+      const wrap = el('fieldset');
+      wrap.dataset.field = name;
+      wrap.dataset.kind = 'radios';
+      wrap.append(el('legend', null, t(legendKey, legendFb)));
+      options.forEach(([v, key, fb, on]) => {
+        const opt = el('label', 'option');
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = name;
+        input.value = v;
+        input.checked = on;
+        opt.append(input, document.createTextNode(t(key, fb)));
+        wrap.append(opt);
+      });
+      return wrap;
+    };
+    const buildField = (name) => {
+      if (name === 'delivery') {
+        return radios('delivery', 'apps.delivery', 'Способ получения', [
+          ['pdf', 'apps.deliveryPdf', 'PDF в кабинете', true],
+          ['office', 'apps.deliveryOffice', 'В деканате', false]]);
+      }
+      const wrap = el('div', 'field');
+      wrap.dataset.field = name;
+      const label = el('label');
+      label.htmlFor = 'app-field-' + name;
+      wrap.append(label);
+      if (name === 'copies') {
+        label.textContent = t('apps.copies', 'Количество экземпляров');
+        const sel = document.createElement('select');
+        sel.id = 'app-field-copies';
+        [['1', 'apps.copiesOne', '1 экземпляр'], ['2', 'apps.copiesTwo', '2 экземпляра']].forEach(([v, key, fb]) => {
+          const o = el('option', null, t(key, fb));
+          o.value = v;
+          sel.append(o);
+        });
+        wrap.append(sel);
+        return wrap;
+      }
+      const text = {
+        topic: ['apps.topic', 'Тема ВКР', 'apps.topicPh', 'Тема выпускной квалификационной работы'],
+        supervisor: ['apps.supervisor', 'Научный руководитель', 'apps.supervisorPh', 'ФИО руководителя'],
+        comment: ['apps.comment', 'Комментарий · необязательно', 'apps.commentPh', 'Например, куда нужна справка'],
+        statement: ['apps.statement', 'Текст заявления', 'apps.statementPh', 'Опишите, что нужно']
+      }[name];
+      label.textContent = t(text[0], text[1]);
+      const multi = name === 'comment' || name === 'statement';
+      const input = document.createElement(multi ? 'textarea' : 'input');
+      input.id = 'app-field-' + name;
+      if (multi) input.setAttribute('rows', '4');
+      if (REQUIRED[name]) input.required = true;
+      input.maxLength = 1000;
+      input.placeholder = t(text[2], text[3]);
+      wrap.append(input);
+      if (multi) {
+        /* счётчик символов эталона (field-counter) */
+        const counter = el('p', 'caption field-counter', fill(t('apps.counter', '{n} / 1000'), { n: 0 }));
+        counter.setAttribute('aria-live', 'polite');
+        input.addEventListener('input', () => { counter.textContent = fill(t('apps.counter', '{n} / 1000'), { n: input.value.length }); });
+        wrap.append(counter);
+      }
+      return wrap;
+    };
+
+    /* --- фазы: каталог ↔ форма (deep link ?type=, history) ------------- */
+    const heading = document.querySelector('[data-form-heading]');
+    const back = document.querySelector('[data-form-back]');
+    const setPhase = (phase) => {
+      const form = phase === 'form';
+      show('[data-catalog]', !form);
+      show('[data-paper]', form);
+      document.querySelectorAll('[data-form-only]').forEach((n) => { n.hidden = !form; });
+      if (heading) {
+        heading.textContent = form ? heading.dataset.formTitle : heading.dataset.catalogTitle;
+        const suffix = document.title.split(' · ').pop();
+        document.title = heading.textContent + ' · ' + suffix;
+      }
+      if (back) back.href = form ? '/applications/new' : '/applications';
+    };
+
+    /* восстановление серверного черновика (Р-34): ?draft=<id> того же типа
+       или последний по updated_at черновик типа из ?status=draft */
+    const restoreDraft = async (key, draftParam, seq) => {
+      let draft = null;
+      if (draftParam) {
+        const one = await fetchJSON('/v1/applications/' + encodeURIComponent(draftParam));
+        if (one && one.status === 'draft' && one.type === key) draft = one;
+      }
+      if (!draft) {
+        const list = await fetchJSON('/v1/applications?status=draft');
+        const drafts = (list && Array.isArray(list.applications) ? list.applications : [])
+          .filter((a) => a.type === key && a.status === 'draft')
+          .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
+        draft = drafts[0] || null;
+      }
+      if (!draft || seq !== selectSeq) return;
+      state.draftId = draft.id;
+      state.draftStopped = false;
+      applyPayload(draft.payload);
+      renderSummary();
+      startAutosave();
+      show('[data-draft-restored]', true);
+      const line = statusLine();
+      if (line) line.textContent = t('apps.draftAutosave', 'Черновик в вашем кабинете · дальше сохраняем автоматически');
+    };
+
+    const selectType = (key, draftParam) => {
+      const type = state.types.find((x) => x.key === key);
+      if (!type) return false;
+      stopTimer();
+      selectSeq += 1;
       state.typeKey = key;
-      state.typeTitle = title;
+      state.typeTitle = type.title || '';
       state.draftId = null;
       state.draftStopped = false;
-      const fields = document.querySelector('[data-type-fields]');
-      if (fields) {
-        fields.replaceChildren();
-        (TYPE_FIELDS[key] || []).forEach((name) => fields.append(buildField(name)));
-      }
-      const titleEl = document.querySelector('[data-type-title]');
-      if (titleEl) titleEl.textContent = title;
+      const sel = document.querySelector('[data-type-select]');
+      if (sel) sel.value = key;
+      const [first, second] = TYPE_FIELDS[key] || [[], []];
+      const box1 = document.querySelector('[data-type-fields]');
+      const box2 = document.querySelector('[data-type-fields-02]');
+      if (box1) { box1.replaceChildren(); first.forEach((n) => box1.append(buildField(n))); }
+      if (box2) { box2.replaceChildren(); second.forEach((n) => box2.append(buildField(n))); }
+      show('[data-section-02]', second.length > 0);
+      clearFieldErrors();
       setFormError('');
-      const statusLine = document.querySelector('[data-draft-status]');
-      if (statusLine) statusLine.textContent = 'Обычно готова до 3 рабочих дней';
-      show('[data-catalog]', false);
-      show('[data-form]', true);
+      show('[data-draft-restored]', false);
+      const line = statusLine();
+      if (line) line.textContent = t('apps.usualTime', 'Обычно готова до 3 рабочих дней');
+      renderSummary();
+      setPhase('form');
+      restoreDraft(key, draftParam, selectSeq);
+      return true;
     };
     const backToCatalog = () => {
       stopTimer();
+      selectSeq += 1;
+      state.typeKey = null;
       state.draftId = null;
       state.draftStopped = false;
-      show('[data-form]', false);
-      show('[data-catalog]', true);
+      setPhase('catalog');
     };
+    const route = () => {
+      const q = new URLSearchParams(window.location.search);
+      const key = q.get('type');
+      if (!key || !selectType(key, q.get('draft'))) {
+        if (key) history.replaceState(null, '', '/applications/new');
+        backToCatalog();
+      }
+    };
+    window.addEventListener('popstate', route);
+    if (back) {
+      back.addEventListener('click', (e) => {
+        if (!state.typeKey) return; /* каталог → обычная ссылка на список */
+        e.preventDefault();
+        history.pushState(null, '', '/applications/new');
+        backToCatalog();
+        const first = document.querySelector('[data-catalog] .document-type');
+        if (first) first.focus();
+      });
+    }
 
     /* --- каталог и профиль (fetch; скелетон → данные | ошибка) --------- */
     const renderCatalog = (types) => {
       const box = document.querySelector('[data-catalog]');
-      if (!box) return;
-      box.replaceChildren();
-      types.forEach((t) => {
-        const row = el('button', 'document-type');
-        row.type = 'button';
-        row.append(document.createRange().createContextualFragment((t.key === 'thesis_topic' || t.key === 'other') ? ICON.pen : ICON.file));
-        const mid = el('div');
-        mid.append(el('h2', null, t.title || ''));
-        mid.append(el('p', null, TYPE_HINT[t.key] || ''));
-        row.append(mid);
-        row.append(document.createRange().createContextualFragment(ICON.arrow));
-        row.addEventListener('click', () => selectType(t.key, t.title || ''));
-        box.append(row);
+      const sel = document.querySelector('[data-type-select]');
+      if (box) box.replaceChildren();
+      if (sel) sel.replaceChildren();
+      types.forEach((ty) => {
+        if (box) {
+          const row = el('a', 'document-type');
+          row.href = '/applications/new?type=' + encodeURIComponent(ty.key);
+          row.append(document.createRange().createContextualFragment((ty.key === 'thesis_topic' || ty.key === 'other') ? ICON.pen : ICON.file));
+          const mid = el('div');
+          mid.append(el('h2', null, ty.title || ''));
+          mid.append(el('p', null, typeHint(ty.key)));
+          row.append(mid);
+          row.append(document.createRange().createContextualFragment(ICON.arrow));
+          row.addEventListener('click', (e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            history.pushState(null, '', row.getAttribute('href'));
+            selectType(ty.key, null);
+            if (heading) { heading.tabIndex = -1; heading.focus(); }
+          });
+          box.append(row);
+        }
+        if (sel) {
+          const o = el('option', null, ty.title || '');
+          o.value = ty.key;
+          sel.append(o);
+        }
       });
     };
+    const typeSelect = document.querySelector('[data-type-select]');
+    if (typeSelect) {
+      typeSelect.addEventListener('change', () => {
+        history.pushState(null, '', '/applications/new?type=' + encodeURIComponent(typeSelect.value));
+        selectType(typeSelect.value, null);
+      });
+    }
     const loadForm = async () => {
       show('[data-form-loading]', true);
       show('[data-catalog]', false);
-      show('[data-form]', false);
+      show('[data-paper]', false);
       show('[data-form-error]', false);
-      const [types, me] = await Promise.all([
-        fetchJSON('/v1/application-types'),
-        fetchJSON('/v1/me')
-      ]);
+      const [types, me] = await Promise.all([fetchJSON('/v1/application-types'), fetchJSON('/v1/me')]);
       show('[data-form-loading]', false);
       if (!types || !Array.isArray(types.types)) {
-        /* офлайн уже показал баннер (fetchJSON); ошибка API — экранная */
         show('[data-form-error]', true);
         return;
       }
+      state.types = types.types;
       renderCatalog(types.types);
-      show('[data-catalog]', true);
       if (me && me.profile) {
         const p = me.profile;
         const card = document.querySelector('[data-profile-card]');
@@ -1463,20 +2260,22 @@
           if (fio) fio.textContent = p.fio || '';
           const meta = document.querySelector('[data-profile-meta]');
           if (meta) {
-            meta.textContent = [p.course ? p.course + ' курс' : '', p.faculty || '', p.group ? 'группа ' + p.group : '']
+            meta.textContent = [p.course ? fill(t('apps.courseN', '{n} курс'), { n: p.course }) : '', p.faculty || '', p.group ? fill(t('apps.groupG', 'группа {g}'), { g: p.group }) : '']
               .filter(Boolean).join(' · ');
           }
           card.hidden = false;
         }
       }
+      route();
     };
     const formRetry = document.querySelector('[data-form-retry]');
     if (formRetry) formRetry.addEventListener('click', () => { loadForm(); });
-    const typeBack = document.querySelector('[data-type-back]');
-    if (typeBack) typeBack.addEventListener('click', backToCatalog);
     loadForm();
 
     /* --- кнопки формы --------------------------------------------------- */
+    const form = document.querySelector('[data-form]');
+    if (form) form.addEventListener('input', renderSummary);
+    if (form) form.addEventListener('change', renderSummary);
     const busy = (btn, on, busyLabel) => {
       if (!btn) return;
       if (on) {
@@ -1494,14 +2293,13 @@
       saveDraftBtn.addEventListener('click', async () => {
         if (!state.typeKey || saveDraftBtn.disabled) return;
         setFormError('');
-        const statusLine = document.querySelector('[data-draft-status]');
+        const line = statusLine();
         if (!navigator.onLine) { applyOffline(true); return; }
         if (state.draftStopped) {
-          /* 409 ранее: черновик уже не draft — сохранение бессмысленно */
-          setFormError('Черновик уже не черновик — изменение не сохраняется');
+          setFormError(t('apps.draftNotDraft', 'Черновик больше не черновик — правки не сохраняются'));
           return;
         }
-        busy(saveDraftBtn, true, 'Сохраняем…');
+        busy(saveDraftBtn, true, t('apps.draftSaving', 'Сохраняем…'));
         try {
           let ok = false;
           if (state.draftId) {
@@ -1510,76 +2308,82 @@
             const resp = await fetch('/v1/applications', {
               method: 'POST',
               headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                type: state.typeKey,
-                payload_json: JSON.stringify(collectPayload()),
-                submit: false
-              })
+              body: JSON.stringify({ type: state.typeKey, payload_json: JSON.stringify(collectPayload()), submit: false })
             });
             if (resp.ok) {
               const body = await resp.json();
               state.draftId = body && body.id;
               startAutosave();
               ok = true;
-            } else if (resp.status !== 409) {
-              ok = false;
             }
           }
           if (ok) {
-            toast('Черновик сохранён');
-            const t = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            if (statusLine) statusLine.textContent = 'Черновик сохранён · ' + t + ' · дальше сохраняем автоматически';
+            toast(t('toast.draftSaved', 'Черновик сохранён'));
+            /* бывшая локальная const t = new Date()… перекрывала функцию t() —
+               переименована (аудит D §0.3) */
+            const savedAt = nowHM();
+            if (line) line.textContent = fill(t('apps.draftSavedAt', 'Черновик сохранён · {t} · дальше сохраняем автоматически'), { t: savedAt });
           } else if (!navigator.onLine) {
-            applyOffline(true); /* каркас покажет баннер и helper на кнопке */
+            applyOffline(true);
           } else {
-            setFormError('Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз');
+            setFormError(t('apps.draftFailed', 'Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз'));
           }
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
+          else setFormError(t('apps.draftFailed', 'Черновик не сохранился. Проверьте интернет — и попробуйте ещё раз'));
         } finally {
           busy(saveDraftBtn, false);
         }
       });
     }
-    const form = document.querySelector('[data-form]');
     if (form) {
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const submitBtn = form.querySelector('[data-submit-app]');
         if (!state.typeKey || (submitBtn && submitBtn.disabled)) return;
         setFormError('');
+        if (!validate()) return;
         if (!navigator.onLine) { applyOffline(true); return; }
         busy(submitBtn, true, t('toast.sending', 'Отправляем…'));
         try {
-          if (state.draftId && !state.draftStopped) await autosaveNow(); /* синк лучшего усилия */
-          const resp = await fetch('/v1/applications', {
+          /* 8.i (Р-29): есть живой черновик — подаём ЕГО одним PUT {payload_json,
+             submit:true}; 409/404 — черновика больше нет, подаём новой POST-строкой. */
+          let resp = null;
+          if (state.draftId && !state.draftStopped) {
+            resp = await fetch('/v1/applications/' + state.draftId, {
+              method: 'PUT',
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ payload_json: JSON.stringify(collectPayload()), submit: true })
+            });
+            if (resp.ok) {
+              stopTimer();
+              window.location.href = '/applications/' + state.draftId + '?submitted=1';
+              return;
+            }
+            if (resp.status === 409 || resp.status === 404) { state.draftStopped = true; stopTimer(); resp = null; }
+          }
+          if (!resp) resp = await fetch('/v1/applications', {
             method: 'POST',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: state.typeKey,
-              payload_json: JSON.stringify(collectPayload()),
-              submit: true
-            })
+            body: JSON.stringify({ type: state.typeKey, payload_json: JSON.stringify(collectPayload()), submit: true })
           });
           if (resp.ok) {
             const body = await resp.json();
-            window.location.href = '/applications/' + (body && body.id);
+            window.location.href = '/applications/' + (body && body.id) + '?submitted=1';
             return;
           }
-          let message = 'Заявка не отправилась';
+          let message = t('apps.submitFailed', 'Заявка не отправилась');
           try {
             const err = await resp.json();
             if (err && err.error && err.error.message) message = err.error.message;
           } catch (e) { /* тело не JSON */ }
-          if (state.draftId && !state.draftStopped) {
-            message += '. Черновик сохранён — попробуйте ещё раз, ничего не потеряется';
-          } else {
-            message += '. Проверьте интернет — и попробуем ещё раз';
-          }
+          message += '. ' + ((state.draftId && !state.draftStopped)
+            ? t('apps.submitDraftKept', 'Черновик сохранён — попробуйте ещё раз, ничего не потеряется')
+            : t('apps.submitCheckNet', 'Проверьте интернет — и попробуем ещё раз'));
           setFormError(message);
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
-          else setFormError('Заявка не отправилась. Проверьте интернет — и попробуем ещё раз');
+          else setFormError(t('apps.submitFailed', 'Заявка не отправилась') + '. ' + t('apps.submitCheckNet', 'Проверьте интернет — и попробуем ещё раз'));
         } finally {
           busy(submitBtn, false);
         }
@@ -1596,17 +2400,24 @@
      экрана ошибки — перезагрузка (03 §5.3). Вставка — только
      createElement/textContent (02 §6.4). */
   if (document.body.dataset.page === 'application') {
+    /* v3 (шаг 14): строки — словарь ×3 (apps.*), даты — LOCALE по <html lang> */
     const APP_STATUS = {
-      draft: 'Черновик', submitted: 'Подана', accepted: 'Принята',
-      in_progress: 'В работе', need_info: 'Требуется уточнение',
-      ready: 'Готова', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена'
+      draft: t('apps.statusDraft', 'Черновик'), submitted: t('apps.statusSubmitted', 'Подана'),
+      accepted: t('apps.statusAccepted', 'Принята'), in_progress: t('apps.statusInProgress', 'В работе'),
+      need_info: t('apps.statusNeedInfo', 'Требуется уточнение'), ready: t('apps.statusReady', 'Готова'),
+      issued: t('apps.statusIssued', 'Выдана'), rejected: t('apps.statusRejected', 'Отклонена'),
+      cancelled: t('apps.statusCancelled', 'Отменена')
     };
     const appRetry = document.querySelector('[data-app-retry]');
     if (appRetry) appRetry.addEventListener('click', () => window.location.reload());
 
-    /* --- PDF: 200 → blob-скачивание; 409 not_ready → inline-сообщение
-       «Справка ещё не готова» у кнопки (серверный message из 02 §5.2);
-       прочие ошибки — inline c message тела (формат 02 §5.1) ----------- */
+    /* «Печать / сохранить в PDF» (application-document.html): печать
+       HTML-превью; CSS печати оставляет только .document-paper */
+    const printBtn = document.querySelector('[data-print-document]');
+    if (printBtn) printBtn.addEventListener('click', () => window.print());
+
+    /* --- PDF: 200 → blob-скачивание; 409 not_ready и прочие ошибки —
+       inline-сообщение у кнопки (message тела, формат 02 §5.1) --------- */
     const pdfLink = document.querySelector('[data-pdf-link]');
     const pdfError = document.querySelector('[data-pdf-error]');
     if (pdfLink) {
@@ -1614,6 +2425,11 @@
         event.preventDefault();
         if (!navigator.onLine) { applyOffline(true); return; }
         if (pdfError) pdfError.hidden = true;
+        const fail = (message) => {
+          if (!pdfError) return;
+          pdfError.textContent = message || t('apps.pdfFail', 'Не удалось скачать справку');
+          pdfError.hidden = false;
+        };
         try {
           const resp = await fetch(pdfLink.href, { headers: { Accept: 'application/pdf' } });
           if (resp.ok) {
@@ -1621,62 +2437,56 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'para-spravka-' + (pdfLink.getAttribute('href').split('/').pop() || '') + '.pdf';
+            a.download = 'para-spravka-' + (pdfLink.getAttribute('href').split('/').slice(-2, -1)[0] || '') + '.pdf';
             document.body.append(a);
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 5000);
             return;
           }
-          let message = 'Не удалось скачать справку';
+          let message = '';
           try {
             const body = await resp.json();
             if (body && body.error && body.error.message) message = body.error.message;
           } catch (e) { /* тело не JSON */ }
-          if (pdfError) {
-            pdfError.textContent = message;
-            pdfError.hidden = false;
-          }
+          fail(message);
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
-          if (pdfError) {
-            pdfError.textContent = 'Не удалось скачать справку';
-            pdfError.hidden = false;
-          }
+          fail('');
         }
       });
     }
 
-    /* --- ветка С7.6: ответ на уточнение --------------------------------- */
-    const replyBlock = document.querySelector('[data-reply-block]');
+    /* --- ветка С7.6: ответ на уточнение (form, Enter/submit) ----------- */
+    const replyForm = document.querySelector('[data-reply-block]');
     const replyBtn = document.querySelector('[data-reply-send]');
     const replyText = document.querySelector('[data-reply-text]');
     const replyError = document.querySelector('[data-reply-error]');
     const replyResult = document.querySelector('[data-reply-result]');
     const badge = document.querySelector('[data-app-badge]');
     const timeline = document.querySelector('[data-app-timeline]');
-    if (replyBtn && replyBlock) {
-      replyBtn.addEventListener('click', async () => {
+    const showReplyError = (text) => {
+      if (replyText) { replyText.setAttribute('aria-invalid', 'true'); replyText.setAttribute('aria-describedby', 'reply-error'); }
+      if (replyError) { replyError.textContent = text; replyError.hidden = false; }
+    };
+    if (replyForm && replyBtn) {
+      replyForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
         if (replyBtn.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
-        const appId = replyBlock.dataset.appId;
+        const appId = replyForm.dataset.appId;
         const text = replyText ? replyText.value.trim() : '';
         if (replyError) replyError.hidden = true;
         if (!text) {
-          if (replyText) replyText.setAttribute('aria-invalid', 'true');
-          if (replyError) {
-            replyError.textContent = 'Напишите ответ — деканат ждёт уточнение';
-            replyError.hidden = false;
-          }
+          showReplyError(t('apps.replyEmpty', 'Напишите ответ — деканат ждёт уточнение'));
+          if (replyText) replyText.focus();
           return;
         }
-        if (replyText) replyText.removeAttribute('aria-invalid');
+        if (replyText) { replyText.removeAttribute('aria-invalid'); replyText.removeAttribute('aria-describedby'); }
         const previousLabel = replyBtn.textContent;
         replyBtn.textContent = t('toast.sending', 'Отправляем…');
         replyBtn.disabled = true;
         try {
-          /* fetchJSON форматует ошибки из {error:{code,message}} (02 §5.1);
-             201 — Ok, тело = событие + application_status/status (С7.6) */
           const data = await fetchJSON('/v1/applications/' + appId + '/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1684,33 +2494,39 @@
           });
           if (data) {
             const newStatus = data.application_status || data.status;
-            if (newStatus === 'in_progress' && badge) {
-              badge.className = 'badge info';
-              badge.textContent = APP_STATUS.in_progress;
-            }
             if (timeline) {
+              timeline.querySelectorAll('[aria-current]').forEach((li) => li.removeAttribute('aria-current'));
               const li = document.createElement('li');
-              li.className = (data.to_status === 'in_progress') ? 'done' : '';
+              li.className = (data.to_status === 'in_progress') ? 'current' : '';
+              if (data.to_status === 'in_progress') li.setAttribute('aria-current', 'step');
               const strong = document.createElement('strong');
-              strong.textContent = APP_STATUS[data.to_status] || data.to_status || 'Сообщение';
+              strong.textContent = APP_STATUS[data.to_status] || t('apps.message', 'Сообщение');
               const p = document.createElement('p');
-              const when = data.at ? new Date(data.at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+              const when = data.at ? new Date(data.at).toLocaleString(LOCALE, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
               p.textContent = when + (text ? ' · ' + text : '');
               li.append(strong, p);
               timeline.append(li);
             }
-            replyBlock.hidden = true;
+            replyForm.hidden = true;
             if (replyResult) {
               replyResult.textContent = newStatus === 'in_progress'
-                ? 'Ответ отправлен — заявка снова в работе'
-                : 'Ответ отправлен';
+                ? t('apps.replySentWork', 'Ответ отправлен. Заявка снова в работе.')
+                : t('apps.replySent', 'Ответ отправлен.');
               replyResult.hidden = false;
             }
+            toast(t('apps.replySavedToast', 'Ответ сохранён в заявке'));
+            if (badge) {
+              if (newStatus === 'in_progress') {
+                badge.className = 'badge info';
+                badge.textContent = APP_STATUS.in_progress;
+              }
+              badge.tabIndex = -1;
+              badge.focus();
+            }
           } else if (!navigator.onLine) {
-            applyOffline(true); /* каркас: баннер + helper на кнопке */
-          } else if (replyError) {
-            replyError.textContent = 'Ответ не отправился. Проверьте интернет — и попробуем ещё раз';
-            replyError.hidden = false;
+            applyOffline(true);
+          } else {
+            showReplyError(t('apps.replyFailed', 'Ответ не отправился. Проверьте интернет — и попробуем ещё раз'));
           }
         } catch (e) {
           if (!navigator.onLine) applyOffline(true);
@@ -1722,42 +2538,26 @@
     }
   }
 
-  /* ---------- экран «Бронь аудитории» (views/rooms.csp; 03 §4.9.5) ------ */
+  /* ---------- экран «Бронь аудитории» (views/rooms.csp; дизайн v3, шаг 18) ------ */
   /* Данные — три fetch из ТЕХ ЖЕ JSON-роутов, что за API (02 §5.2):
-     каталог GET /v1/rooms (query ?capacity= — фильтр «вместимость не
-     меньше»), сетка дня GET /v1/rooms/{id}/slots?date= (дейт-пикер,
-     дефолт — сегодня UTC проекта; слоты 08:00–22:00 UTC по 60 минут,
-     состояния free/booked/mine — RoomsService), «Мои брони» GET
-     /v1/room-bookings?upcoming=1.
-     Поток брони — ТРИ ШАГА 03 §4.9.5 (правки по ревью — до этого тап
-     слота POST-ил сразу, риск случайной брони): каталог → сетка →
-     подтверждение. Тап свободного слота ТОЛЬКО выбирает его
-     (aria-pressed, акцент .room-slot[aria-pressed=true]), карточка
-     data-booking-card (.booking-summary черновика rooms.html) показывает
-     «Ауд. …», корпус/вместимость/оборудование (features — из каталога,
-     слотовый ответ features не отдаёт) и выбранный интервал, primary
-     «Забронировать HH:MM–HH:MM» активируется — POST /v1/rooms/{id}/
-     bookings {starts_at, ends_at} строками слота сетки «…Z» (границы не
-     вычисляются на клиенте). Исходы (постановка Э7):
-       201          → success-тост «Ауд. …, HH:MM–HH:MM — забронировано»
-                      с действием «Мои брони» (якорь к секции; дословно
-                      03 §4.9.5) + перерисовка сетки (слот стал mine) и
-                      «Моих брони»;
-       400 slot_taken → inline «Слот только что заняли — обновляем сетку»
-                      + перерисовка сетки (данные могли устареть);
-       409 conflict/blocked → inline с текстом {error:{message}}
-                      (02 §5.1) + перерисовка сетки;
-       404/прочие   → inline message тела; сеть/офлайн — баннер каркаса.
-     Отмена — danger-диалог <dialog> как sheet «Детали пары»
-     (03 §2.8/§6.4): подтверждение → DELETE /v1/room-bookings/{id};
-     204 → строка уходит, тост «Бронь отменена», сетка тихо перечитывается
-     (слот мог освободиться); 409 повторной отмены → inline у списка
-     с message тела. Состояния 03 §5: скелетоны секций, пусто («На эту
-     дату слотов нет» с primary «Каталог аудиторий» — якорь к каталогу —
-     / «Броней нет»), ошибки секций с «Повторить» (повторный fetch),
-     офлайн — баннер каркаса. Вставка — только createElement/textContent
-     (02 §6.4). mine-слот не тапается: id брони в сетке слотов не
-     отдаётся — отмена в «Моих брони». */
+     каталог GET /v1/rooms (?capacity= — «вместимость не меньше») → опции
+     select «1207 · Корпус Б · 24 места» (эталон rooms.html #room; 50
+     аудиторий чипами тяжелы); сетка дня GET /v1/rooms/{id}/slots?date=
+     (слоты 08:00–22:00 UTC по 60 минут, free/booked/mine — RoomsService);
+     «Мои брони» GET /v1/room-bookings?upcoming=1.
+     Под панелью — «корпус · N мест · оборудование» и «На карте» →
+     /map?q=<номер>. Итог .booking-summary справа (sticky ≥1024px):
+     «Аудитория N», подпись, «день · выберите свободное время» → после
+     выбора — интервал и primary «Забронировать HH:MM–HH:MM» (POST
+     /v1/rooms/{id}/bookings строками слота «…Z»). Исходы: 201 → в итоге
+     notice «Забронировано: …», тост с «Мои брони», тихая перечитка сетки
+     и списка; slot_taken / not_found → строки словаря; прочие (409
+     conflict/blocked) — общий текст (message сервера — только на ru: он
+     русский). Свой слот (mine) — кнопка: бронь ищется в «Моих бронях» по
+     room_id + starts_at (Date.parse — формат «…Z» у обоих роутов), тап
+     открывает тот же danger-диалог отмены, что и «Отменить» в списке
+     (эталон: «Нажмите на свою бронь, чтобы отменить её»).
+     Даты и plural — LOCALE / Intl.PluralRules, строки — словарь rooms.*. */
   if (document.body.dataset.page === 'rooms') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -1766,200 +2566,212 @@
       if (text != null) node.textContent = text;
       return node;
     };
-    const plural = (n, one, few, many) => {
-      const m10 = n % 10, m100 = n % 100;
-      if (m10 === 1 && m100 !== 11) return one;
-      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-      return many;
-    };
     const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '--:--';
     const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
+    const span = (s) => timeOf(s.starts_at) + '–' + timeOf(s.ends_at);
     /* формат дня по календарной дате UTC проекта (сдвига часового пояса нет) */
     const fmtDay = (ymd) => {
-      const p = ymd.split('-').map(Number);
+      const p = String(ymd).split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
     const todayUtc = () => new Date().toISOString().slice(0, 10);
+    const seats = (n) => tn('rooms.seats', n, '{n}');
+    const roomFull = (name) => t('rooms.roomFull', 'Аудитория {room}').replace('{room}', name || '—');
+    const roomShort = (name) => t('rooms.roomShort', 'Ауд. {room}').replace('{room}', name || '—');
+    /* message сервера — русский текст: показываем только на ru */
+    const serverText = (body, fallback) => (LANG === 'ru' && body && body.error && body.error.message) ? body.error.message : fallback;
 
+    const roomSelect = document.querySelector('[data-room-select]');
     const capSelect = document.querySelector('[data-capacity-filter]');
     const dateInput = document.querySelector('[data-slots-date]');
-    const state = { rooms: [], roomId: null, roomName: '', selected: null };
+    const card = document.querySelector('[data-booking-card]');
+    const confirmBtn = card ? card.querySelector('[data-booking-confirm]') : null;
+    const doneBox = card ? card.querySelector('[data-booking-done]') : null;
+    const state = { rooms: [], roomId: null, roomName: '', selected: null, bookings: [], bookingsLoaded: false };
     let bookingBusy = false; // двойной submit подтверждения (быстрый тап)
+    let slotsSeq = 0;
 
-    const showSlotWarn = (text) => {
-      const box = document.querySelector('[data-slots-warn]');
-      if (!box) return;
-      box.textContent = text;
-      box.hidden = false;
-    };
-    const showBookingsWarn = (text) => {
-      const box = document.querySelector('[data-bookings-warn]');
-      if (!box) return;
-      box.textContent = text;
-      box.hidden = false;
-    };
-
-    /* --- каталог аудиторий: чипы (номер · корпус · вместимость) -------- */
-    const syncChips = () => {
-      document.querySelectorAll('[data-room-chips] .chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.roomId) === state.roomId));
+    if (capSelect) {
+      capSelect.querySelectorAll('option[data-cap-n]').forEach((o) => {
+        o.textContent = t('rooms.capN', '{n} мест').replace('{n}', o.dataset.capN);
       });
+    }
+    const currentDate = () => (dateInput && dateInput.value) ? dateInput.value : todayUtc();
+    const setCardText = (sel, text) => { const n = card ? card.querySelector(sel) : null; if (n) n.textContent = text; };
+    const showWarn = (sel, text) => {
+      const box = document.querySelector(sel);
+      if (!box) return;
+      box.textContent = text;
+      box.hidden = false;
     };
-    const selectRoom = (id) => {
-      if (state.roomId === id) return;
-      state.roomId = id;
-      syncChips();
-      loadSlots();
+    const hideDone = () => { if (doneBox) doneBox.hidden = true; };
+    const selectedRoom = () => state.rooms.find((r) => r.id === state.roomId) || null;
+
+    /* --- подпись аудитории «корпус · мест · оборудование» + «На карте» --- */
+    const renderRoomMeta = () => {
+      const room = selectedRoom();
+      const metaText = room ? [room.building, seats(Number(room.capacity) || 0), room.features].filter(Boolean).join(' · ') : '';
+      const line = document.querySelector('[data-room-meta]');
+      if (line) {
+        const txt = line.querySelector('[data-room-meta-text]');
+        if (txt) txt.textContent = metaText;
+        const map = line.querySelector('[data-room-map]');
+        if (map && room) {
+          map.href = '/map?q=' + encodeURIComponent(room.name || '');
+          map.setAttribute('aria-label', t('rooms.onMap', 'На карте') + ': ' + roomFull(room.name));
+        }
+        line.hidden = !room;
+      }
+      setCardText('[data-booking-room]', roomFull(room ? room.name : ''));
+      setCardText('[data-booking-meta]', metaText);
     };
+
+    /* --- итог: до выбора — «день · выберите свободное время» ------------- */
+    const resetSelection = () => {
+      state.selected = null;
+      document.querySelectorAll('[data-slots-grid] .room-slot[data-free]').forEach((b) => {
+        b.setAttribute('aria-pressed', 'false');
+        const lbl = b.querySelector('span');
+        if (lbl) lbl.textContent = t('rooms.slotFree', 'Свободно');
+      });
+      setCardText('[data-booking-choice]', fmtDay(currentDate()) + ' · ' + t('rooms.pickTime', 'выберите свободное время'));
+      if (confirmBtn && !bookingBusy) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = t('rooms.pickSlot', 'Выберите слот');
+      }
+    };
+    const selectSlot = (slot, btn) => {
+      if (btn.disabled) return;
+      hideDone();
+      resetSelection();
+      state.selected = slot;
+      btn.setAttribute('aria-pressed', 'true');
+      const lbl = btn.querySelector('span');
+      if (lbl) lbl.textContent = t('rooms.slotPicked', 'Выбрано');
+      setCardText('[data-booking-choice]', fmtDay(dateOf(slot.starts_at)) + ' · ' + span(slot));
+      if (confirmBtn) {
+        confirmBtn.disabled = !navigator.onLine;
+        confirmBtn.textContent = t('rooms.bookBtn', 'Забронировать {time}').replace('{time}', span(slot));
+      }
+    };
+
+    /* --- каталог → опции select ------------------------------------------ */
     const loadCatalog = async () => {
       show('[data-rooms-loading]', true);
       show('[data-rooms-error]', false);
-      show('[data-room-chips]', false);
+      show('[data-rooms-none]', false);
+      if (roomSelect) roomSelect.disabled = true;
       const cap = capSelect && capSelect.value ? capSelect.value : '';
       const data = await fetchJSON('/v1/rooms' + (cap ? '?capacity=' + encodeURIComponent(cap) : ''));
       show('[data-rooms-loading]', false);
       if (!data || !Array.isArray(data.rooms)) {
         show('[data-rooms-error]', true);
+        show('[data-slots-section]', false);
         return;
       }
       state.rooms = data.rooms;
-      const chips = document.querySelector('[data-room-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      state.rooms.forEach((r) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.roomId = String(r.id);
-        chip.textContent = r.name + ' · ' + r.building + ' · ' + r.capacity + ' ' + plural(r.capacity, 'место', 'места', 'мест');
-        chip.addEventListener('click', () => selectRoom(r.id));
-        chips.append(chip);
-      });
-      if (!state.rooms.length) {
-        chips.append(el('p', 'muted small', 'Аудиторий с такой вместимостью нет — смягчите фильтр'));
-      }
-      /* выбранная аудитория отсеялась фильтром → первая из оставшихся */
       if (!state.rooms.some((r) => r.id === state.roomId)) {
         state.roomId = state.rooms.length ? state.rooms[0].id : null;
       }
-      chips.hidden = false;
-      syncChips();
-      const section = document.querySelector('[data-slots-section]');
-      if (section) section.hidden = !state.roomId;
+      if (roomSelect) {
+        roomSelect.replaceChildren();
+        state.rooms.forEach((r) => {
+          const o = el('option', null, [r.name, r.building, seats(Number(r.capacity) || 0)].filter(Boolean).join(' · '));
+          o.value = String(r.id);
+          roomSelect.append(o);
+        });
+        if (state.roomId) roomSelect.value = String(state.roomId);
+        roomSelect.disabled = !state.rooms.length;
+      }
+      show('[data-rooms-none]', !state.rooms.length);
+      show('[data-slots-section]', !!state.roomId);
+      renderRoomMeta();
       if (state.roomId) loadSlots();
     };
 
-    /* --- карточка подтверждения (03 §4.9.5, шаг 3; черновик rooms.html
-       .booking-summary): до выбора — disabled «Выберите слот», с выбором —
-       primary «Забронировать HH:MM–HH:MM». Оборудование (features) и
-       вместимость — из строки каталога выбранной аудитории ------------- */
-    const bookingCard = document.querySelector('[data-booking-card]');
-    const bookingConfirm = bookingCard ? bookingCard.querySelector('[data-booking-confirm]') : null;
-    const selectedRoom = () => state.rooms.find((r) => r.id === state.roomId) || null;
-    const resetSelection = () => {
-      state.selected = null;
-      document.querySelectorAll('[data-slots-grid] .room-slot').forEach((b) => b.setAttribute('aria-pressed', 'false'));
-      const choice = bookingCard ? bookingCard.querySelector('[data-booking-choice]') : null;
-      if (choice) choice.textContent = 'Выберите свободное время';
-      if (bookingConfirm) {
-        bookingConfirm.disabled = true;
-        bookingConfirm.textContent = 'Выберите слот';
-      }
+    /* --- сетка слотов: free — выбор, mine — отмена, booked — «Занято» ---- */
+    const bookingFor = (slot) => {
+      const at = Date.parse(slot.starts_at);
+      return state.bookings.find((b) => b.room_id === state.roomId && Date.parse(b.starts_at) === at) || null;
     };
-    const selectSlot = (slot, btn) => {
-      if (btn.disabled) return;
-      state.selected = slot;
-      document.querySelectorAll('[data-slots-grid] .room-slot').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
-      const room = selectedRoom();
-      const set = (sel, text) => { const n = bookingCard ? bookingCard.querySelector(sel) : null; if (n) n.textContent = text; };
-      set('[data-booking-room]', 'Ауд. ' + (state.roomName || '—'));
-      set('[data-booking-meta]', room
-        ? [room.building, room.capacity + ' ' + plural(room.capacity, 'место', 'места', 'мест'), room.features]
-            .filter(Boolean).join(' · ')
-        : '');
-      const when = fmtDay(dateOf(slot.starts_at)) + ' · ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at);
-      set('[data-booking-choice]', when);
-      if (bookingConfirm) {
-        bookingConfirm.disabled = false;
-        bookingConfirm.textContent = 'Забронировать ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at);
-      }
-    };
-
-    /* --- сетка слотов дня: free — выбор слота, booked — «Занято», mine —
-       «Ваша бронь» (кнопки ≥44px — .room-grid/.room-slot app.css) ------- */
     const renderSlots = (slots) => {
       const grid = document.querySelector('[data-slots-grid]');
       if (!grid) return;
-      resetSelection(); // сетка пересобрана — выбор слота не переживает её
       grid.replaceChildren();
       slots.forEach((s) => {
         const btn = el('button', 'room-slot');
         btn.type = 'button';
-        btn.setAttribute('aria-pressed', 'false');
         const label = el('span');
         if (s.state === 'free') {
-          label.textContent = 'Свободно';
+          btn.dataset.free = '';
+          btn.setAttribute('aria-pressed', 'false');
+          label.textContent = t('rooms.slotFree', 'Свободно');
           btn.addEventListener('click', () => selectSlot(s, btn));
         } else if (s.state === 'mine') {
           btn.classList.add('mine');
-          btn.disabled = true;
-          label.textContent = 'Ваша бронь';
+          label.textContent = t('rooms.slotMine', 'Ваша бронь');
+          btn.setAttribute('aria-label', t('rooms.slotMineAria', '{time} — ваша бронь, нажмите, чтобы отменить').replace('{time}', span(s)));
+          btn.addEventListener('click', async () => {
+            let b = bookingFor(s);
+            if (!b) { await loadBookings(true); b = bookingFor(s); }
+            if (b) openCancelDialog(b, btn);
+          });
         } else {
           btn.disabled = true;
-          label.textContent = 'Занято';
+          label.textContent = t('rooms.slotBusy', 'Занято');
         }
-        btn.append(el('strong', null, timeOf(s.starts_at) + '–' + timeOf(s.ends_at)), label);
+        btn.append(el('strong', null, span(s)), label);
         grid.append(btn);
       });
+      resetSelection();
     };
-    /* silent — тихая перечитка после POST/DELETE: сетка не мигает
-       скелетоном, заменяется по ответу; сбой — блок ошибки секции */
+    /* silent — тихая перечитка после POST/DELETE: сетка не мигает скелетоном */
     const loadSlots = async (silent) => {
       if (!state.roomId) return;
+      const seq = ++slotsSeq;
       show('[data-slots-error]', false);
-      show('[data-slots-warn]', false);
       show('[data-slots-empty]', false);
       if (!silent) {
+        show('[data-slots-warn]', false);
         show('[data-slots-grid]', false);
         show('[data-slots-loading]', true);
       }
-      const date = dateInput && dateInput.value ? dateInput.value : todayUtc();
+      const date = currentDate();
       if (dateInput && !dateInput.value) dateInput.value = date;
       const data = await fetchJSON('/v1/rooms/' + state.roomId + '/slots?date=' + encodeURIComponent(date));
+      if (seq !== slotsSeq) return;
       show('[data-slots-loading]', false);
       if (!data || !Array.isArray(data.slots)) {
         show('[data-slots-grid]', false);
-        show('[data-booking-card]', false); /* выбор слота скрыт вместе с сеткой */
         show('[data-slots-error]', true);
+        resetSelection();
         return;
       }
-      const line = document.querySelector('[data-slots-room-line]');
-      if (line) line.textContent = 'Ауд. ' + data.room + ' · ' + data.building;
       state.roomName = data.room || '';
       if (!data.slots.length) {
         show('[data-slots-grid]', false);
-        show('[data-booking-card]', false);
         show('[data-slots-empty]', true);
+        resetSelection();
         return;
       }
       renderSlots(data.slots);
       show('[data-slots-grid]', true);
-      show('[data-booking-card]', true);
     };
 
-    /* --- бронирование (шаг «подтверждение» 03 §4.9.5): POST по кнопке
-       карточки; исходы 201 / slot_taken / conflict / blocked / 404 ----- */
+    /* --- бронирование (шаг «подтверждение» 03 §4.9.5) -------------------- */
     const bookSlot = async () => {
       const slot = state.selected;
-      if (!slot || bookingBusy || (bookingConfirm && bookingConfirm.disabled)) return;
+      if (!slot || bookingBusy || (confirmBtn && confirmBtn.disabled)) return;
       if (!navigator.onLine) { applyOffline(true); return; }
       bookingBusy = true;
       show('[data-slots-warn]', false);
-      const was = bookingConfirm ? bookingConfirm.textContent : '';
-      if (bookingConfirm) {
-        bookingConfirm.textContent = 'Бронируем…';
-        bookingConfirm.disabled = true;
+      hideDone();
+      if (confirmBtn) {
+        confirmBtn.textContent = t('rooms.booking', 'Бронируем…');
+        confirmBtn.disabled = true;
       }
+      const room = state.roomName || (selectedRoom() || {}).name || '';
       try {
         const resp = await fetch('/v1/rooms/' + state.roomId + '/bookings', {
           method: 'POST',
@@ -1967,76 +2779,57 @@
           body: JSON.stringify({ starts_at: slot.starts_at, ends_at: slot.ends_at })
         });
         if (resp.status === 201) {
-          /* канон success-тоста 03 §4.9.5 («Ауд. 1207, 11:00–12:00 —
-             забронировано» со ссылкой «Мои брони»): «Мои брони» — секция
-             этой же страницы, действие — якорь к ней (действие тоста —
-             --bg на инверсном тосте: --primary на нём не проходит WCAG,
-             замер в шапке toast-хелпера) */
-          toast('Ауд. ' + (state.roomName || '') + ', ' + timeOf(slot.starts_at) + '–' + timeOf(slot.ends_at) + ' — забронировано',
-            { label: 'Мои брони', href: '#bookings-title' });
-        } else {
-          let code = '';
-          let message = t('toast.failBooking', 'Не получилось забронировать');
-          try {
-            const body = await resp.json();
-            if (body && body.error) {
-              code = body.error.code || '';
-              if (body.error.message) message = body.error.message;
-            }
-          } catch (e) { /* тело не JSON — остаётся общий текст */ }
-          if (code === 'slot_taken') {
-            showSlotWarn('Слот только что заняли — обновляем сетку');
-          } else if (code === 'not_found') {
-            showSlotWarn('Аудитория не найдена — обновляем каталог');
-            loadCatalog();
-          } else {
-            showSlotWarn(message);
+          const when = roomShort(room) + ', ' + fmtDay(dateOf(slot.starts_at)) + ' · ' + span(slot);
+          if (doneBox) {
+            doneBox.textContent = t('rooms.bookedDone', 'Забронировано: {when}.').replace('{when}', when);
+            doneBox.hidden = false;
           }
+          toast(roomShort(room) + ', ' + span(slot) + ' — ' + t('toast.booked', 'забронировано'),
+            { label: t('rooms.myTitle', 'Мои брони'), href: '#bookings-title' });
+        } else {
+          let body = null;
+          try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
+          const code = body && body.error ? body.error.code || '' : '';
+          if (code === 'slot_taken') showWarn('[data-slots-warn]', t('rooms.slotTaken', 'Слот только что заняли — обновляем сетку'));
+          else if (code === 'not_found') { showWarn('[data-slots-warn]', t('rooms.roomNotFound', 'Аудитория не найдена — обновляем каталог')); loadCatalog(); }
+          else showWarn('[data-slots-warn]', serverText(body, t('toast.failBooking', 'Не получилось забронировать')));
         }
       } catch (e) {
         if (!navigator.onLine) applyOffline(true);
-        else showSlotWarn(t('toast.failBookingNet', 'Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз'));
+        else showWarn('[data-slots-warn]', t('toast.failBookingNet', 'Не получилось забронировать. Проверьте интернет — и попробуйте ещё раз'));
       } finally {
         bookingBusy = false;
-        /* выбор и подпись кнопки восстановит renderSlots/resetSelection
-           после тихой перечитки (или inline-восстановление ниже при сбое) */
-        if (bookingConfirm && state.selected) {
-          bookingConfirm.textContent = was;
-          bookingConfirm.disabled = false;
-        }
       }
-      /* после любого исхода данные могли устареть — сетка и «Мои брони»
-         перечитываются (после 201 слот стал mine и выбор сбрасывается —
-         renderSlots вызывает resetSelection; после конфликтов — чужая
-         бронь/блокировка); 404 уже перечитал каталог */
+      /* после любого исхода данные могли устареть: сетка (выбор сбрасывает
+         renderSlots) и «Мои брони» перечитываются тихо */
+      await loadBookings(true);
       loadSlots(true);
-      loadBookings(true);
     };
 
-    /* --- «Мои брони»: строки + отмена через danger-диалог --------------- */
-    const renderBookings = (bookings) => {
+    /* --- «Мои брони»: .list-row эталона + «Отменить» -------------------- */
+    const renderBookings = () => {
       const list = document.querySelector('[data-bookings-list]');
       if (!list) return;
       list.replaceChildren();
-      bookings.forEach((b) => {
-        const row = el('div', 'booking-row');
-        const main = el('div', 'booking-main');
-        main.append(el('strong', null, 'Ауд. ' + (b.room || '—')));
-        main.append(el('span', 'muted small', b.building || ''));
-        const when = el('div', 'booking-when', fmtDay(dateOf(b.starts_at)) + ' · ' + timeOf(b.starts_at) + '–' + timeOf(b.ends_at));
-        const cancel = el('button', 'button', 'Отменить');
+      state.bookings.forEach((b) => {
+        const row = el('div', 'list-row');
+        const main = el('div');
+        main.append(el('strong', null, roomShort(b.room)));
+        main.append(el('p', null, [b.building, fmtDay(dateOf(b.starts_at)) + ' · ' + span(b)].filter(Boolean).join(' · ')));
+        const cancel = el('button', 'button', t('rooms.cancel', 'Отменить'));
         cancel.type = 'button';
-        cancel.addEventListener('click', () => openCancelDialog(b));
-        row.append(main, when, cancel);
+        cancel.setAttribute('aria-label', t('rooms.cancelConfirm', 'Отменить бронь') + ': ' + roomShort(b.room) + ', ' + fmtDay(dateOf(b.starts_at)) + ' · ' + span(b));
+        cancel.addEventListener('click', () => openCancelDialog(b, cancel));
+        row.append(main, cancel);
         list.append(row);
       });
       list.hidden = false;
     };
     const loadBookings = async (silent) => {
       show('[data-bookings-error]', false);
-      show('[data-bookings-warn]', false);
       show('[data-bookings-empty]', false);
       if (!silent) {
+        show('[data-bookings-warn]', false);
         show('[data-bookings-list]', false);
         show('[data-bookings-loading]', true);
       }
@@ -2047,112 +2840,123 @@
         show('[data-bookings-error]', true);
         return;
       }
+      state.bookings = data.bookings;
+      state.bookingsLoaded = true;
       const count = document.querySelector('[data-bookings-count]');
-      if (count) {
-        count.textContent = data.bookings.length
-          ? data.bookings.length + ' ' + plural(data.bookings.length, 'предстоящая', 'предстоящие', 'предстоящих')
-          : '';
-      }
-      if (!data.bookings.length) {
+      if (count) count.textContent = state.bookings.length ? tn('rooms.upcoming', state.bookings.length, '{n}') : '';
+      if (!state.bookings.length) {
         show('[data-bookings-list]', false);
         show('[data-bookings-empty]', true);
         return;
       }
-      renderBookings(data.bookings);
+      renderBookings();
     };
 
-    /* --- danger-диалог отмены (03 §2.8: danger только в диалогах) ------- */
+    /* --- danger-диалог отмены (03 §2.8: danger только в диалогах) -------- */
     const dlg = document.getElementById('cancel-booking-dialog');
     const dlgDesc = dlg ? dlg.querySelector('[data-cancel-booking-desc]') : null;
     const dlgConfirm = dlg ? dlg.querySelector('[data-cancel-booking-confirm]') : null;
     const dlgClose = dlg ? dlg.querySelector('[data-cancel-booking-close]') : null;
     let pendingCancel = null;
-    const openCancelDialog = (b) => {
-      if (!dlg) return;
+    let returnFocus = null;
+    const openCancelDialog = (b, opener) => {
+      if (!dlg || typeof dlg.showModal !== 'function') return;
       pendingCancel = b;
+      returnFocus = opener || null;
       if (dlgDesc) {
-        dlgDesc.textContent = 'Ауд. ' + (b.room || '—') + ' (' + (b.building || '') + ') · '
-          + fmtDay(dateOf(b.starts_at)) + ', ' + timeOf(b.starts_at) + '–' + timeOf(b.ends_at);
+        dlgDesc.textContent = roomFull(b.room) + (b.building ? ' (' + b.building + ')' : '') + ' · '
+          + fmtDay(dateOf(b.starts_at)) + ', ' + span(b);
       }
       dlg.showModal();
     };
+    if (dlg) {
+      dlg.addEventListener('close', () => {
+        const target = returnFocus && returnFocus.isConnected ? returnFocus : roomSelect;
+        if (target) target.focus();
+        returnFocus = null;
+      });
+    }
     if (dlgClose) dlgClose.addEventListener('click', () => dlg.close());
     if (dlgConfirm) {
       dlgConfirm.addEventListener('click', async () => {
         if (!pendingCancel || dlgConfirm.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
         dlgConfirm.disabled = true;
-        dlgConfirm.textContent = 'Отменяем…';
+        dlgConfirm.textContent = t('rooms.cancelling', 'Отменяем…');
         try {
           const resp = await fetch('/v1/room-bookings/' + pendingCancel.id, {
             method: 'DELETE',
             headers: { Accept: 'application/json' }
           });
           if (resp.status === 204) {
+            /* кнопка-открывашка (слот/строка) пересоберётся — фокус к списку */
+            returnFocus = document.getElementById('bookings-title');
             dlg.close();
-            toast('Бронь отменена');
+            hideDone();
+            toast(t('toast.bookingCancelled', 'Бронь отменена'));
           } else {
-            /* 409 повторной отмены/блокировка → message тела (02 §5.1);
-               403/404/прочие — тот же inline, без деталей наружу */
-            let message = t('toast.failBookingCancel', 'Не получилось отменить бронь');
-            try {
-              const body = await resp.json();
-              if (body && body.error && body.error.message) message = body.error.message;
-            } catch (e) { /* тело не JSON */ }
+            let body = null;
+            try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
             dlg.close();
-            showBookingsWarn(message);
+            showWarn('[data-bookings-warn]', serverText(body, t('toast.failBookingCancel', 'Не получилось отменить бронь')));
           }
         } catch (e) {
           dlg.close();
           if (!navigator.onLine) applyOffline(true);
-          else showBookingsWarn(t('toast.failBookingCancelNet', 'Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз'));
+          else showWarn('[data-bookings-warn]', t('toast.failBookingCancelNet', 'Не получилось отменить бронь. Проверьте интернет — и попробуйте ещё раз'));
         } finally {
           dlgConfirm.disabled = false;
-          dlgConfirm.textContent = 'Отменить бронь';
+          dlgConfirm.textContent = t('rooms.cancelConfirm', 'Отменить бронь');
           pendingCancel = null;
         }
-        /* строка уходит из списка (после 204) или перечитывается (409 —
-           брони могла уже не быть); сетка тихо перечитывается — слот мог
-           освободиться/уйти */
-        loadBookings(true);
+        await loadBookings(true);
         loadSlots(true);
       });
     }
 
-    /* --- ретраи и переключатели ----------------------------------------- */
-    if (bookingConfirm) bookingConfirm.addEventListener('click', () => bookSlot());
+    /* --- ретраи и переключатели ------------------------------------------ */
+    if (confirmBtn) confirmBtn.addEventListener('click', () => bookSlot());
     const roomsRetry = document.querySelector('[data-rooms-retry]');
     if (roomsRetry) roomsRetry.addEventListener('click', () => loadCatalog());
     const slotsRetry = document.querySelector('[data-slots-retry]');
     if (slotsRetry) slotsRetry.addEventListener('click', () => loadSlots());
     const bookingsRetry = document.querySelector('[data-bookings-retry]');
     if (bookingsRetry) bookingsRetry.addEventListener('click', () => loadBookings());
-    if (capSelect) capSelect.addEventListener('change', () => loadCatalog());
+    const focusRoom = document.querySelector('[data-focus-room]');
+    if (focusRoom) focusRoom.addEventListener('click', () => { if (roomSelect) roomSelect.focus(); });
+    if (capSelect) capSelect.addEventListener('change', () => { hideDone(); loadCatalog(); });
+    if (roomSelect) {
+      roomSelect.addEventListener('change', () => {
+        state.roomId = Number(roomSelect.value) || null;
+        hideDone();
+        renderRoomMeta();
+        loadSlots();
+      });
+    }
     if (dateInput) {
       if (!dateInput.value) dateInput.value = todayUtc(); /* дефолт — сегодня UTC проекта */
-      dateInput.addEventListener('change', () => loadSlots());
+      dateInput.min = todayUtc();
+      dateInput.addEventListener('change', () => { hideDone(); loadSlots(); });
     }
 
-    loadCatalog();
     loadBookings();
+    loadCatalog();
   }
 
-  /* ---------- экран «Библиотека» (views/library.csp; 03 §4.9.6/5.12) ----- */
-  /* Наличие литературы: два fetch из ТЕХ ЖЕ JSON-роутов, что за API
-     (02 §5.2): филиалы GET /v1/library/branches (чипы «Все филиалы» + по
-     одному, aria-pressed) и каталог GET /v1/library/items — query q=
-     (debounce ~300 мс, как на «Людях»), branch_id=, available=1 (чип-
-     тумблер «Только доступные»); гонку устаревших ответов гасит
-     монотонный seq. Строка книги — .book-row черновика library.html:
-     обложка-иконка, название, «автор · тип издания» (kind — словарь DDL
-     book|journal|textbook), бейдж «свободно N из M» (available>0 —
-     .badge.info, 0 — нейтральный: «свободно 0 из 4» честно виден) и
-     подпись «филиал · зал» (hall nullable — пустой зал не рисуется;
-     author nullable — строка автора без имени не рисуется).
-     Пустой результат — «Ничего не нашлось» (дословно 03 §5.2/черновик).
-     Состояния 03 §5: скелетон только при ответе > 300 мс, ошибка с
-     «Повторить», офлайн — баннер каркаса. Вставка — только
-     createElement/textContent (02 §6.4). */
+  /* ---------- экран «Библиотека» (views/library.csp; дизайн v3, шаг 19) ---------- */
+  /* Данные — ТЕ ЖЕ JSON-роуты, что за API (02 §5.2): филиалы
+     GET /v1/library/branches {id,name,building_id,building}, каталог
+     GET /v1/library/items (q= с debounce 300 мс, branch_id=, available=1 —
+     чекбокс «Только в наличии» эталона), билет GET /v1/library/my-card
+     ({card_no} | 404). Гонку устаревших ответов гасит seq.
+     Счётчик эталона «Найдено: N из M»: M — ответ без фильтров (один
+     запрос на страницу, кэш), N — текущий ответ.
+     Строка — .book-row эталона: название, «автор · вид · филиал», бейдж
+     «Свободно N из M» (0 — нейтральный), «зал · корпус», details «Где и как
+     получить»: место из items, номер билета из my-card (нет билета — фраза
+     не рисуется), «Показать корпус» → /map?building=<building_id филиала>
+     (id корпуса — из branches по branch_id; филиалы грузятся ДО строк).
+     Бронь книг / «Ваши книги» / год издания эталона — нет API и полей. */
   if (document.body.dataset.page === 'library') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -2162,55 +2966,92 @@
       return node;
     };
     const BOOK_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 0h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9"/></svg>';
-    const KIND_LABEL = { book: 'книга', journal: 'журнал', textbook: 'учебное пособие' };
+    const KIND = { book: ['library.kind.book', 'книга'], journal: ['library.kind.journal', 'журнал'], textbook: ['library.kind.textbook', 'учебное пособие'] };
+    const kindOf = (k) => (KIND[k] ? t(KIND[k][0], KIND[k][1]) : (k || ''));
     const input = document.querySelector('[data-library-q]');
-    const availChip = document.querySelector('[data-library-available]');
+    const availBox = document.querySelector('[data-library-available]');
     const branchesBox = document.querySelector('[data-library-branches]');
-    const state = { q: '', branchId: '', available: false, seq: 0 };
+    const countEl = document.querySelector('[data-library-count]');
+    const state = { q: '', branchId: '', available: false, seq: 0, total: null, branches: new Map(), card: '' };
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
     let debounce = 0;
 
     const rowFor = (it) => {
       const row = el('article', 'book-row');
       const cover = el('div', 'book-cover');
+      cover.setAttribute('aria-hidden', 'true');
       cover.innerHTML = BOOK_ICON; /* статическая svg-константа — 02 §6.4 */
       row.append(cover);
       const mid = el('div');
       mid.append(el('h2', null, it.title || ''));
-      const by = [it.author || '', KIND_LABEL[it.kind] || it.kind || ''].filter(Boolean).join(' · ');
+      const by = [it.author, kindOf(it.kind), it.branch].filter(Boolean).join(' · ');
       if (by) mid.append(el('p', null, by));
       const have = Number(it.available) || 0;
       const total = Number(it.total) || 0;
-      const badge = el('span', 'badge' + (have > 0 ? ' info' : ''), 'Свободно ' + have + ' из ' + total);
-      mid.append(badge);
-      mid.append(el('p', null, [it.branch || '', it.hall || ''].filter(Boolean).join(' · ')));
+      mid.append(el('span', 'badge' + (have > 0 ? ' info' : ''),
+        t('library.freeOf', 'Свободно {a} из {t}').replace('{a}', String(have)).replace('{t}', String(total))));
+      const where = [it.hall, it.building].filter(Boolean).join(' · ');
+      if (where) mid.append(el('p', null, where));
+      const det = document.createElement('details');
+      det.append(el('summary', null, t('library.howTitle', 'Где и как получить')));
+      const body = el('div');
+      const place = [it.branch, it.hall, it.building].filter(Boolean).join(', ');
+      let text = t('library.howPlace', 'Назовите книгу библиотекарю: {place}.').replace('{place}', place);
+      if (state.card) text += ' ' + t('library.howCard', 'Возьмите читательский билет {card}.').replace('{card}', state.card);
+      body.append(el('p', null, text));
+      const br = state.branches.get(Number(it.branch_id));
+      if (br && br.building_id != null) {
+        const a = el('a', 'button ghost', t('library.showBuilding', 'Показать корпус'));
+        a.href = '/map?building=' + encodeURIComponent(String(br.building_id));
+        body.append(a);
+      }
+      det.append(body);
+      mid.append(det);
       row.append(mid);
       return row;
+    };
+
+    const renderCount = (n) => {
+      if (!countEl) return;
+      const m = state.total == null ? n : state.total;
+      countEl.textContent = t('library.foundOf', 'Найдено: {n} из {m}').replace('{n}', String(n)).replace('{m}', String(m));
     };
 
     const loadItems = async () => {
       const seq = ++state.seq;
       clearTimeout(skTimer);
-      show('[data-library-loading]', false);
       show('[data-library-empty]', false);
       show('[data-library-error]', false);
-      show('[data-library-results]', false);
       const params = new URLSearchParams();
       const q = state.q.trim();
       if (q) params.set('q', q);
       if (state.branchId) params.set('branch_id', state.branchId);
       if (state.available) params.set('available', '1');
-      skTimer = setTimeout(() => show('[data-library-loading]', true), 300);
       const qs = params.toString();
-      const data = await fetchJSON('/v1/library/items' + (qs ? '?' + qs : ''));
+      skTimer = setTimeout(() => {
+        show('[data-library-results]', false);
+        show('[data-library-loading]', true);
+      }, 300);
+      /* M счётчика — каталог без фильтров, один раз за страницу */
+      const needTotal = state.total == null && qs !== '';
+      const [data, all] = await Promise.all([
+        fetchJSON('/v1/library/items' + (qs ? '?' + qs : '')),
+        needTotal ? fetchJSON('/v1/library/items') : Promise.resolve(null)
+      ]);
+      if (all && Array.isArray(all.items)) state.total = all.items.length;
+      if (!qs && data && Array.isArray(data.items)) state.total = data.items.length;
       if (seq !== state.seq) return;
       clearTimeout(skTimer);
       show('[data-library-loading]', false);
       if (!data || !Array.isArray(data.items)) {
+        show('[data-library-results]', false);
+        if (countEl) countEl.textContent = '';
         show('[data-library-error]', true);
         return;
       }
+      renderCount(data.items.length);
       if (!data.items.length) {
+        show('[data-library-results]', false);
         show('[data-library-empty]', true);
         return;
       }
@@ -2221,40 +3062,38 @@
       show('[data-library-results]', true);
     };
 
-    /* филиалы: «Все филиалы» + по одному (GET /v1/library/branches) */
-    const loadBranches = async () => {
-      const data = await fetchJSON('/v1/library/branches');
-      if (!data || !Array.isArray(data.branches) || !branchesBox) return;
-      data.branches.forEach((b) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.branchId = String(b.id);
-        chip.textContent = b.name || '';
-        chip.setAttribute('aria-pressed', String(String(b.id) === state.branchId));
-        chip.addEventListener('click', () => {
-          state.branchId = String(b.id);
-          syncBranchChips();
-          clearTimeout(debounce);
-          loadItems();
-        });
-        branchesBox.append(chip);
-      });
-    };
     const syncBranchChips = () => {
       if (!branchesBox) return;
       branchesBox.querySelectorAll('.chip').forEach((chip) => {
         chip.setAttribute('aria-pressed', String((chip.dataset.branchId || '') === state.branchId));
       });
     };
-    if (branchesBox) {
-      branchesBox.querySelector('.chip').addEventListener('click', () => {
-        state.branchId = '';
-        syncBranchChips();
-        clearTimeout(debounce);
-        loadItems();
+    const pickBranch = (id) => {
+      state.branchId = id;
+      syncBranchChips();
+      clearTimeout(debounce);
+      loadItems();
+    };
+    /* филиалы и билет — до первой отрисовки строк (building_id, card_no) */
+    const loadBranches = async () => {
+      const [data, card] = await Promise.all([fetchJSON('/v1/library/branches'), fetchJSON('/v1/library/my-card')]);
+      if (card && card.card_no) state.card = String(card.card_no);
+      if (!data || !Array.isArray(data.branches) || !branchesBox) return;
+      data.branches.forEach((b) => {
+        state.branches.set(Number(b.id), b);
+        const chip = el('button', 'chip', b.name || '');
+        chip.type = 'button';
+        chip.dataset.branchId = String(b.id);
+        chip.setAttribute('aria-pressed', 'false');
+        chip.addEventListener('click', () => pickBranch(String(b.id)));
+        branchesBox.append(chip);
       });
+      syncBranchChips();
+    };
+    if (branchesBox) {
+      const all = branchesBox.querySelector('.chip');
+      if (all) all.addEventListener('click', () => pickBranch(''));
     }
-
     if (input) {
       input.addEventListener('input', () => {
         state.q = input.value;
@@ -2262,10 +3101,10 @@
         debounce = setTimeout(loadItems, 300);
       });
     }
-    if (availChip) {
-      availChip.addEventListener('click', () => {
-        state.available = availChip.getAttribute('aria-pressed') !== 'true';
-        availChip.setAttribute('aria-pressed', String(state.available));
+    if (availBox) {
+      availBox.checked = false;
+      availBox.addEventListener('change', () => {
+        state.available = availBox.checked;
         clearTimeout(debounce);
         loadItems();
       });
@@ -2273,25 +3112,24 @@
     const libraryRetry = document.querySelector('[data-library-retry]');
     if (libraryRetry) libraryRetry.addEventListener('click', () => loadItems());
 
-    loadBranches();
-    loadItems();
+    loadBranches().then(loadItems);
   }
 
-  /* ---------- экран «Столовые» (views/canteens.csp; 03 §4.9.6/5.13) ------ */
-  /* Меню столовых: два fetch из ТЕХ ЖЕ JSON-роутов, что за API (02 §5.2):
-     список GET /v1/canteens (чипы «название · корпус · часы») и меню
-     выбранной GET /v1/canteens/{id}/menu (гонку ответов гасит seq).
-     Комплексные (is_combo) — блоки .combo черновика cafeteria.html:
-     цена справа, состав и КБЖУ раскрываются details/summary (03 §4.9.6
-     «у комбо — раскрытие состава и строка КБЖУ caption»). Остальные
-     позиции сгруппированы по category (словарь DDL) строками .list-row:
-     название, строка КБЖУ caption, цена справа (.price; tnum — общая
-     настройка body). КБЖУ nullable: null — строка НЕ рисуется (вода без
-     КБЖУ, фикстуры Э6б; «не рисовать пустое» — постановка экрана).
-     Пустое меню — «Меню пока не опубликовано» (в 03 §5.2 отдельной строки
-     для столовых нет). Состояния 03 §5: скелетон только при ответе
-     > 300 мс, ошибка с «Повторить», офлайн — баннер каркаса. Вставка —
-     только createElement/textContent (02 §6.4). */
+  /* ---------- экран «Столовые» (views/canteens.csp; дизайн v3, шаг 20) ---------- */
+  /* Данные — ТЕ ЖЕ JSON-роуты, что за API (02 §5.2): список GET /v1/canteens
+     {id,name,building,hours} → чипы «Название · Корпус»; меню выбранной —
+     GET /v1/canteens/{id}/menu (гонку ответов гасит seq) → строка часов,
+     комбо-блоки .combo (is_combo) и группы категорий (soup/main/drink/
+     bakery; неизвестная — «Другое») строками .list-row; КБЖУ nullable:
+     kcal == null → «КБЖУ: нет данных», отдельное null-значение → «нет
+     данных» (не ноль).
+     «Ваш обед» (эталон #meal-planner) — калькулятор ТОЛЬКО в памяти
+     страницы: Map id → {позиция, столовая, порции 1..9}; без localStorage,
+     без отправки (подпись «заказ не отправляется»). Сумма цены и КБЖУ;
+     если у какой-то выбранной позиции КБЖУ null, итог КБЖУ — «нет данных»
+     с пояснением (null не считается нулём). Набор переживает смену столовой (в
+     строке — название столовой). «Сохранить набор» эталона (localStorage)
+     не перенесён. */
   if (document.body.dataset.page === 'canteens') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -2301,85 +3139,200 @@
       return node;
     };
     const CATEGORY = [
-      ['soup', 'Первое'],
-      ['main', 'Горячее'],
-      ['drink', 'Напитки'],
-      ['bakery', 'Выпечка'],
+      ['soup', 'canteens.cat.soup', 'Первое'],
+      ['main', 'canteens.cat.main', 'Горячее'],
+      ['drink', 'canteens.cat.drink', 'Напитки'],
+      ['bakery', 'canteens.cat.bakery', 'Выпечка'],
     ];
+    const MAX_PORTIONS = 9;
     const chipsBox = document.querySelector('[data-canteen-chips]');
-    const state = { canteens: [], id: null, seq: 0 };
+    const mealItems = document.querySelector('[data-meal-items]');
+    const mealTotal = document.querySelector('[data-meal-total]');
+    const mealClear = document.querySelector('[data-meal-clear]');
+    const mealStatus = document.querySelector('[data-meal-status]');
+    const planNote = mealStatus ? mealStatus.textContent : '';
+    const state = { canteens: [], id: null, seq: 0, menu: [] };
+    const meal = new Map(); /* id позиции → {item, canteen, count} — только память страницы */
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
 
-    /* «620 ккал · Б 28 · Ж 22 · У 65» (формат 03 §4.9.6); null КБЖУ — null */
-    const kbjuOf = (item) => {
-      if (item.kcal == null) return null;
-      const n = (v) => (v == null ? '' : String(Number(v)));
-      return item.kcal + ' ккал · Б ' + n(item.protein) + ' · Ж ' + n(item.fat) + ' · У ' + n(item.carbs);
+    const num = (v) => Number(v).toLocaleString(LOCALE, { maximumFractionDigits: 1 });
+    const val = (v) => (v == null ? t('canteens.noData', 'нет данных') : num(v));
+    const price = (v) => (v == null ? '—' : num(v)) + ' ₽';
+    const kbjuLine = (o, key) => t(key, '{kcal} ккал · Б {p} · Ж {f} · У {c}')
+      .replace('{kcal}', val(o.kcal)).replace('{p}', val(o.protein)).replace('{f}', val(o.fat)).replace('{c}', val(o.carbs));
+    const kbjuOf = (item) => (item.kcal == null ? t('canteens.kbjuNone', 'КБЖУ: нет данных') : kbjuLine(item, 'canteens.kbju'));
+
+    /* --- кнопка «Добавить +» / «В наборе N +» ------------------------------ */
+    const addButton = (item) => {
+      const btn = el('button', 'button ghost enh-add-food');
+      btn.type = 'button';
+      btn.dataset.addFood = String(item.id);
+      btn.setAttribute('aria-label', t('canteens.addAria', 'Добавить в набор: {name}').replace('{name}', item.name || ''));
+      btn.addEventListener('click', () => changeMeal(item, 1));
+      paintAdd(btn, item.id);
+      return btn;
+    };
+    const paintAdd = (btn, id) => {
+      const entry = meal.get(id);
+      const count = entry ? entry.count : 0;
+      btn.replaceChildren(document.createTextNode(count
+        ? t('canteens.inSet', 'В наборе {n}').replace('{n}', String(count)) + ' '
+        : t('canteens.add', 'Добавить') + ' '));
+      const plus = el('span', null, '+');
+      plus.setAttribute('aria-hidden', 'true');
+      btn.append(plus);
+      btn.disabled = count >= MAX_PORTIONS;
     };
 
     const comboBlock = (item) => {
       const box = el('div', 'combo section');
-      box.append(el('p', 'overline', 'Комбо'));
+      box.append(el('p', 'overline', t('canteens.combo', 'Комбо')));
       const head = el('div', 'row section');
       head.append(el('h2', null, item.name || ''));
-      head.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      head.append(el('span', 'price', price(item.price)));
       box.append(head);
-      const kbju = kbjuOf(item);
-      if (kbju) {
-        const det = document.createElement('details');
-        const sum = document.createElement('summary');
-        sum.textContent = 'Состав и КБЖУ';
-        const body = el('div');
-        body.append(el('p', 'small', kbju));
-        det.append(sum, body);
-        box.append(det);
-      }
+      const det = document.createElement('details');
+      det.append(el('summary', null, t('canteens.kbjuTitle', 'КБЖУ')));
+      const body = el('div');
+      body.append(el('p', 'small', kbjuOf(item)));
+      det.append(body);
+      box.append(det);
+      box.append(addButton(item));
       return box;
     };
-
     const itemRow = (item) => {
       const row = el('div', 'list-row');
       const mid = el('div');
       mid.append(el('strong', null, item.name || ''));
-      const kbju = kbjuOf(item);
-      if (kbju) mid.append(el('p', 'caption', kbju));
-      row.append(mid);
-      row.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      mid.append(el('p', 'caption', kbjuOf(item)));
+      row.append(mid, el('span', 'price', price(item.price)), addButton(item));
       return row;
     };
 
+    /* --- «Ваш обед»: строки со степпером, итог, «Очистить» ----------------- */
+    const renderMeal = () => {
+      if (!mealItems) return;
+      mealItems.replaceChildren();
+      const entries = Array.from(meal.values());
+      if (!entries.length) {
+        mealItems.append(el('p', 'small muted', t('canteens.mealEmpty', 'Добавьте блюда, чтобы увидеть стоимость и КБЖУ всего набора.')));
+      }
+      const sum = { price: 0, kcal: 0, protein: 0, fat: 0, carbs: 0 };
+      let partial = false;
+      entries.forEach((e) => {
+        Object.keys(sum).forEach((k) => {
+          if (sum[k] == null) return;
+          if (e.item[k] == null) { sum[k] = null; if (k !== 'price') partial = true; return; }
+          sum[k] += Number(e.item[k]) * e.count;
+        });
+        const row = el('div', 'enh-saved-row');
+        const info = el('div');
+        info.append(el('strong', null, e.item.name || ''));
+        info.append(el('p', 'caption', [e.canteen, e.item.price == null ? '' : price(Number(e.item.price) * e.count)].filter(Boolean).join(' · ')));
+        const stepper = el('div', 'enh-stepper');
+        const minus = el('button', 'icon-button', '−');
+        minus.type = 'button';
+        minus.dataset.mealStep = '-1';
+        minus.dataset.mealId = String(e.item.id);
+        minus.setAttribute('aria-label', t('canteens.minusAria', 'Убрать одну порцию: {name}').replace('{name}', e.item.name || ''));
+        const out = el('output', null, String(e.count));
+        out.setAttribute('aria-label', t('canteens.portions', 'Количество порций'));
+        const plus = el('button', 'icon-button', '+');
+        plus.type = 'button';
+        plus.dataset.mealStep = '1';
+        plus.dataset.mealId = String(e.item.id);
+        plus.disabled = e.count >= MAX_PORTIONS;
+        plus.setAttribute('aria-label', t('canteens.plusAria', 'Добавить одну порцию: {name}').replace('{name}', e.item.name || ''));
+        stepper.append(minus, out, plus);
+        row.append(info, stepper);
+        mealItems.append(row);
+      });
+      if (mealTotal) {
+        mealTotal.replaceChildren();
+        if (entries.length) {
+          const head = el('div', 'row');
+          head.append(el('strong', null, t('canteens.total', 'Итого')), el('strong', null, price(sum.price)));
+          /* null у любой выбранной позиции → сумма КБЖУ неизвестна: «нет данных» */
+          mealTotal.append(head, el('p', 'caption', partial ? t('canteens.kbjuNone', 'КБЖУ: нет данных') : kbjuLine(sum, 'canteens.kbjuG')));
+          if (partial) mealTotal.append(el('p', 'caption', t('canteens.partial', 'У части блюд в наборе нет КБЖУ — общую сумму КБЖУ не считаем.')));
+        }
+        mealTotal.hidden = !entries.length;
+      }
+      if (mealClear) mealClear.disabled = !entries.length;
+      document.querySelectorAll('[data-add-food]').forEach((b) => paintAdd(b, Number(b.dataset.addFood)));
+    };
+    const changeMeal = (item, delta) => {
+      const cur = meal.get(item.id);
+      const count = Math.min(MAX_PORTIONS, Math.max(0, (cur ? cur.count : 0) + delta));
+      if (!count) meal.delete(item.id);
+      else {
+        const c = state.canteens.find((x) => x.id === state.id);
+        meal.set(item.id, { item, canteen: cur ? cur.canteen : (c ? c.name : ''), count });
+      }
+      if (mealStatus) mealStatus.textContent = planNote;
+      renderMeal();
+    };
+    if (mealItems) {
+      mealItems.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-meal-step]');
+        if (!btn || btn.disabled) return;
+        const id = Number(btn.dataset.mealId);
+        const step = btn.dataset.mealStep;
+        const entry = meal.get(id);
+        if (!entry) return;
+        changeMeal(entry.item, Number(step));
+        /* фокус остаётся на той же кнопке пересобранной строки, иначе — на «Добавить» */
+        const next = mealItems.querySelector('[data-meal-id="' + id + '"][data-meal-step="' + step + '"]')
+          || document.querySelector('[data-add-food="' + id + '"]') || mealClear;
+        if (next && !next.disabled) next.focus();
+      });
+    }
+    if (mealClear) {
+      mealClear.addEventListener('click', () => {
+        meal.clear();
+        renderMeal();
+        if (mealStatus) mealStatus.textContent = t('canteens.cleared', 'Набор очищен') + '. ' + planNote;
+      });
+    }
+
+    /* --- меню выбранной столовой ------------------------------------------- */
     const loadMenu = async () => {
       if (!state.id) return;
       const seq = ++state.seq;
       clearTimeout(skTimer);
-      show('[data-menu-loading]', false);
       show('[data-menu-empty]', false);
       show('[data-menu-error]', false);
-      show('[data-menu-body]', false);
-      skTimer = setTimeout(() => show('[data-menu-loading]', true), 300);
+      skTimer = setTimeout(() => {
+        show('[data-menu-body]', false);
+        show('[data-menu-loading]', true);
+      }, 300);
       const data = await fetchJSON('/v1/canteens/' + state.id + '/menu');
       if (seq !== state.seq) return;
       clearTimeout(skTimer);
       show('[data-menu-loading]', false);
       if (!data || !Array.isArray(data.menu)) {
+        show('[data-menu-body]', false);
         show('[data-menu-error]', true);
         return;
       }
       const hours = document.querySelector('[data-canteen-hours]');
       if (hours) {
-        hours.textContent = 'Часы работы: ' + (data.hours || '—');
+        hours.textContent = t('canteens.hours', 'Часы работы: {hours}').replace('{hours}', data.hours || '—');
         hours.hidden = false;
       }
-      if (!data.menu.length) {
+      state.menu = data.menu;
+      const body = document.querySelector('[data-menu-body]');
+      if (!data.menu.length || !body) {
+        show('[data-menu-body]', false);
         show('[data-menu-empty]', true);
         return;
       }
-      const body = document.querySelector('[data-menu-body]');
-      if (!body) return;
       body.replaceChildren();
       data.menu.filter((m) => m.is_combo).forEach((m) => body.append(comboBlock(m)));
-      CATEGORY.forEach(([key, label]) => {
-        const items = data.menu.filter((m) => !m.is_combo && m.category === key);
+      const known = CATEGORY.map((c) => c[0]);
+      const groups = CATEGORY.map(([key, k, fb]) => [t(k, fb), data.menu.filter((m) => !m.is_combo && m.category === key)]);
+      groups.push([t('canteens.cat.other', 'Другое'), data.menu.filter((m) => !m.is_combo && !known.includes(m.category))]);
+      groups.forEach(([label, items]) => {
         if (!items.length) return;
         const section = el('section', 'section');
         const title = el('div', 'section-title');
@@ -2391,16 +3344,24 @@
       body.hidden = false;
     };
 
+    const syncChips = () => {
+      if (!chipsBox) return;
+      chipsBox.querySelectorAll('.chip').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String(Number(chip.dataset.canteenId) === state.id));
+      });
+    };
     const loadCanteens = async () => {
       const data = await fetchJSON('/v1/canteens');
-      if (!data || !Array.isArray(data.canteens) || !chipsBox) return;
+      if (!data || !Array.isArray(data.canteens) || !chipsBox) {
+        show('[data-menu-error]', true);
+        return;
+      }
       state.canteens = data.canteens;
       chipsBox.replaceChildren();
       state.canteens.forEach((c) => {
-        const chip = el('button', 'chip');
+        const chip = el('button', 'chip', [c.name, c.building].filter(Boolean).join(' · '));
         chip.type = 'button';
         chip.dataset.canteenId = String(c.id);
-        chip.textContent = [c.name, c.building, c.hours].filter(Boolean).join(' · ');
         chip.addEventListener('click', () => {
           if (state.id === c.id) return;
           state.id = c.id;
@@ -2409,248 +3370,592 @@
         });
         chipsBox.append(chip);
       });
-      if (!state.canteens.length) return;
-      state.id = state.canteens[0].id;
+      if (!state.canteens.length) {
+        show('[data-menu-empty]', true);
+        return;
+      }
+      if (!state.canteens.some((c) => c.id === state.id)) state.id = state.canteens[0].id;
       syncChips();
       loadMenu();
     };
-    const syncChips = () => {
-      chipsBox.querySelectorAll('.chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.canteenId) === state.id));
-      });
-    };
 
     const menuRetry = document.querySelector('[data-menu-retry]');
-    if (menuRetry) menuRetry.addEventListener('click', () => loadMenu());
+    if (menuRetry) menuRetry.addEventListener('click', () => (state.canteens.length ? loadMenu() : loadCanteens()));
 
     loadCanteens();
   }
 
-  /* ---------- экран «Карта» (views/map.csp; 03 §4.9.6/5.16) -------------- */
-  /* Корпуса → этажи → кабинеты и поиск по номеру. Данные — ТЕ ЖЕ JSON-
-     роуты, что за API (02 §5.2): GET /v1/map/buildings (чипы корпусов),
-     GET /v1/map/rooms?building_id=N (этажи выбранного корпуса — distinct
-     floor, кабинеты этажа — плитки .map-plan/.map-room) и GET
-     /v1/map/rooms?q= (карточки «номер · корпус · этаж · тип» — формат
-     черновика map.html). Страница читает ?q= из location.search при
-     загрузке (алиас GET /map/rooms → 303 /map?q=… ведёт сюда из
-     профилей людей): поле предзаполняется, поиск выполняется сразу;
-     новый поиск — history.replaceState (ссылка шарится). floor/kind
-     nullable — пустое не рисуется (02 §5.2). Гонку ответов гасит seq.
-     Пустой поиск — «Ничего не нашлось»; этаж без кабинетов — «На этом
-     этаже кабинеты ещё не добавлены» (дословно черновик map.html).
-     Состояния 03 §5: скелетоны секций только при ответе > 300 мс,
-     ошибки с «Повторить», офлайн — баннер каркаса. Вставка — только
-     createElement/textContent (02 §6.4). */
+  /* ---------- экран «Карта кампуса» (views/map.csp; дизайн v3, Р-32) ---------- */
+  /* Интерактивная SVG-схема кампуса из прод-данных вместо 3D Three.js/OSM эталона:
+     GET /v1/map/buildings {id,name,address} + GET /v1/map/rooms {id,name,building_id,
+     building,floor,kind} (без query — весь каталог одним запросом; поиск — тот же
+     роут с q=). Параметра floor у API нет: этажи — distinct floor кабинетов корпуса.
+     Корпус — изометрический блок (крыша + две стены), высота ∝ max(floor) его
+     кабинетов (корпус без кабинетов — 1 этаж, «без аудиторий»); раскладка
+     детерминированная: сортировка по id в сетку ceil(√n). Выбранный корпус
+     раскрывается стопкой этажей, активный этаж — плита --primary. Зум/пан — viewBox
+     (кнопки, клавиатура на сцене, перетаскивание pointer events). Нижний блок —
+     корпус → этаж → план этажа (авто-раскладка по двум сторонам коридора в порядке
+     name) → карточка помещения. Deep link ?q= / ?room= / ?building=. Вставка — только
+     createElement(NS)/textContent (02 §6.4). Строки — словарь map.* (5.18). */
   if (document.body.dataset.page === 'map') {
-    const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    const $m = (sel) => document.querySelector(sel);
+    const show = (sel, on) => { const n = $m(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
       if (className) node.className = className;
       if (text != null) node.textContent = text;
       return node;
     };
-    const input = document.querySelector('[data-map-q]');
-    const state = { buildings: [], buildingId: null, floor: null, seq: 0, searchSeq: 0 };
-    let skSearch = 0, skRooms = 0; /* таймеры скелетонов (03 §5.1: ответ > 300 мс) */
+    const svgEl = (tag, attrs) => {
+      const node = document.createElementNS(SVGNS, tag);
+      Object.keys(attrs || {}).forEach((k) => node.setAttribute(k, attrs[k]));
+      return node;
+    };
+    const fmt = (key, fallback, n) => t(key, fallback).replace('{n}', String(n));
+    const KIND_KEYS = { 'аудитория': ['map.kindRoom', 'аудитория'], 'лаборатория': ['map.kindLab', 'лаборатория'], 'деканат': ['map.kindDean', 'деканат'] };
+    const kindLabel = (kind) => (kind && KIND_KEYS[kind] ? t(KIND_KEYS[kind][0], KIND_KEYS[kind][1]) : (kind || ''));
+    const BOOKABLE = { 'аудитория': true, 'лаборатория': true };
+    const floorLabel = (f) => (f == null ? t('map.noFloor', 'Без этажа') : fmt('map.floorN', 'этаж {n}', f));
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru', { numeric: true });
+    const reduceMotion = () => document.documentElement.classList.contains('para-reduce-motion') ||
+      (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-    /* «Корпус Б · этаж 2 · аудитория» — подпись карточки/тип (null — нет) */
-    const roomSub = (r) => {
-      const parts = [r.building || ''];
-      if (r.floor != null) parts.push('этаж ' + r.floor);
-      if (r.kind) parts.push(r.kind);
-      return parts.filter(Boolean).join(' · ');
+    const scene = $m('[data-campus-scene]');
+    const statusEl = $m('[data-campus-status]');
+    const meta = $m('[data-campus-selection]');
+    const picker = $m('[data-campus-picker]');
+    const bSelect = $m('[data-map-building]');
+    const fSelect = $m('[data-map-floor]');
+    const input = $m('[data-map-q]');
+    const topBtn = $m('[data-campus-action="top"]');
+    const say = (text) => { if (statusEl) statusEl.textContent = text; };
+
+    const state = {
+      buildings: [], rooms: [], info: new Map(), loaded: false,
+      buildingId: null, floor: undefined, roomId: null, foundId: null,
+      mode: 'iso', k: 1, cx: 0, cy: 0, base: null, searchSeq: 0, loadSeq: 0,
     };
 
-    /* --- поиск: GET /v1/map/rooms?q= → карточки ------------------------- */
-    const runSearch = async (rawQ) => {
-      const q = String(rawQ || '').trim();
-      if (!q) {
-        show('[data-search-section]', false);
+    /* --- геометрия схемы --------------------------------------------------- */
+    const FOOT_W = 60, FOOT_D = 42, STEP = 120, FLOOR_H = 12, GAP = 6;
+    const C30 = Math.cos(Math.PI / 6), S30 = 0.5;
+    const proj = (x, y, z) => (state.mode === 'top' ? [x, y] : [(x - y) * C30, (x + y) * S30 - z]);
+    const pts = (list) => list.map((p) => { const q = proj(p[0], p[1], p[2]); return q[0].toFixed(1) + ',' + q[1].toFixed(1); }).join(' ');
+    const layout = () => {
+      const cols = Math.max(1, Math.ceil(Math.sqrt(state.buildings.length)));
+      state.buildings.forEach((b, i) => {
+        const inf = state.info.get(b.id);
+        inf.x = (i % cols) * STEP;
+        inf.y = Math.floor(i / cols) * STEP;
+      });
+    };
+    const stackHeight = (inf) => inf.levels * FLOOR_H + (inf.levels - 1) * GAP;
+    /* блок: крыша + две видимые стены (грани x+w и y+d при взгляде с +x+y) */
+    const block = (g, x, y, z0, h, cls) => {
+      const z1 = z0 + h, w = FOOT_W, d = FOOT_D;
+      if (state.mode !== 'top') {
+        g.append(svgEl('polygon', { class: 'campus-wall-l ' + cls, points: pts([[x, y + d, z0], [x + w, y + d, z0], [x + w, y + d, z1], [x, y + d, z1]]) }));
+        g.append(svgEl('polygon', { class: 'campus-wall-r ' + cls, points: pts([[x + w, y, z0], [x + w, y + d, z0], [x + w, y + d, z1], [x + w, y, z1]]) }));
+      }
+      g.append(svgEl('polygon', { class: 'campus-roof ' + cls, points: pts([[x, y, z1], [x + w, y, z1], [x + w, y + d, z1], [x, y + d, z1]]) }));
+    };
+    const computeBase = () => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      state.buildings.forEach((b) => {
+        const inf = state.info.get(b.id);
+        const top = stackHeight(inf);
+        [[0, 0], [FOOT_W, 0], [0, FOOT_D], [FOOT_W, FOOT_D]].forEach((c) => {
+          [0, top].forEach((z) => {
+            const q = proj(inf.x + c[0], inf.y + c[1], z);
+            minX = Math.min(minX, q[0]); maxX = Math.max(maxX, q[0]);
+            minY = Math.min(minY, q[1]); maxY = Math.max(maxY, q[1]);
+          });
+        });
+      });
+      const pad = 36;
+      state.base = { x: minX - pad, y: minY - pad - 30, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 + 30 };
+    };
+    const resetView = () => {
+      computeBase();
+      state.k = 1;
+      state.cx = state.base.x + state.base.w / 2;
+      state.cy = state.base.y + state.base.h / 2;
+    };
+    const clampView = () => {
+      state.k = Math.min(3, Math.max(0.6, state.k));
+      const b = state.base;
+      state.cx = Math.min(b.x + b.w, Math.max(b.x, state.cx));
+      state.cy = Math.min(b.y + b.h, Math.max(b.y, state.cy));
+    };
+    const viewBox = () => {
+      const w = state.base.w / state.k, h = state.base.h / state.k;
+      return { x: state.cx - w / 2, y: state.cy - h / 2, w, h };
+    };
+    /* масштаб «единица схемы → px» при preserveAspectRatio xMidYMid meet */
+    const screenMap = () => {
+      const vb = viewBox();
+      const cw = scene.clientWidth || 1, ch = scene.clientHeight || 1;
+      const s = Math.min(cw / vb.w, ch / vb.h);
+      return { vb, s, ox: (cw - vb.w * s) / 2, oy: (ch - vb.h * s) / 2, cw, ch };
+    };
+
+    /* --- отрисовка сцены ---------------------------------------------------- */
+    let svg = null, labels = null;
+    const applyViewBox = () => {
+      if (!svg) return;
+      const vb = viewBox();
+      svg.setAttribute('viewBox', [vb.x, vb.y, vb.w, vb.h].map((v) => v.toFixed(1)).join(' '));
+      placeLabels();
+    };
+    const placeLabels = () => {
+      if (!labels) return;
+      const m = screenMap();
+      const placed = [];
+      const nodes = Array.from(labels.children);
+      /* приоритет — выбранный корпус, затем по id; перекрывающиеся подписи скрываются */
+      nodes.sort((a, b) => (Number(b.dataset.selected) - Number(a.dataset.selected)) || (Number(a.dataset.buildingId) - Number(b.dataset.buildingId)));
+      nodes.forEach((node) => {
+        const px = m.ox + (Number(node.dataset.ax) - m.vb.x) * m.s;
+        const py = m.oy + (Number(node.dataset.ay) - m.vb.y) * m.s;
+        node.style.left = px.toFixed(1) + 'px';
+        node.style.top = py.toFixed(1) + 'px';
+        node.hidden = false;
+        const w = node.offsetWidth, h = node.offsetHeight;
+        const r = { l: px - w / 2, r: px + w / 2, t: py - h, b: py };
+        const outside = r.r < 0 || r.l > m.cw || r.b < 0 || r.t > m.ch;
+        const hit = placed.some((p) => r.l < p.r + 4 && r.r > p.l - 4 && r.t < p.b + 2 && r.b > p.t - 2);
+        if (outside || hit) { node.hidden = true; return; }
+        placed.push(r);
+      });
+    };
+    const renderScene = () => {
+      if (!scene || !state.buildings.length) return;
+      const focusedId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.buildingId : null;
+      if (!svg) {
+        svg = svgEl('svg', { class: 'campus-svg', preserveAspectRatio: 'xMidYMid meet', focusable: 'false' });
+        labels = el('div', 'campus-labels');
+        scene.append(svg, labels);
+      }
+      svg.replaceChildren();
+      labels.replaceChildren();
+      svg.setAttribute('data-mode', state.mode);
+      /* участок кампуса — подложка под сеткой корпусов */
+      const cols = Math.max(1, Math.ceil(Math.sqrt(state.buildings.length)));
+      const rows = Math.ceil(state.buildings.length / cols);
+      const m = 24;
+      svg.append(svgEl('polygon', {
+        class: 'campus-ground', 'aria-hidden': 'true',
+        points: pts([[-m, -m, 0], [(cols - 1) * STEP + FOOT_W + m, -m, 0], [(cols - 1) * STEP + FOOT_W + m, (rows - 1) * STEP + FOOT_D + m, 0], [-m, (rows - 1) * STEP + FOOT_D + m, 0]]),
+      }));
+      /* художник: сначала дальние корпуса (меньше x+y) */
+      const order = state.buildings.slice().sort((a, b) => {
+        const ia = state.info.get(a.id), ib = state.info.get(b.id);
+        return (ia.x + ia.y) - (ib.x + ib.y) || a.id - b.id;
+      });
+      order.forEach((b) => {
+        const inf = state.info.get(b.id);
+        const selected = b.id === state.buildingId;
+        const g = svgEl('g', {
+          class: 'campus-block' + (selected ? ' is-selected' : '') + (inf.noRooms ? ' is-empty' : ''),
+          role: 'button', tabindex: '0', 'data-building-id': String(b.id),
+          'aria-pressed': String(selected),
+          'aria-label': (b.name || '') + '. ' + (inf.noRooms ? t('map.noRooms', 'без аудиторий') : fmt('map.floorsCount', 'этажей с аудиториями: {n}', inf.levels)),
+        });
+        let topZ;
+        if (selected && state.mode !== 'top' && !inf.noRooms) {
+          /* стопка этажей выбранного корпуса; активный этаж — плита --primary */
+          for (let f = 1; f <= inf.levels; f += 1) {
+            const z0 = (f - 1) * (FLOOR_H + GAP);
+            const slab = svgEl('g', { class: 'campus-slab' + (f === state.floor ? ' is-active' : ''), 'data-floor': String(f) });
+            block(slab, inf.x, inf.y, z0, FLOOR_H, '');
+            g.append(slab);
+          }
+          topZ = stackHeight(inf);
+        } else {
+          topZ = inf.levels * FLOOR_H;
+          block(g, inf.x, inf.y, 0, topZ, '');
+        }
+        svg.append(g);
+        const anchor = proj(inf.x + FOOT_W / 2, inf.y + FOOT_D / 2, topZ);
+        const label = el('span', 'campus-building-label' + (selected ? ' is-selected' : ''), b.name || '');
+        label.setAttribute('aria-hidden', 'true');
+        label.dataset.buildingId = String(b.id);
+        label.dataset.selected = selected ? '1' : '0';
+        label.dataset.ax = String(anchor[0]);
+        label.dataset.ay = String(anchor[1] - 6);
+        labels.append(label);
+      });
+      applyViewBox();
+      if (focusedId) {
+        const again = svg.querySelector('[data-building-id="' + focusedId + '"]');
+        if (again) again.focus({ preventScroll: true });
+      }
+    };
+
+    /* --- выбор корпуса / этажа / кабинета ------------------------------------ */
+    const roomsOf = (id) => state.rooms.filter((r) => r.building_id === id);
+    const floorsOf = (id) => {
+      const out = [];
+      roomsOf(id).forEach((r) => { if (!out.includes(r.floor)) out.push(r.floor); });
+      return out.sort((a, b) => (a == null ? 1 : b == null ? -1 : a - b));
+    };
+    const building = (id) => state.buildings.find((b) => b.id === id) || null;
+    const renderMeta = () => {
+      if (!meta) return;
+      meta.replaceChildren();
+      const b = building(state.buildingId);
+      if (!b) {
+        meta.append(el('strong', null, t('map.sceneLabel', 'Схема кампуса')), el('span', null, t('map.metaHint', 'Нажмите на здание, чтобы рассмотреть его ближе.')));
         return;
       }
+      const inf = state.info.get(b.id);
+      meta.append(el('strong', null, b.name || ''));
+      if (b.address) meta.append(el('span', null, b.address));
+      meta.append(el('span', null, inf.noRooms ? t('map.noRooms', 'без аудиторий') : fmt('map.floorsCount', 'этажей с аудиториями: {n}', inf.levels)));
+    };
+    const renderFloorSelect = () => {
+      if (!fSelect) return;
+      fSelect.replaceChildren();
+      const floors = state.buildingId == null ? [] : floorsOf(state.buildingId);
+      floors.forEach((f) => {
+        const opt = el('option', null, f == null ? t('map.noFloor', 'Без этажа') : String(f));
+        opt.value = f == null ? '' : String(f);
+        fSelect.append(opt);
+      });
+      fSelect.disabled = !floors.length;
+      if (floors.length) fSelect.value = state.floor == null ? '' : String(state.floor);
+    };
+    const showCard = (room) => {
+      const title = $m('[data-room-title]'), body = $m('[data-room-body]'), actions = $m('[data-room-actions]');
+      if (!room) {
+        if (title) title.textContent = t('map.roomPick', 'Выберите кабинет на плане');
+        if (body) body.textContent = t('map.roomPickHint', 'Здесь появятся корпус, этаж и тип помещения.');
+        if (actions) actions.hidden = true;
+        return;
+      }
+      if (title) title.textContent = room.name || '';
+      if (body) body.textContent = [room.building || '', room.floor != null ? floorLabel(room.floor) : '', kindLabel(room.kind)].filter(Boolean).join(' · ');
+      if (actions) actions.hidden = !BOOKABLE[room.kind];
+    };
+    const renderPlan = () => {
+      const grid = $m('[data-rooms-grid]');
+      const loc = $m('[data-map-location]');
+      const empty = $m('[data-rooms-empty]');
+      if (!grid) return;
+      grid.replaceChildren();
+      const b = building(state.buildingId);
+      show('[data-rooms-hint]', !b);
+      if (!b) {
+        if (loc) loc.textContent = t('map.chooseBuilding', 'Выберите корпус');
+        grid.hidden = true;
+        if (empty) empty.hidden = true;
+        return;
+      }
+      const hasFloors = floorsOf(b.id).length > 0;
+      if (loc) loc.textContent = (b.name || '') + (hasFloors ? ' · ' + floorLabel(state.floor) : '');
+      const onFloor = roomsOf(b.id).filter((r) => r.floor === state.floor).sort(byName);
+      if (!onFloor.length) {
+        grid.hidden = true;
+        if (empty) {
+          empty.textContent = hasFloors ? t('map.floorEmpty', 'На этом этаже кабинеты ещё не добавлены. Выберите другой этаж.') : t('map.buildingEmpty', 'В каталоге нет аудиторий этого корпуса.');
+          empty.hidden = false;
+        }
+        return;
+      }
+      if (empty) empty.hidden = true;
+      /* авто-раскладка: первая половина по name — одна сторона коридора, вторая — другая */
+      const half = Math.ceil(onFloor.length / 2);
+      const sideA = el('div', 'map-side'), sideB = el('div', 'map-side');
+      onFloor.forEach((r, i) => {
+        const tile = el('button', 'map-room' + (r.id === state.foundId ? ' is-found' : ''));
+        tile.type = 'button';
+        tile.dataset.roomId = String(r.id);
+        tile.setAttribute('aria-pressed', String(r.id === state.roomId));
+        tile.append(el('strong', null, r.name || ''));
+        if (r.kind) tile.append(el('span', 'caption', kindLabel(r.kind)));
+        (i < half ? sideA : sideB).append(tile);
+      });
+      grid.append(sideA, el('p', 'corridor', t('map.corridor', 'Коридор · схема этажа')));
+      if (sideB.children.length) grid.append(sideB);
+      grid.hidden = false;
+    };
+    const syncAll = () => {
+      if (bSelect) bSelect.value = state.buildingId == null ? '' : String(state.buildingId);
+      if (picker) picker.value = state.buildingId == null ? '' : String(state.buildingId);
+      renderFloorSelect();
+      renderMeta();
+      renderPlan();
+      renderScene();
+    };
+    const selectBuilding = (id, opts = {}) => {
+      const b = building(id);
+      state.buildingId = b ? b.id : null;
+      const floors = b ? floorsOf(b.id) : [];
+      state.floor = opts.floor !== undefined && floors.includes(opts.floor) ? opts.floor : (floors.length ? floors[0] : undefined);
+      if (!opts.keepRoom) { state.roomId = null; state.foundId = null; showCard(null); }
+      if (opts.focus && b) {
+        const inf = state.info.get(b.id);
+        const c = proj(inf.x + FOOT_W / 2, inf.y + FOOT_D / 2, stackHeight(inf) / 2);
+        state.cx = c[0]; state.cy = c[1]; state.k = 1.8;
+        clampView();
+      }
+      syncAll();
+      if (b) say(t('map.statusSelected', 'Выбрано:') + ' ' + (b.name || ''));
+    };
+    const selectRoom = (room, found, scroll = true) => {
+      state.roomId = room.id;
+      state.foundId = found ? room.id : null;
+      selectBuilding(room.building_id, { floor: room.floor, keepRoom: true });
+      showCard(room);
+      if (found && scroll) {
+        const tile = $m('.map-room[data-room-id="' + room.id + '"]');
+        if (tile) tile.scrollIntoView({ block: 'nearest', behavior: reduceMotion() ? 'auto' : 'smooth' });
+      }
+    };
+
+    /* --- загрузка ----------------------------------------------------------- */
+    let skTimer = 0;
+    const fillSelect = (sel, keepFirst) => {
+      if (!sel) return;
+      while (sel.options.length > keepFirst) sel.remove(keepFirst);
+      state.buildings.forEach((b) => {
+        const opt = el('option', null, b.name || '');
+        opt.value = String(b.id);
+        sel.append(opt);
+      });
+    };
+    const load = async () => {
+      const seq = ++state.loadSeq;
+      show('[data-campus-error]', false);
+      show('[data-campus-empty]', false);
+      clearTimeout(skTimer);
+      skTimer = setTimeout(() => show('[data-campus-loading]', true), 300);
+      say(t('map.loading', 'Загружаем схему кампуса…'));
+      const [bData, rData] = await Promise.all([fetchJSON('/v1/map/buildings'), fetchJSON('/v1/map/rooms')]);
+      if (seq !== state.loadSeq) return false;
+      clearTimeout(skTimer);
+      show('[data-campus-loading]', false);
+      if (!bData || !Array.isArray(bData.buildings) || !rData || !Array.isArray(rData.rooms)) {
+        show('[data-campus-error]', true);
+        say(t('map.errorLoad', 'Не получилось загрузить схему кампуса'));
+        return false;
+      }
+      state.buildings = bData.buildings.slice().sort((a, b) => a.id - b.id);
+      state.rooms = rData.rooms;
+      state.info = new Map();
+      state.buildings.forEach((b) => {
+        const max = roomsOf(b.id).reduce((acc, r) => Math.max(acc, Number(r.floor) || 0), 0);
+        state.info.set(b.id, { levels: Math.max(1, max), noRooms: !roomsOf(b.id).length });
+      });
+      state.loaded = true;
+      if (!state.buildings.length) {
+        show('[data-campus-empty]', true);
+        say(t('map.emptyTitle', 'Корпуса ещё не добавлены'));
+        return true;
+      }
+      fillSelect(picker, 1);
+      fillSelect(bSelect, 1);
+      layout();
+      resetView();
+      syncAll();
+      say(t('map.statusReady', 'Схема готова. Выберите здание или найдите аудиторию.'));
+      return true;
+    };
+
+    /* --- поиск: GET /v1/map/rooms?q= ----------------------------------------- */
+    const searchStatus = $m('[data-search-status]');
+    const searchList = $m('[data-search-results]');
+    const runSearch = async (rawQ, scroll = true) => {
+      const q = String(rawQ || '').trim();
+      if (searchList) { searchList.replaceChildren(); searchList.hidden = true; }
+      show('[data-search-retry]', false);
+      if (!q) { if (searchStatus) searchStatus.textContent = ''; return; }
       const seq = ++state.searchSeq;
-      show('[data-search-section]', true);
-      clearTimeout(skSearch);
-      show('[data-search-loading]', false);
-      show('[data-search-empty]', false);
-      show('[data-search-error]', false);
-      show('[data-search-results]', false);
-      skSearch = setTimeout(() => show('[data-search-loading]', true), 300);
       const data = await fetchJSON('/v1/map/rooms?q=' + encodeURIComponent(q));
       if (seq !== state.searchSeq) return;
-      clearTimeout(skSearch);
-      show('[data-search-loading]', false);
       if (!data || !Array.isArray(data.rooms)) {
-        show('[data-search-error]', true);
+        if (searchStatus) searchStatus.textContent = t('map.searchError', 'Не получилось выполнить поиск.');
+        show('[data-search-retry]', true);
         return;
       }
-      if (!data.rooms.length) {
-        show('[data-search-empty]', true);
+      const rooms = data.rooms.slice().sort(byName);
+      const exact = rooms.filter((r) => String(r.name).toLowerCase() === q.toLowerCase());
+      const hits = exact.length === 1 ? exact : rooms;
+      if (!hits.length) {
+        if (searchStatus) searchStatus.textContent = t('map.searchNotFound', 'Не нашли кабинет. Проверьте номер — например, 1207 или Б-204.');
         return;
       }
-      const box = document.querySelector('[data-search-results]');
-      if (!box) return;
-      box.replaceChildren();
-      data.rooms.forEach((r) => {
-        const card = el('div', 'surface section');
-        card.style.marginTop = '0';
-        card.append(el('h2', null, r.name || ''));
-        card.append(el('p', 'muted', roomSub(r)));
-        box.append(card);
-      });
-      show('[data-search-results]', true);
+      const describe = (r) => [r.name, r.building, r.floor != null ? floorLabel(r.floor) : ''].filter(Boolean).join(' · ');
+      if (hits.length === 1) {
+        if (searchStatus) searchStatus.textContent = t('map.searchFound', 'Нашли:') + ' ' + describe(hits[0]);
+        selectRoom(hits[0], true, scroll);
+        return;
+      }
+      if (searchStatus) searchStatus.textContent = t('map.searchMany', 'Нашли несколько кабинетов — выберите нужный:');
+      if (searchList) {
+        hits.forEach((r) => {
+          const chip = el('button', 'chip', describe(r));
+          chip.type = 'button';
+          chip.dataset.roomId = String(r.id);
+          searchList.append(chip);
+        });
+        searchList.hidden = false;
+      }
     };
-
-    const submitSearch = (q) => {
-      const clean = String(q || '').trim();
-      /* адрес держим в резонансе с экраном — ссылка шарится (алиас ведёт
-         сюда же через /map?q=…), состояние истории не засоряем */
-      const url = clean ? '/map?q=' + encodeURIComponent(clean) : '/map';
-      window.history.replaceState(null, '', url);
-      runSearch(clean);
-    };
-    const form = document.querySelector('[data-map-form]');
+    const form = $m('[data-map-form]');
     if (form) {
       form.addEventListener('submit', (event) => {
         event.preventDefault();
-        submitSearch(input ? input.value : '');
+        const q = input ? input.value.trim() : '';
+        window.history.replaceState(null, '', q ? '/map?q=' + encodeURIComponent(q) : '/map');
+        runSearch(q);
       });
     }
-    const searchRetry = document.querySelector('[data-search-retry]');
+    const searchRetry = $m('[data-search-retry]');
     if (searchRetry) searchRetry.addEventListener('click', () => runSearch(input ? input.value : ''));
-
-    /* --- обзор: корпуса → этажи → кабинеты ------------------------------ */
-    const loadRooms = async () => {
-      if (!state.buildingId) return;
-      const seq = ++state.seq;
-      clearTimeout(skRooms);
-      show('[data-rooms-loading]', false);
-      show('[data-rooms-empty]', false);
-      show('[data-rooms-error]', false);
-      show('[data-rooms-grid]', false);
-      show('[data-floor-chips]', true);
-      skRooms = setTimeout(() => show('[data-rooms-loading]', true), 300);
-      const data = await fetchJSON('/v1/map/rooms?building_id=' + state.buildingId);
-      if (seq !== state.seq) return;
-      clearTimeout(skRooms);
-      show('[data-rooms-loading]', false);
-      if (!data || !Array.isArray(data.rooms)) {
-        show('[data-rooms-error]', true);
-        return;
-      }
-      /* чипы этажей — distinct floor выбранного корпуса (null — «без этажа») */
-      const floors = [];
-      data.rooms.forEach((r) => {
-        if (!floors.some((f) => f.key === r.floor)) floors.push({ key: r.floor });
+    if (searchList) {
+      searchList.addEventListener('click', (event) => {
+        const chip = event.target.closest('[data-room-id]');
+        if (!chip) return;
+        const room = state.rooms.find((r) => String(r.id) === chip.dataset.roomId);
+        if (room) {
+          searchList.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+          selectRoom(room, true);
+        }
       });
-      floors.sort((a, b) => {
-        if (a.key == null) return 1;
-        if (b.key == null) return -1;
-        return a.key - b.key;
-      });
-      const chips = document.querySelector('[data-floor-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      floors.forEach((f) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.floor = f.key == null ? '' : String(f.key);
-        chip.textContent = f.key == null ? 'Без этажа' : 'Этаж ' + f.key;
-        chip.addEventListener('click', () => {
-          state.floor = f.key;
-          syncFloorChips();
-          renderRooms(data.rooms);
-        });
-        chips.append(chip);
-      });
-      if (!floors.some((f) => f.key === state.floor)) {
-        state.floor = floors.length ? floors[0].key : null;
-      }
-      syncFloorChips();
-      renderRooms(data.rooms);
-    };
-    const syncFloorChips = () => {
-      document.querySelectorAll('[data-floor-chips] .chip').forEach((chip) => {
-        const val = chip.dataset.floor === '' ? null : Number(chip.dataset.floor);
-        chip.setAttribute('aria-pressed', String(val === state.floor));
-      });
-    };
-    const renderRooms = (rooms) => {
-      const grid = document.querySelector('[data-rooms-grid]');
-      if (!grid) return;
-      grid.replaceChildren();
-      const onFloor = rooms.filter((r) => r.floor === state.floor);
-      if (!onFloor.length) {
-        show('[data-rooms-grid]', false);
-        show('[data-rooms-empty]', true);
-        return;
-      }
-      onFloor.forEach((r) => {
-        const tile = el('div', 'map-room');
-        tile.append(el('strong', null, r.name || ''));
-        if (r.kind) tile.append(el('span', 'caption', r.kind));
-        grid.append(tile);
-      });
-      show('[data-rooms-empty]', false);
-      show('[data-rooms-grid]', true);
-    };
-
-    const syncBuildingChips = () => {
-      document.querySelectorAll('[data-building-chips] .chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.buildingId) === state.buildingId));
-      });
-    };
-    const selectBuilding = (b) => {
-      state.buildingId = b.id;
-      state.floor = null;
-      syncBuildingChips();
-      const addr = document.querySelector('[data-building-address]');
-      if (addr) {
-        addr.textContent = b.address || '';
-        addr.hidden = !b.address;
-      }
-      const floorsSection = document.querySelector('[data-floors-section]');
-      if (floorsSection) floorsSection.hidden = false;
-      loadRooms();
-    };
-    const loadBuildings = async () => {
-      show('[data-buildings-error]', false);
-      const data = await fetchJSON('/v1/map/buildings');
-      if (!data || !Array.isArray(data.buildings)) {
-        show('[data-buildings-error]', true);
-        return;
-      }
-      state.buildings = data.buildings;
-      const chips = document.querySelector('[data-building-chips]');
-      if (!chips) return;
-      chips.replaceChildren();
-      state.buildings.forEach((b) => {
-        const chip = el('button', 'chip');
-        chip.type = 'button';
-        chip.dataset.buildingId = String(b.id);
-        chip.textContent = b.name || '';
-        chip.addEventListener('click', () => {
-          if (state.buildingId !== b.id) selectBuilding(b);
-        });
-        chips.append(chip);
-      });
-      if (state.buildings.length) selectBuilding(state.buildings[0]);
-    };
-    const buildingsRetry = document.querySelector('[data-buildings-retry]');
-    if (buildingsRetry) buildingsRetry.addEventListener('click', () => loadBuildings());
-    const roomsRetry = document.querySelector('[data-rooms-retry]');
-    if (roomsRetry) roomsRetry.addEventListener('click', () => loadRooms());
-
-    loadBuildings();
-
-    /* ?q= при загрузке (алиас /map/rooms?q=… и шареные ссылки): поле
-       предзаполнено, поиск выполнен сразу — постановка экрана карты */
-    const initial = new URLSearchParams(window.location.search).get('q');
-    if (initial && input) {
-      input.value = initial;
-      runSearch(initial);
     }
+
+    /* --- нижний блок: selects и план ------------------------------------------ */
+    if (bSelect) bSelect.addEventListener('change', () => selectBuilding(bSelect.value ? Number(bSelect.value) : null));
+    if (picker) picker.addEventListener('change', () => {
+      if (picker.value) selectBuilding(Number(picker.value), { focus: true });
+      else { selectBuilding(null); resetView(); applyViewBox(); say(t('map.statusReset', 'Исходный вид восстановлен.')); }
+    });
+    if (fSelect) fSelect.addEventListener('change', () => {
+      state.floor = fSelect.value === '' ? null : Number(fSelect.value);
+      state.roomId = null; state.foundId = null; showCard(null);
+      renderPlan();
+      renderScene();
+    });
+    const grid = $m('[data-rooms-grid]');
+    if (grid) grid.addEventListener('click', (event) => {
+      const tile = event.target.closest('.map-room');
+      if (!tile) return;
+      const room = state.rooms.find((r) => String(r.id) === tile.dataset.roomId);
+      if (!room) return;
+      state.roomId = room.id;
+      grid.querySelectorAll('.map-room').forEach((n) => n.setAttribute('aria-pressed', String(n === tile)));
+      showCard(room);
+    });
+
+    /* --- сцена: клик, клавиатура, зум/пан, перетаскивание ---------------------- */
+    let drag = null, dragMoved = false;
+    const zoom = (f) => { state.k *= f; clampView(); applyViewBox(); say(t('map.statusZoom', 'Масштаб изменён.')); };
+    const pan = (dx, dy) => {
+      const vb = viewBox();
+      state.cx += dx * vb.w * 0.15; state.cy += dy * vb.h * 0.15;
+      clampView(); applyViewBox(); say(t('map.statusPan', 'Карта перемещена.'));
+    };
+    const fullReset = () => {
+      state.mode = 'iso';
+      if (topBtn) topBtn.setAttribute('aria-pressed', 'false');
+      resetView(); renderScene();
+      say(t('map.statusReset', 'Исходный вид восстановлен.'));
+    };
+    const ACTIONS = {
+      'zoom-in': () => zoom(1.25), 'zoom-out': () => zoom(0.8),
+      'pan-up': () => pan(0, -1), 'pan-down': () => pan(0, 1), 'pan-left': () => pan(-1, 0), 'pan-right': () => pan(1, 0),
+      reset: fullReset,
+      top: () => {
+        state.mode = state.mode === 'top' ? 'iso' : 'top';
+        if (topBtn) topBtn.setAttribute('aria-pressed', String(state.mode === 'top'));
+        resetView(); renderScene();
+        say(state.mode === 'top' ? t('map.statusTop', 'Вид сверху.') : t('map.statusIso', 'Объёмный вид.'));
+      },
+    };
+    document.querySelectorAll('[data-campus-action]').forEach((btn) => {
+      btn.addEventListener('click', () => { if (state.base && ACTIONS[btn.dataset.campusAction]) ACTIONS[btn.dataset.campusAction](); });
+    });
+    const retry = $m('[data-campus-retry]');
+    if (retry) retry.addEventListener('click', () => load());
+    if (scene) {
+      const pickFrom = (target) => {
+        const label = target.closest('.campus-building-label');
+        const g = target.closest('.campus-block');
+        const node = label || g;
+        return node ? Number(node.dataset.buildingId) : null;
+      };
+      scene.addEventListener('click', (event) => {
+        if (dragMoved) { dragMoved = false; return; }
+        const id = pickFrom(event.target);
+        if (id == null) return;
+        const slab = event.target.closest('.campus-slab');
+        if (slab && id === state.buildingId) {
+          state.floor = Number(slab.dataset.floor);
+          state.roomId = null; state.foundId = null; showCard(null);
+          syncAll();
+          return;
+        }
+        if (id !== state.buildingId) selectBuilding(id);
+      });
+      scene.addEventListener('keydown', (event) => {
+        if (!state.base) return;
+        const g = event.target.closest && event.target.closest('.campus-block');
+        if (g && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          selectBuilding(Number(g.dataset.buildingId));
+          return;
+        }
+        const step = event.shiftKey ? 2 : 1;
+        const keys = {
+          ArrowUp: () => pan(0, -step), ArrowDown: () => pan(0, step), ArrowLeft: () => pan(-step, 0), ArrowRight: () => pan(step, 0),
+          '+': () => zoom(1.25), '=': () => zoom(1.25), '-': () => zoom(0.8), '_': () => zoom(0.8),
+        };
+        if (keys[event.key]) { event.preventDefault(); keys[event.key](); return; }
+        if (event.code === 'KeyR' && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); fullReset(); }
+      });
+      scene.addEventListener('pointerdown', (event) => {
+        if (!state.base || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, cx: state.cx, cy: state.cy, captured: false };
+        dragMoved = false;
+      });
+      scene.addEventListener('pointermove', (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        if (!drag.captured) {
+          if (Math.hypot(dx, dy) < 6) return;
+          drag.captured = true; dragMoved = true;
+          scene.setPointerCapture(event.pointerId);
+          scene.classList.add('is-dragging');
+        }
+        const m = screenMap();
+        state.cx = drag.cx - dx / m.s; state.cy = drag.cy - dy / m.s;
+        clampView(); applyViewBox();
+      });
+      const endDrag = (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        if (drag.captured) say(t('map.statusPan', 'Карта перемещена.'));
+        drag = null;
+        scene.classList.remove('is-dragging');
+      };
+      scene.addEventListener('pointerup', endDrag);
+      scene.addEventListener('pointercancel', endDrag);
+      if (window.ResizeObserver) new ResizeObserver(() => placeLabels()).observe(scene);
+    }
+
+    /* --- старт и deep link ?q= / ?room= / ?building= -------------------------- */
+    const params = new URLSearchParams(window.location.search);
+    const initialQ = params.get('q') || params.get('room');
+    const initialB = Number(params.get('building'));
+    if (initialQ && input) input.value = initialQ;
+    load().then((ok) => {
+      if (!ok) return;
+      /* deep link: без прокрутки — корпус и плита этажа видны на схеме сразу */
+      if (initialQ) runSearch(initialQ, false);
+      else if (initialB && building(initialB)) selectBuilding(initialB, { focus: true });
+    });
   }
 
   /* ---------- экран «Уведомления» (views/notifications.csp; 03 §4.6, §5) -- */
@@ -2713,11 +4018,13 @@
       const date = iso.slice(0, 10);
       const time = iso.slice(11, 16);
       const today = new Date().toISOString().slice(0, 10);
-      if (date === today) return time;
-      if (date === new Date(Date.now() - 86400000).toISOString().slice(0, 10)) return 'Вчера, ' + time;
+      /* v3: «Сегодня, HH:MM» / «Вчера, HH:MM» (notifications.html) — слова из
+         словаря, месяц — Intl по языку страницы (<html lang> → LOCALE) */
+      if (date === today) return t('notif.today', 'Сегодня') + ', ' + time;
+      if (date === new Date(Date.now() - 86400000).toISOString().slice(0, 10)) return t('notif.yesterday', 'Вчера') + ', ' + time;
       const p = date.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return date;
-      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
       return day + ', ' + time;
     };
     /* ISO-метка ВНУТРИ текста с сервера (тело напоминания ReminderService:
@@ -2736,12 +4043,12 @@
         const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
         if (Number.isNaN(day.getTime())) return m;
         const time = m.length >= 16 ? m.slice(11, 16) : '';
-        const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+        const label = day.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
         return time ? label + ', ' + time : label;
       });
     };
 
-    const state = { type: '', unread: false, cursor: null, items: [] };
+    const state = { type: '', unread: false, cursor: null, items: [], query: '' };
     const feedUrl = (cursor) => {
       const p = new URLSearchParams();
       if (state.type) p.set('type', state.type);
@@ -2805,29 +4112,80 @@
       return LIVE_FIRST_SEG.has(seg) ? href : '/notifications';
     };
 
-    /* строка ленты: <a> с deep_link / <button> без него (в <a> вложенный
-       <a> невалиден — заголовок текстом + точка .unread-mark каркаса) */
+    /* строка ленты v3 (notifications.html): article.notification — иконка
+       типа, h2 со ссылкой deep_link (без ссылки — текст) и точкой
+       .unread-mark, тело, время, кнопка «Отметить прочитанным»
+       (POST /v1/notifications/{id}/read). Кнопка — не внутри <a>, поэтому
+       строка стала article со ссылкой внутри. Дедлайн — красным (.red,
+       как в эталоне; левая полоса — .notification:has(.red)). */
     const renderRow = (n) => {
       const href = deepLinkTarget(n.deep_link);
-      const row = href ? el('a', 'notification') : el('button', 'notification');
-      if (href) row.href = href;
-      else row.type = 'button';
+      const urgent = n.type === 'deadline';
+      const row = el('article', 'notification');
       row.dataset.notifId = String(n.id);
+      row.dataset.kind = n.type || '';
       row.classList.add(n.read_at ? 'is-read' : 'is-unread');
       row.append(document.createRange().createContextualFragment(FEED_ICON[n.type] || FEED_ICON.fallback));
       const mid = el('div');
-      const title = el('div', 'ntitle', humanizeDates(n.title) || t('notif.itemOne', 'Уведомление'));
+      const title = el('h2', 'ntitle');
+      const titleText = humanizeDates(n.title) || t('notif.itemOne', 'Уведомление');
+      if (href) {
+        const a = el('a', urgent ? 'red' : null, titleText);
+        a.href = href;
+        a.dataset.read = String(n.id);
+        title.append(a);
+      } else {
+        title.append(el('span', urgent ? 'red' : null, titleText));
+      }
       if (!n.read_at) {
         const dot = el('span', 'unread-mark');
-        dot.setAttribute('aria-hidden', 'true');
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', t('notif.unreadMark', 'Непрочитано'));
         title.append(dot);
       }
       mid.append(title);
-      if (n.body) mid.append(el('p', 'nbody', humanizeDates(n.body)));
+      if (n.body) mid.append(el('p', urgent ? 'small red' : 'small muted', humanizeDates(n.body)));
       const when = stampOf(n.created_at);
-      if (when) mid.append(el('p', 'nwhen', when));
+      if (when) mid.append(el('p', 'caption', when));
+      const mark = el('button', 'button ghost small', n.read_at ? t('notif.isRead', 'Прочитано') : t('notif.markRead', 'Отметить прочитанным'));
+      mark.type = 'button';
+      mark.dataset.markRead = String(n.id);
+      mark.setAttribute('data-network-action', '');
+      mark.disabled = Boolean(n.read_at);
+      mid.append(mark);
       row.append(mid);
       return row;
+    };
+    /* поиск среди загруженных + «Показано: N» (notifications.html
+       #notification-count): фильтр только по state.items — параметра q у
+       API нет; «Только непрочитанные» скрывает и те, что отмечены здесь */
+    const applySearch = () => {
+      const list = document.querySelector('[data-feed-list]');
+      const count = document.querySelector('[data-feed-count]');
+      const none = document.querySelector('[data-feed-search-empty]');
+      if (!list) return;
+      const q = state.query.trim().toLocaleLowerCase(LOCALE);
+      let visible = 0;
+      list.querySelectorAll('[data-notif-id]').forEach((row) => {
+        const item = state.items.find((x) => String(x.id) === row.dataset.notifId);
+        const hide = (q && !row.textContent.toLocaleLowerCase(LOCALE).includes(q)) ||
+          (state.unread && item && item.read_at);
+        row.hidden = Boolean(hide);
+        if (!hide) visible += 1;
+      });
+      if (count) {
+        count.hidden = !state.items.length;
+        count.textContent = t('notif.shown', 'Показано:') + ' ' + visible +
+          (q ? ' ' + t('notif.ofLoaded', 'из {n} загруженных').replace('{n}', String(state.items.length)) : '');
+      }
+      if (none) {
+        const empty = state.items.length > 0 && visible === 0;
+        none.textContent = empty
+          ? t('notif.searchEmpty', 'Среди загруженных ничего не нашлось') +
+            (state.cursor ? '. ' + t('notif.searchMore', 'Нажмите «Ещё» — поиск продолжится по новым записям') : '')
+          : '';
+        none.hidden = !empty;
+      }
     };
     const renderList = () => {
       const list = document.querySelector('[data-feed-list]');
@@ -2835,6 +4193,7 @@
       list.replaceChildren();
       state.items.forEach((n) => list.append(renderRow(n)));
       list.hidden = !state.items.length;
+      applySearch();
     };
 
     /* загрузка страницы ленты: без cursor — первая (скелетон/сброс),
@@ -2847,6 +4206,8 @@
         show('[data-feed-empty]', false);
         show('[data-feed-empty-filter]', false);
         show('[data-feed-more]', false);
+        show('[data-feed-count]', false);
+        show('[data-feed-search-empty]', false);
         show('[data-feed-loading]', true);
       }
       const data = await fetchJSON(feedUrl(cursor));
@@ -2890,9 +4251,12 @@
        переживают обмен (тот же приём, что у sheet «Детали пары» экрана
        «Расписание»). */
     const NEWS_CATEGORY = {
-      official: 'Официальная', conference: 'Конференция',
-      org: 'Организация', event: 'Событие'
+      official: ['news.categoryOfficial', 'Официальная'],
+      conference: ['news.categoryConference', 'Конференция'],
+      org: ['news.categoryOrg', 'Организация'],
+      event: ['news.categoryEvent', 'Событие']
     };
+    const newsCategory = (c) => (NEWS_CATEGORY[c] ? t(NEWS_CATEGORY[c][0], NEWS_CATEGORY[c][1]) : t('news.one', 'Новость'));
     /* «D месяца, HH:MM» из ISO-метки новости (published_at/event_at —
        строки «…Z»); тот же формат, что у stampOf/humanizeDates выше */
     const newsDayLabel = (iso) => {
@@ -2901,26 +4265,71 @@
       if (p.length !== 3 || p.some(Number.isNaN)) return '';
       const day = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
       if (Number.isNaN(day.getTime())) return '';
-      const label = day.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      const label = day.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
       return iso.length >= 16 ? label + ', ' + iso.slice(11, 16) : label;
     };
     /* строка новости (5.17, 01 §5.17 «На экране»): бейдж категории
        (словарь CHECK 0007), заголовок, дата и место события (когда есть),
        тело; дата публикации — справа от бейджа */
+    /* v3 (news.html): отдельного API новости (/v1/news/{id}) нет —
+       новость раскрывается прямо в ленте: свёрнуто — бейдж, дата,
+       заголовок и превью тела (3 строки); «Читать полностью»
+       (aria-expanded) показывает полный текст, строку «дата · категория»
+       и «Как пройти» → /map?q=<аудитория>, когда в месте события есть
+       аудитория. «Сохранить объявление» эталона не переносится (хранения
+       на сервере нет). */
+    const roomOf = (location) => {
+      if (typeof location !== 'string') return '';
+      const m = location.match(/(?:ауд\.|aud\.|room)\s*([^\s,;]+)/i);
+      return m ? m[1] : '';
+    };
     const renderNewsRow = (n) => {
       const row = el('article', 'news-item');
+      const bodyId = 'news-body-' + n.id;
       const head = el('div', 'news-head');
-      head.append(el('span', 'badge', NEWS_CATEGORY[n.category] || 'Новость'));
+      head.append(el('span', 'badge', n.kind === 'announcement' ? t('notif.typeAnnouncement', 'Объявление') : newsCategory(n.category)));
       const pub = stampOf(n.published_at);
       if (pub) head.append(el('span', 'news-date', pub));
       row.append(head);
-      row.append(el('h2', null, humanizeDates(n.title) || 'Новость'));
+      row.append(el('h2', null, humanizeDates(n.title) || t('news.one', 'Новость')));
       const meta = [];
       if (n.event_at) meta.push(newsDayLabel(n.event_at));
       if (n.location) meta.push(n.location);
       if (meta.length) row.append(el('p', 'news-meta', meta.join(' · ')));
-      if (n.body) row.append(el('p', 'news-body', humanizeDates(n.body)));
+      if (n.body) {
+        const body = el('p', 'news-body', humanizeDates(n.body));
+        body.id = bodyId;
+        row.append(body);
+      }
+      const full = el('div', 'news-full flow');
+      full.hidden = true;
+      full.append(el('p', 'caption', [newsDayLabel(n.published_at), n.kind === 'announcement' ? '' : newsCategory(n.category)].filter(Boolean).join(' · ')));
+      const room = roomOf(n.location);
+      if (room) {
+        const actions = el('div', 'actions');
+        const go = el('a', 'button ghost', t('news.route', 'Как пройти'));
+        go.href = '/map?q=' + encodeURIComponent(room);
+        actions.append(go);
+        full.append(actions);
+      }
+      row.append(full);
+      const toggle = el('button', 'button ghost small news-toggle', t('news.readMore', 'Читать полностью'));
+      toggle.type = 'button';
+      toggle.dataset.newsToggle = '';
+      toggle.setAttribute('aria-expanded', 'false');
+      if (n.body) toggle.setAttribute('aria-controls', bodyId);
+      row.append(toggle);
       return row;
+    };
+    const toggleNews = (btn) => {
+      const row = btn.closest('.news-item');
+      if (!row) return;
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? t('news.collapse', 'Свернуть') : t('news.readMore', 'Читать полностью');
+      row.classList.toggle('is-open', open);
+      const full = row.querySelector('.news-full');
+      if (full) full.hidden = !open;
     };
     const newsState = { mode: null, cursor: null, items: [] };
     const renderNewsList = () => {
@@ -2944,7 +4353,15 @@
         show('[data-news-more]', false);
         show('[data-news-loading]', true);
       }
-      const data = await fetchJSON('/v1/news' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+      /* фиксы 2026-11-19: «Объявления» — лента деканата GET /v1/announcements
+         (тот же контракт cursor/next_cursor); строки приводятся к форме
+         новости: бейдж «Объявление», автор — в строке мета. */
+      const isAnn = newsState.mode === 'announcements';
+      const base = isAnn ? '/v1/announcements' : '/v1/news';
+      const raw = await fetchJSON(base + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+      const data = isAnn && raw && Array.isArray(raw.announcements)
+        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' })) }
+        : raw;
       show('[data-news-loading]', false);
       if (!data || !Array.isArray(data.news)) {
         /* офлайн: баннер уже показал каркас (fetchJSON); ошибка API —
@@ -2980,7 +4397,7 @@
     const initCurrentSegment = () => {
       const segBox = document.getElementById('notifications-segment');
       const seg = segBox && segBox.dataset.segment ? segBox.dataset.segment : 'notifications';
-      if (seg === 'news' || seg === 'events') {
+      if (seg === 'news' || seg === 'events' || seg === 'announcements') {
         newsState.mode = seg;
         newsState.cursor = null;
         newsState.items = [];
@@ -2991,6 +4408,7 @@
          unread) — state приводится к разметке, первая страница */
       state.type = '';
       state.unread = false;
+      state.query = '';
       state.cursor = null;
       state.items = [];
       load(null);
@@ -2998,32 +4416,67 @@
     initCurrentSegment();
     document.body.addEventListener('htmx:afterSwap', (e) => {
       const target = e.detail && e.detail.target;
-      if (target && target.id === 'notifications-segment') initCurrentSegment();
+      if (target && target.id === 'notifications-segment') {
+        initCurrentSegment();
+        /* шапка не входит в htmx-обмен: подсветка пункта навигации
+           («Новости»/«Объявления» у сотрудника) — по новому сегменту */
+        const fresh = document.getElementById('notifications-segment');
+        const seg = fresh ? fresh.dataset.segment || '' : '';
+        document.querySelectorAll('.primary-nav .nav-link[data-nav]').forEach((a) => {
+          if (a.dataset.nav === seg) a.setAttribute('aria-current', 'page');
+          else if (a.dataset.nav === 'news' || a.dataset.nav === 'announcements') a.removeAttribute('aria-current');
+        });
+      }
     });
 
-    /* --- тап по строке ленты: пометка В ФОНЕ, deep_link-переход не ждёт её */
-    const markReadInBackground = (row) => {
-      if (!row.classList.contains('is-unread')) return;
+    /* --- пометка прочтения (POST /v1/notifications/{id}/read): тап по
+       ссылке строки — в фоне (keepalive, переход по deep_link не ждёт);
+       кнопка «Отметить прочитанным» (v3) — на месте, с тостом при сбое.
+       После успеха — точка снята, кнопка «Прочитано» (disabled), бейдж
+       колокольчика перечитывается каркасной функцией. */
+    const applyRead = (row, item) => {
+      item.read_at = new Date().toISOString();
+      row.classList.remove('is-unread');
+      row.classList.add('is-read');
+      const dot = row.querySelector('.unread-mark');
+      if (dot) dot.remove();
+      const btn = row.querySelector('[data-mark-read]');
+      if (btn) {
+        btn.textContent = t('notif.isRead', 'Прочитано');
+        btn.disabled = true;
+        /* офлайн-переключатель не должен «вернуть» кнопку в enabled */
+        btn.removeAttribute('data-network-action');
+      }
+      refreshUnreadBadge();
+      applySearch();
+    };
+    const markRead = (row, background) => {
+      if (!row || !row.classList.contains('is-unread')) return;
       const id = Number(row.dataset.notifId);
       const item = state.items.find((x) => x.id === id);
-      if (!item || item.read_at) return; // повторный тап до ответа/уже прочитано
+      if (!item || item.read_at || row.dataset.pending) return; // уже прочитано / запрос в полёте
       if (!navigator.onLine) { applyOffline(true); return; }
+      row.dataset.pending = '1';
+      const btn = row.querySelector('[data-mark-read]');
+      if (btn && !background) btn.disabled = true;
       fetch('/v1/notifications/' + id + '/read', {
         method: 'POST',
         headers: { Accept: 'application/json' },
-        keepalive: true /* фон: запрос переживает уход по deep_link */
+        keepalive: Boolean(background) /* фон: запрос переживает уход по deep_link */
       }).then((resp) => {
-        if (!resp.ok) return; /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
-        item.read_at = new Date().toISOString();
-        row.classList.remove('is-unread');
-        row.classList.add('is-read');
-        const dot = row.querySelector('.unread-mark');
-        if (dot) dot.remove();
-        /* синхронизация бейджа колокольчика — та же каркасная функция */
-        refreshUnreadBadge();
-      }).catch(() => { /* сеть ушла — точка остаётся, баннер покажет каркас */ });
-      /* <a>-строка: браузер сам уходит по deep_link (preventDefault нет);
-         строки без deep_link (<button>) остаются на месте — точка гаснет */
+        delete row.dataset.pending;
+        if (!resp.ok) { /* 403 чужое (guard ДО пометки)/404/5xx — не помечаем */
+          if (btn) btn.disabled = false;
+          if (!background) toast(t('toast.failMarkRead', 'Не получилось отметить прочитанным'));
+          return;
+        }
+        applyRead(row, item);
+      }).catch(() => {
+        delete row.dataset.pending;
+        if (btn) btn.disabled = false;
+        if (!navigator.onLine) applyOffline(true);
+        else if (!background) toast(t('toast.failMarkRead', 'Не получилось отметить прочитанным'));
+      });
     };
 
     /* «Прочитать всё»: 204 идемпотентно → точки сняты, бейдж обнулён */
@@ -3050,7 +4503,7 @@
             renderList();
           }
           refreshUnreadBadge();
-          toast('Все уведомления прочитаны'); /* дословно 03 §4.6 */
+          toast(t('toast.readAllDone', 'Все уведомления прочитаны')); /* дословно 03 §4.6 */
         } else {
           let message = t('toast.failReadAll', 'Не получилось пометить всё прочитанным');
           try {
@@ -3072,8 +4525,12 @@
        страница нового фильтра, cursor сброс), «Ещё»/«Повторить» обеих
        вкладок */
     document.addEventListener('click', (event) => {
-      const row = event.target.closest('[data-notif-id]');
-      if (row) { markReadInBackground(row); return; }
+      const markBtn = event.target.closest('[data-mark-read]');
+      if (markBtn) { markRead(markBtn.closest('[data-notif-id]'), false); return; }
+      const rowLink = event.target.closest('[data-notif-id] a[data-read]');
+      if (rowLink) { markRead(rowLink.closest('[data-notif-id]'), true); return; }
+      const newsToggle = event.target.closest('[data-news-toggle]');
+      if (newsToggle) { toggleNews(newsToggle); return; }
       const readAllBtn = event.target.closest('[data-read-all]');
       if (readAllBtn) { readAll(readAllBtn); return; }
       const chip = event.target.closest('[data-feed-filter]');
@@ -3083,13 +4540,6 @@
         document.querySelectorAll('[data-feed-filter]').forEach((c) => {
           c.setAttribute('aria-pressed', String(c === chip));
         });
-        load(null);
-        return;
-      }
-      const unreadChip = event.target.closest('[data-feed-unread]');
-      if (unreadChip) {
-        state.unread = unreadChip.getAttribute('aria-pressed') !== 'true';
-        unreadChip.setAttribute('aria-pressed', String(state.unread));
         load(null);
         return;
       }
@@ -3107,6 +4557,19 @@
       }
       const newsRetry = event.target.closest('[data-news-retry]');
       if (newsRetry) { loadNews(null, 0); return; }
+    });
+
+    /* поиск и «Только непрочитанные» — делегирование на document: поле и
+       чекбокс приезжают новыми в каждом htmx-фрагменте сегмента */
+    document.addEventListener('input', (event) => {
+      if (!event.target.matches || !event.target.matches('[data-feed-search]')) return;
+      state.query = event.target.value || '';
+      applySearch();
+    });
+    document.addEventListener('change', (event) => {
+      if (!event.target.matches || !event.target.matches('[data-feed-unread]')) return;
+      state.unread = event.target.checked;
+      load(null);
     });
 
     /* --- состояния ПЕРЕКЛЮЧЕНИЯ сегмента (03 §5.3/§5.4; паттерн экрана
@@ -3182,7 +4645,7 @@
       const nameEl = $('[data-account-name]');
       if (nameEl) nameEl.textContent = name;
       const meta = $('[data-account-meta]');
-      if (meta) meta.textContent = p ? p.course + ' курс · ' + p.faculty : '';
+      if (meta) meta.textContent = p ? t('profile.course', '{n} курс').replace('{n}', String(p.course)) + ' · ' + p.faculty : '';
       const prog = $('[data-account-program]');
       if (prog) prog.textContent = p ? p.program : '';
       const group = $('[data-account-group]');
@@ -3232,8 +4695,13 @@
       const to = $('[data-quiet-to]');
       if (from && typeof q.from === 'string') from.value = q.from;
       if (to && typeof q.to === 'string') to.value = q.to;
+      const qs = $('[data-quiet-status]');
+      if (qs && from && to && from.value && to.value) {
+        qs.textContent = t('settings.quietNow', 'Сейчас на сервере: {from}–{to}')
+          .replace('{from}', from.value).replace('{to}', to.value);
+      }
       if (s.theme) { applyTheme(s.theme); markTheme(s.theme); }
-      markLang(s.lang);
+      markLang(document.documentElement.lang || s.lang);
       show('[data-settings-body]', true);
       show('[data-theme-group]', true);
       show('[data-lang-group]', true);
@@ -3279,69 +4747,147 @@
         }
       });
     });
-    /* тихие часы: два time-инпута → PUT quiet_hours_json (строка с JSON —
-       формат сервера {"from":"HH:MM","to":"HH:MM"}, дефолт 23:00–07:00;
-       интервал через полночь допустим — проверка на не-пустоту) */
-    const saveQuiet = async () => {
-      const from = $('[data-quiet-from]');
-      const to = $('[data-quiet-to]');
-      if (!from || !to || !from.value || !to.value) return;
-      if (!navigator.onLine) { applyOffline(true); return; }
-      const saved = await putSettings({
-        quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
+    /* тихие часы (v3, profile.html #quiet-hours-form): форма с подписями
+       «с / до», явное «Сохранить тихие часы» → PUT quiet_hours_json
+       (строка с JSON — формат сервера {"from":"HH:MM","to":"HH:MM»},
+       интервал через полночь допустим), строка статуса — aria-live */
+    const quietForm = $('[data-quiet-form]');
+    if (quietForm) {
+      quietForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const from = $('[data-quiet-from]');
+        const to = $('[data-quiet-to]');
+        const status = $('[data-quiet-status]');
+        const btn = $('[data-quiet-save]');
+        const empty = !from.value || !to.value;
+        from.setAttribute('aria-invalid', String(!from.value));
+        to.setAttribute('aria-invalid', String(!to.value));
+        if (empty) {
+          if (status) status.textContent = t('settings.quietEmpty', 'Укажите начало и конец тихих часов');
+          (from.value ? to : from).focus();
+          return;
+        }
+        if (!navigator.onLine) { applyOffline(true); return; }
+        if (btn) btn.disabled = true;
+        const saved = await putSettings({
+          quiet_hours_json: JSON.stringify({ from: from.value, to: to.value })
+        });
+        if (btn) btn.disabled = false;
+        if (saved) {
+          if (status) {
+            status.textContent = t('settings.quietSavedAt', 'Сохранено: {from}–{to}')
+              .replace('{from}', from.value).replace('{to}', to.value);
+          }
+          toast(t('toast.quietSaved', 'Тихие часы сохранены'));
+        } else {
+          toast(t('toast.failQuiet', 'Не получилось сохранить тихие часы'));
+        }
       });
-      if (saved) toast('Тихие часы сохранены');
-      else toast(t('toast.failQuiet', 'Не получилось сохранить тихие часы'));
-    };
-    const quietFrom = $('[data-quiet-from]');
-    const quietTo = $('[data-quiet-to]');
-    if (quietFrom) quietFrom.addEventListener('change', saveQuiet);
-    if (quietTo) quietTo.addEventListener('change', saveQuiet);
+    }
     /* тема: смена применяется СРАЗУ (applyTheme — data-theme на <html>),
        сохранение — PUT {theme}; сбой сети — вид остаётся локальным,
        офлайн-баннер покажет каркас */
     document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const t = btn.dataset.themeChoice;
-        applyTheme(t);
-        markTheme(t);
+        /* имя theme, а не t: прежний `const t` затенял функцию словаря, и
+           ветка ошибки падала TypeError вместо тоста */
+        const theme = btn.dataset.themeChoice;
+        applyTheme(theme);
+        markTheme(theme);
         if (!navigator.onLine) { applyOffline(true); return; }
-        const saved = await putSettings({ theme: t });
-        if (saved) toast('Оформление сохранено');
+        const saved = await putSettings({ theme });
+        if (saved) toast(t('toast.themeSaved', 'Оформление сохранено'));
         else toast(t('toast.failTheme', 'Не получилось сохранить тему'));
       });
     });
 
-    /* --- подписка на календарь (5.4): POST /v1/ics/token → 201 {token}
-       (Р-11: 256 бит, 64 hex); ПОВТОРНОЕ создание ротирует токен — прежняя
-       ссылка перестаёт обновляться (подсказка в блоке); DELETE → 204.
-       GET «есть ли подписка» в API нет (02 §5.2) — экран стартует в
-       состоянии «нет подписки» (постановка). --- */
-    const showIcs = (token) => {
+    /* --- подписка на календарь (5.4; calendar.html): при загрузке —
+       GET /v1/ics/token (200 {token, created_at} — подписка активна,
+       404 — нет). Исправление: раньше блок этот GET не вызывал и после
+       перезагрузки активная подписка выглядела отсутствующей.
+       POST → 201 {token}: создать или перевыпустить (ротация — прежняя
+       ссылка перестаёт обновляться); DELETE → 204 — отозвать. Ссылка —
+       readonly-поле + «Скопировать» (navigator.clipboard, тост). --- */
+    const showIcs = (token, createdAt) => {
       if (!/^[0-9a-f]{64}$/.test(token)) return;
       const path = '/ics/' + token;
       const url = $('[data-ics-url]');
       const webcal = $('[data-ics-webcal]');
-      if (url) url.textContent = location.origin + path;
+      const status = $('[data-ics-status]');
+      if (url) url.value = location.origin + path;
       if (webcal) webcal.href = 'webcal://' + location.host + path;
+      if (status) {
+        const d = typeof createdAt === 'string' ? new Date(createdAt.replace(' ', 'T') + (/Z$/.test(createdAt) ? '' : 'Z')) : null;
+        status.textContent = d && !Number.isNaN(d.getTime())
+          ? t('profile.icsActive', 'Подписка активна с {date}').replace('{date}', d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' }))
+          : t('profile.icsActiveNow', 'Подписка активна');
+      }
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', false);
       show('[data-ics-none]', false);
       show('[data-ics-active]', true);
     };
-    const icsCreate = $('[data-ics-create]');
-    if (icsCreate) {
+    const showIcsNone = () => {
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', false);
+      show('[data-ics-active]', false);
+      show('[data-ics-none]', true);
+    };
+    const loadIcs = async () => {
+      show('[data-ics-loading]', true);
+      show('[data-ics-error]', false);
+      show('[data-ics-none]', false);
+      show('[data-ics-active]', false);
+      if (!navigator.onLine) { applyOffline(true); show('[data-ics-loading]', false); show('[data-ics-error]', true); return; }
+      try {
+        const resp = await fetch('/v1/ics/token', { headers: { Accept: 'application/json' } });
+        if (resp.status === 404) { showIcsNone(); return; }
+        const data = resp.ok ? await resp.json() : null;
+        if (data && data.token) { showIcs(data.token, data.created_at); return; }
+      } catch (e) {
+        if (!navigator.onLine) applyOffline(true);
+      }
+      show('[data-ics-loading]', false);
+      show('[data-ics-error]', true);
+    };
+    /* сервер уже знает, есть ли подписка (ProfileCtrl: data-ics-state
+       active|none|unknown, без самого токена): none — сразу «Создать»
+       без заведомого 404, active/unknown — GET за ссылкой */
+    const icsCard = $('[data-ics-state]');
+    if (icsCard && icsCard.dataset.icsState === 'none') showIcsNone();
+    else loadIcs();
+    const icsRetry = $('[data-ics-retry]');
+    if (icsRetry) icsRetry.addEventListener('click', () => { loadIcs(); });
+    document.querySelectorAll('[data-ics-create]').forEach((icsCreate) => {
       icsCreate.addEventListener('click', async () => {
         if (icsCreate.disabled) return;
         if (!navigator.onLine) { applyOffline(true); return; }
+        const label = icsCreate.textContent;
         icsCreate.disabled = true;
-        icsCreate.textContent = 'Создаём…';
+        icsCreate.textContent = t('profile.icsCreating', 'Создаём…');
         const data = await fetchJSON('/v1/ics/token', { method: 'POST' });
         icsCreate.disabled = false;
-        icsCreate.textContent = 'Создать подписку';
+        icsCreate.textContent = label;
         if (data && data.token) {
-          showIcs(data.token);
-          toast('Подписка создана — прежняя ссылка отозвана');
+          showIcs(data.token, new Date().toISOString());
+          toast(t('toast.icsCreated', 'Подписка создана — прежняя ссылка отозвана'));
         } else {
           toast(t('toast.failIcsCreate', 'Не получилось создать подписку'));
+        }
+      });
+    });
+    const icsCopy = $('[data-ics-copy]');
+    if (icsCopy) {
+      icsCopy.addEventListener('click', async () => {
+        const url = $('[data-ics-url]');
+        if (!url || !url.value) return;
+        try {
+          await navigator.clipboard.writeText(url.value);
+          toast(t('toast.icsCopied', 'Ссылка скопирована'));
+        } catch (e) {
+          url.focus();
+          url.select();
+          toast(t('toast.copyFail', 'Не получилось скопировать — выделите ссылку вручную'));
         }
       });
     }
@@ -3361,9 +4907,8 @@
         } catch (e) { /* сеть ушла — баннер покажет каркас */ }
         icsRevoke.disabled = false;
         if (revoked) {
-          show('[data-ics-active]', false);
-          show('[data-ics-none]', true);
-          toast('Подписка отозвана — календарь больше не обновляется');
+          showIcsNone();
+          toast(t('toast.icsRevoked', 'Подписка отозвана — календарь больше не обновляется'));
         } else {
           toast(t('toast.failIcsRevoke', 'Не получилось отозвать подписку'));
         }
@@ -3376,7 +4921,7 @@
     const qrDialog = $('#qr-dialog');
     const drawQr = (text) => {
       if (!qrDialog || typeof window.qrcode !== 'function') {
-        toast('QR-модуль не загрузился — обновите страницу');
+        toast(t('toast.qrModuleFail', 'QR-модуль не загрузился — обновите страницу'));
         return false;
       }
       window.qrcode.stringToBytes = window.qrcode.stringToBytesFuncs['UTF-8'];
@@ -3405,9 +4950,9 @@
     };
     const openQr = (title, text, value) => {
       if (!drawQr(text)) return;
-      const t = $('[data-qr-title]');
+      const titleEl = $('[data-qr-title]');
       const v = $('[data-qr-value]');
-      if (t) t.textContent = title;
+      if (titleEl) titleEl.textContent = title;
       if (v) v.textContent = value;
       qrDialog.showModal();
     };
@@ -3434,39 +4979,41 @@
       if (qrClose) qrClose.addEventListener('click', () => qrDialog.close());
     }
 
-    /* --- выход (03 §4.7: диалог с danger-подтверждением; POST
-       /v1/auth/logout → 200 {ok} — сессия инвалидирована на сервере —
-       редирект /login). --- */
-    const logoutDialog = $('#logout-dialog');
-    const logoutOpen = $('[data-logout-open]');
-    if (logoutDialog && logoutOpen) {
-      logoutOpen.addEventListener('click', () => logoutDialog.showModal());
-      const logoutClose = logoutDialog.querySelector('[data-logout-close]');
-      if (logoutClose) logoutClose.addEventListener('click', () => logoutDialog.close());
-      const logoutConfirm = logoutDialog.querySelector('[data-logout-confirm]');
-      if (logoutConfirm) {
-        logoutConfirm.addEventListener('click', async () => {
-          if (logoutConfirm.disabled) return;
-          if (!navigator.onLine) { applyOffline(true); return; }
-          logoutConfirm.disabled = true;
-          logoutConfirm.textContent = 'Выходим…';
-          let done = false;
-          try {
-            const resp = await fetch('/v1/auth/logout', {
-              method: 'POST',
-              headers: { Accept: 'application/json' }
-            });
-            done = resp.ok; /* 200 {ok:true} — сессия удалена (02 §5.2) */
-          } catch (e) { /* сеть ушла — баннер покажет каркас */ }
-          if (done) {
-            window.location.href = '/login';
-            return;
-          }
-          logoutConfirm.disabled = false;
-          logoutConfirm.textContent = 'Выйти';
-          toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
-        });
-      }
+
+  }
+
+  /* --- выход (общий: профиль студента и стол сотрудника, Р-35; 03 §4.7: диалог с danger-подтверждением; POST
+     /v1/auth/logout → 200 {ok} — сессия инвалидирована на сервере —
+     редирект /login). --- */
+  const logoutDialog = $('#logout-dialog');
+  const logoutOpen = $('[data-logout-open]');
+  if (logoutDialog && logoutOpen) {
+    logoutOpen.addEventListener('click', () => logoutDialog.showModal());
+    const logoutClose = logoutDialog.querySelector('[data-logout-close]');
+    if (logoutClose) logoutClose.addEventListener('click', () => logoutDialog.close());
+    const logoutConfirm = logoutDialog.querySelector('[data-logout-confirm]');
+    if (logoutConfirm) {
+      logoutConfirm.addEventListener('click', async () => {
+        if (logoutConfirm.disabled) return;
+        if (!navigator.onLine) { applyOffline(true); return; }
+        logoutConfirm.disabled = true;
+        logoutConfirm.textContent = t('profile.loggingOut', 'Выходим…');
+        let done = false;
+        try {
+          const resp = await fetch('/v1/auth/logout', {
+            method: 'POST',
+            headers: { Accept: 'application/json' }
+          });
+          done = resp.ok; /* 200 {ok:true} — сессия удалена (02 §5.2) */
+        } catch (e) { /* сеть ушла — баннер покажет каркас */ }
+        if (done) {
+          window.location.href = '/login';
+          return;
+        }
+        logoutConfirm.disabled = false;
+        logoutConfirm.textContent = t('profile.logout', 'Выйти');
+        toast(t('toast.failLogout', 'Не получилось выйти — проверьте интернет'));
+      });
     }
   }
 
@@ -3504,16 +5051,26 @@
       return node;
     };
     const ARROW = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>';
-    const ROLE_LABEL = { teacher: 'Преподаватель', student: 'Студент', staff: 'Сотрудник' };
+    const ROLE_LABEL = {
+      teacher: ['people.roleTeacher', 'Преподаватель'],
+      student: ['people.roleStudent', 'Студент'],
+      staff: ['people.roleStaff', 'Сотрудник']
+    };
+    const roleLabel = (r) => (ROLE_LABEL[r] ? t(ROLE_LABEL[r][0], ROLE_LABEL[r][1]) : '');
+    const countEl = document.querySelector('[data-people-count]');
+    const setCount = (n) => {
+      if (!countEl) return;
+      countEl.textContent = n == null ? '' : t('people.found', 'Найдено: {n}').replace('{n}', String(n));
+    };
     const input = document.querySelector('[data-people-q]');
     const state = { q: '', role: '', seq: 0 };
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
     let debounce = 0;
 
     const subOf = (p) => {
-      const parts = [ROLE_LABEL[p.role] || ''];
+      const parts = [roleLabel(p.role)];
       if (p.role === 'student') {
-        if (p.group) parts.push('группа ' + p.group);
+        if (p.group) parts.push(t('people.groupN', 'группа {g}').replace('{g}', p.group));
       } else {
         if (p.title) parts.push(p.title);
         if (p.department) parts.push(p.department);
@@ -3544,6 +5101,7 @@
       show('[data-people-empty]', false);
       show('[data-people-error]', false);
       show('[data-people-results]', false);
+      setCount(null);
       const q = state.q.trim();
       /* Пустой запрос — «каталог». БЕЗ чипа роли — подсказка + преподаватели
          (первая страница search без q, role=teacher — пустой q сервис не
@@ -3575,9 +5133,11 @@
            нашли» честно: выход — сбросить фильтр (текст пустого состояния
            это и предлагает); подсказка при этом скрыта */
         if (browse) show('[data-people-hint]', false);
+        setCount(0);
         show('[data-people-empty]', true);
         return;
       }
+      if (!browse) setCount(data.people.length);
       if (browse) {
         renderInto(document.querySelector('[data-people-hint-list]'), data.people);
         return;
@@ -3636,21 +5196,26 @@
       if (text != null) node.textContent = text;
       return node;
     };
-    const KIND = { lecture: 'Лекция', seminar: 'Семинар', practice: 'Практика' };
+    const KIND = {
+      lecture: ['lesson.lecture', 'Лекция'],
+      seminar: ['lesson.seminar', 'Семинар'],
+      practice: ['lesson.practice', 'Практика']
+    };
+    const kindLabel = (k) => (KIND[k] ? t(KIND[k][0], KIND[k][1]) : '');
     const timeOf = (iso) => (typeof iso === 'string' && iso.length >= 16) ? iso.slice(11, 16) : '';
     const dateOf = (iso) => (typeof iso === 'string' && iso.length >= 10) ? iso.slice(0, 10) : '';
     /* день по календарной дате UTC проекта (без сдвига часового пояса) */
     const fmtDay = (ymd) => {
       const p = ymd.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
     /* «2 ноября» / для диапазона «Занятия 2–8 ноября» (черновик
        design-drafts/person.html) */
     const dayMonth = (ymd) => {
       const p = ymd.split('-').map(Number);
       if (p.length !== 3 || p.some(Number.isNaN)) return ymd;
-      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+      return new Date(Date.UTC(p[0], p[1] - 1, p[2])).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
     };
 
     const pageRetry = document.querySelector('[data-person-retry]');
@@ -3667,14 +5232,16 @@
       if (timeOf(e.ends_at)) time.append(el('span', null, timeOf(e.ends_at)));
       const mid = el('div');
       mid.append(el('div', 'lesson-subject', e.discipline || ''));
-      const detail = el('p', 'lesson-detail', KIND[e.kind] || '');
-      if (e.status === 'moved') detail.append(' ', el('span', 'badge warn', 'Перенос'));
-      if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', 'Отменена'));
+      const detail = el('p', 'lesson-detail', kindLabel(e.kind));
+      if (e.status === 'moved') detail.append(' ', el('span', 'badge warn', t('schedule.sheetChange', 'Перенос')));
+      if (e.status === 'cancelled') detail.append(' ', el('span', 'badge danger', t('lesson.cancelled', 'Отменена')));
       mid.append(detail);
-      const room = el('div', 'lesson-room');
+      /* v3 (person.html): аудитория — ссылка на карту /map?q= (кроме отмены) */
+      const room = el(e.status !== 'cancelled' && e.room ? 'a' : 'div', 'lesson-room');
+      if (room.tagName === 'A') room.href = '/map?q=' + encodeURIComponent(e.room);
       if (e.status === 'cancelled') {
         room.append(el('s', null, e.room || '—'));
-        room.append(el('small', null, 'отменена'));
+        room.append(el('small', null, t('lesson.cancelled', 'Отменена').toLocaleLowerCase(LOCALE)));
       } else if (e.status === 'moved' && e.prev_room) {
         room.append(el('s', null, e.prev_room));
         room.append(document.createTextNode(' → ' + (e.room || '—')));
@@ -3713,11 +5280,13 @@
         const first = dateOf(data.events[0].starts_at);
         const last = dateOf(data.events[data.events.length - 1].starts_at);
         if (first && last) {
-          title.textContent = 'Занятия ' + (first === last
-            ? dayMonth(first)
-            : first.slice(0, 7) === last.slice(0, 7)
-              ? first.slice(8, 10).replace(/^0/, '') + '–' + dayMonth(last)
-              : dayMonth(first) + ' – ' + dayMonth(last));
+          /* диапазон — Intl formatRange по языку страницы («3–26 ноября»,
+             «3–26 November», «11月3日至26日»); без formatRange — «D – D» */
+          const d = (ymd) => { const p = ymd.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); };
+          const fmt = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'long', timeZone: 'UTC' });
+          const range = first === last ? dayMonth(first)
+            : (typeof fmt.formatRange === 'function' ? fmt.formatRange(d(first), d(last)) : dayMonth(first) + ' – ' + dayMonth(last));
+          title.textContent = t('person.lessonsRange', 'Занятия {range}').replace('{range}', range);
         }
       }
       let current = '';
@@ -3736,6 +5305,22 @@
     };
     const psRetry = document.querySelector('[data-ps-retry]');
     if (psRetry) psRetry.addEventListener('click', () => loadSchedule());
+
+    /* v3 (person.html): «Скопировать почту» — navigator.clipboard + тост;
+       без доступа к буферу — выделение адреса и честный тост */
+    document.addEventListener('click', async (event) => {
+      const btn = event.target.closest && event.target.closest('[data-copy-email]');
+      if (!btn) return;
+      const email = btn.dataset.copyEmail || '';
+      try {
+        await navigator.clipboard.writeText(email);
+        toast(t('toast.emailCopied', 'Почта скопирована'));
+      } catch (e) {
+        const strong = document.querySelector('[data-person-email]');
+        if (strong) window.getSelection().selectAllChildren(strong);
+        toast(t('toast.copyFail', 'Не получилось скопировать — выделите текст вручную'));
+      }
+    });
 
     loadSchedule();
   }
@@ -3856,9 +5441,9 @@
     const QUEUE_KEYS = ['submitted', 'accepted', 'in_progress', 'need_info', 'ready'];
     const changeRow = (e) => {
       const li = el('li');
-      const link = el('a', 'staff-change');
-      const day = dateOf(e.starts_at);
-      link.href = day ? '/schedule?date=' + day : '/schedule';
+      /* Р-35: студенческое расписание сотруднику недоступно (303 /staff) —
+         строка изменения информационная, без ссылки */
+      const link = el('div', 'staff-change');
       link.append(el('strong', null, e.discipline || 'Занятие'));
       if (CHANGE_LABEL[e.status]) link.append(' ', el('span', 'badge ' + (e.status === 'cancelled' ? 'danger' : e.status === 'substituted' ? 'info' : 'warn'), CHANGE_LABEL[e.status]));
       const pieces = [];

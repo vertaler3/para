@@ -35,7 +35,15 @@
    (DashboardCtrl::page + i18n::insertUiStrings ДО рендера, Р-16); контент
    виджетов (дисциплины/время/счётчики) строит app.js из /v1/dashboard — его
    словарные строки (приветствие/счётчики/статусы) — через тот же словарь
-   (<script id="para-i18n"> в footer, t(key, fallback) в app.js). */
+   (<script id="para-i18n"> в footer, t(key, fallback) в app.js).
+   v3 (fe_rebuild, шаг 7; design-drafts/v3/pages/dashboard.html и
+   dashboard-states.html): «Следующая пара» — div.next-class (внутри
+   ссылки: «На карте» → /map?q=<аудитория>, teacher-line → /people/{id+1000}
+   с ФИО из GET /v1/people, «Расписание»); строка «Следующая пара · через N»
+   — в next-meta; «Что изменилось» — change-block из событий дня; заявки —
+   mini-progress этапов; срочный дедлайн — без .calm; пустой день — .empty
+   эталона; скелетоны — aria-busy на секции виджета (снимает app.js).
+   «Личный план» эталона не перенесён: он на localStorage, бэкенда дел нет. */
 %>
 <%view head %>
 <!-- Каркасный head.csp подключает только CSS: app.js подключает сама страница
@@ -48,7 +56,7 @@
     <div>
       <p class="eyebrow" data-today-date><%c++ $$ << @@.get<std::string>("t.nav.today"); %></p>
       <h1 class="serif"><span data-greeting><%c++ $$ << @@.get<std::string>("t.dash.greetingAfternoon"); %></span><span data-greeting-tail hidden>, <span data-account-short></span></span>.</h1>
-      <p><%c++ $$ << @@.get<std::string>("t.dash.heading"); %></p>
+      <p data-dash-meta hidden></p>
     </div>
   </div>
   <!-- ==== Онбординг С5 (Э7 «Профиль», 03 §4.7/§4.9.4): чеклист «4 шага»
@@ -99,44 +107,62 @@ if (@@.get<std::string>("staffEntry") == "1") {
       </section>
       <!-- ==== Следующая пара → /schedule (03 §4.2); скрывается, когда пар
            больше нет (03 §5.2); отсчёт обновляется раз в минуту (app.js) ==== -->
-      <section class="section" data-widget="next-class">
-        <p class="overline"><%c++ $$ << @@.get<std::string>("t.dash.nextClass"); %></p>
+      <section class="section" data-widget="next-class" aria-busy="true">
         <div data-next-loading aria-hidden="true"><div class="skeleton block"></div></div>
-        <a class="next-class" href="/schedule" data-next-body hidden>
+        <div class="next-class" aria-label="<%c++ $$ << @@.get<std::string>("t.dash.nextClassAria"); %>" data-next-body hidden>
+          <div class="paper-corner" aria-hidden="true"><svg fill="none" stroke="currentColor" stroke-width="1.4" viewBox="0 0 40 40"><path d="M12 7h19v25H9V10l3-3Z"/><path d="M14 14h12M14 19h12M14 24h7"/></svg></div>
           <div class="next-top">
-            <p class="next-meta"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span data-next-meta><%c++ $$ << @@.get<std::string>("t.dash.nextSoon"); %></span></p>
+            <p class="next-meta"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span data-next-meta><%c++ $$ << @@.get<std::string>("t.dash.nextClass"); %></span></p>
             <span class="badge outline" data-next-kind hidden></span>
           </div>
           <p class="next-time" data-next-time></p>
           <h2 data-next-discipline></h2>
-          <p class="small muted next-room-line"><%c++ $$ << @@.get<std::string>("t.dash.roomLabel"); %> <span data-next-room></span></p>
-        </a>
+          <div class="next-location">
+            <div><strong data-next-room></strong><p class="small muted" data-next-building hidden></p></div>
+            <a class="button ghost" href="/map" data-next-map><%c++ $$ << @@.get<std::string>("t.schedule.onMap"); %></a>
+          </div>
+          <a class="teacher-line" href="/people" data-next-teacher hidden><span class="avatar" aria-hidden="true" data-next-teacher-initials></span><span><span data-next-teacher-name></span><br><span class="caption"><%c++ $$ << @@.get<std::string>("t.schedule.sheetTeacher"); %></span></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+          <a class="next-schedule" href="/schedule" data-next-schedule><%c++ $$ << @@.get<std::string>("t.nav.schedule"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+        </div>
         <p class="widget-error" data-next-error hidden><%c++ $$ << @@.get<std::string>("t.error.loadSchedule"); %>. <button type="button" class="offline-retry" data-widget-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></p>
       </section>
       <!-- ==== Сегодня → /schedule: все пары дня; счётчик «· N пар» —
            app.js; строка с переносом → /schedule?date=<день> ==== -->
-      <section class="section" data-widget="today">
+      <section class="section" data-widget="today" aria-busy="true">
         <div class="section-title"><h2 data-today-title><%c++ $$ << @@.get<std::string>("t.nav.today"); %></h2><a href="/schedule"><%c++ $$ << @@.get<std::string>("t.common.allNeut"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-today-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div><div class="skeleton"></div></div>
         <div class="schedule-list" data-today-body hidden></div>
-        <p class="muted small" data-today-empty hidden><%c++ $$ << @@.get<std::string>("t.dash.emptyClasses"); %></p>
+        <div class="empty" data-today-empty hidden>
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h1M15 15h1"/></svg></div>
+          <h2><%c++ $$ << @@.get<std::string>("t.dash.emptyDayTitle"); %></h2>
+          <p><%c++ $$ << @@.get<std::string>("t.dash.emptyDayText"); %></p>
+          <a class="button" href="/schedule"><%c++ $$ << @@.get<std::string>("t.common.openSchedule"); %></a>
+        </div>
         <p class="widget-error" data-today-error hidden><%c++ $$ << @@.get<std::string>("t.error.loadSchedule"); %>. <button type="button" class="offline-retry" data-widget-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></p>
       </section>
+      <!-- ==== Что изменилось (эталон v3 change-block, шаг 7): события дня со
+           status moved/cancelled/substituted из data.today агрегата — «было →
+           стало» (prev_room/prev_building/prev_starts_at), аудитория → карта,
+           «Подробнее» → день расписания. Нет изменений — секция скрыта. ==== -->
+      <section class="section" data-widget="changes" hidden>
+        <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.dash.whatChanged"); %></h2><a href="/notifications"><%c++ $$ << @@.get<std::string>("t.common.allNeut"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+        <div class="flow" data-changes-body></div>
+      </section>
     </div>
-    <aside class="dashboard-side" aria-label="<%c++ $$ << @@.get<std::string>("t.dash.deadlines"); %>, <%c++ $$ << @@.get<std::string>("t.nav.applications"); %>, <%c++ $$ << @@.get<std::string>("t.dash.whatsNew"); %>">
+    <aside class="dashboard-side" aria-label="<%c++ $$ << @@.get<std::string>("t.dash.asideAria"); %>">
       <!-- ==== Дедлайны → /grades: ближайшие события сессии с точкой
            срочности (03 §4.2: норма --border, ≤3 дней --warning-text,
            завтра --danger-text) ==== -->
-      <section class="section" data-widget="deadlines">
-        <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.dash.deadlines"); %></h2><a href="/grades"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+      <section class="section" data-widget="deadlines" aria-busy="true">
+        <div class="section-title"><h2 class="side-title"><%c++ $$ << @@.get<std::string>("t.dash.deadlinesNear"); %></h2><a href="/grades"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-deadlines-loading aria-hidden="true"><div class="skeleton short"></div><div class="skeleton short"></div></div>
         <ul class="deadline-list" data-deadlines-body hidden></ul>
         <p class="muted small" data-deadlines-empty hidden><%c++ $$ << @@.get<std::string>("t.dash.emptyDeadlines"); %></p>
         <p class="widget-error" data-deadlines-error hidden><%c++ $$ << @@.get<std::string>("t.error.loadDeadlines"); %>. <button type="button" class="offline-retry" data-widget-retry><%c++ $$ << @@.get<std::string>("t.common.retry"); %></button></p>
       </section>
       <!-- ==== Заявки → /applications/{id}: последние активные ==== -->
-      <section class="section" data-widget="applications">
-        <div class="section-title"><h2><%c++ $$ << @@.get<std::string>("t.nav.applications"); %></h2><a href="/applications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+      <section class="section" data-widget="applications" aria-busy="true">
+        <div class="section-title"><h2 class="side-title"><%c++ $$ << @@.get<std::string>("t.dash.myApplications"); %></h2><a href="/applications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-applications-loading aria-hidden="true"><div class="skeleton"></div><div class="mini-progress"><span class="done"></span><span class="done"></span><span></span></div></div>
         <div data-applications-body hidden></div>
         <div class="widget-empty" data-applications-empty hidden>
@@ -148,8 +174,8 @@ if (@@.get<std::string>("staffEntry") == "1") {
       <!-- ==== Что нового → /notifications: последние уведомления;
            ночью заголовок меняется на «За ночь: N событий» (03 §4.2,
            переставляет app.js) ==== -->
-      <section class="section" data-widget="news">
-        <div class="section-title"><h2 data-news-title><%c++ $$ << @@.get<std::string>("t.dash.whatsNew"); %></h2><a href="/notifications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
+      <section class="section" data-widget="news" aria-busy="true">
+        <div class="section-title"><h2 class="side-title" data-news-title><%c++ $$ << @@.get<std::string>("t.dash.whatsNew"); %></h2><a href="/notifications"><%c++ $$ << @@.get<std::string>("t.common.all"); %> <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div>
         <div data-news-loading aria-hidden="true"><div class="skeleton"></div><div class="skeleton short"></div></div>
         <div data-news-body hidden></div>
         <p class="muted small" data-news-empty hidden><%c++ $$ << @@.get<std::string>("t.dash.emptyNews"); %></p>

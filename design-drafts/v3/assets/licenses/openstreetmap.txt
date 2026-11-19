@@ -1,0 +1,29 @@
+Campus geometry data: © OpenStreetMap contributors.
+Data retrieved 2026-11-16 from the official OpenStreetMap API:
+https://api.openstreetmap.org/api/0.6/map?bbox=37.482,55.670,37.491,55.676
+
+OpenStreetMap database and the extracted campus-data.json are available under
+the Open Data Commons Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+https://www.openstreetmap.org/copyright
+
+The extracted and projected data are provided in campus-data.json and
+campus-data.js with the same ODbL license. They include buildings and paths.
+This data license is separate from the MIT Three.js engine and application code.
+
+Height interpretation: where OSM height exists it is used directly; where only
+building:levels exists, visual height = levels × 3.4 m is approximate.
+The A/B classroom zones, interior routes, room destinations and dashed sample
+route are fictional demonstration content and not official campus wayfinding.
+
+Address verification, official university source:
+https://alumni.mgimo.ru/page/staticpage/show_static_page.seam?staticPageId=281
+https://career.mgimo.ru/page/staticpage/show_static_page.seam?staticPageId=323
+
+Three.js 0.187.0 / r187, release published 2026-10-30:
+https://github.com/mrdoob/three.js/releases/tag/r187
+https://github.com/mrdoob/three.js
+The unmodified MIT license is included as three-MIT-LICENSE.txt.
+
+Implementation consulted official OrbitControls documentation:
+https://threejs.org/docs/pages/OrbitControls.html
