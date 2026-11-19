@@ -3111,21 +3111,21 @@
     loadBranches().then(loadItems);
   }
 
-  /* ---------- экран «Столовые» (views/canteens.csp; 03 §4.9.6/5.13) ------ */
-  /* Меню столовых: два fetch из ТЕХ ЖЕ JSON-роутов, что за API (02 §5.2):
-     список GET /v1/canteens (чипы «название · корпус · часы») и меню
-     выбранной GET /v1/canteens/{id}/menu (гонку ответов гасит seq).
-     Комплексные (is_combo) — блоки .combo черновика cafeteria.html:
-     цена справа, состав и КБЖУ раскрываются details/summary (03 §4.9.6
-     «у комбо — раскрытие состава и строка КБЖУ caption»). Остальные
-     позиции сгруппированы по category (словарь DDL) строками .list-row:
-     название, строка КБЖУ caption, цена справа (.price; tnum — общая
-     настройка body). КБЖУ nullable: null — строка НЕ рисуется (вода без
-     КБЖУ, фикстуры Э6б; «не рисовать пустое» — постановка экрана).
-     Пустое меню — «Меню пока не опубликовано» (в 03 §5.2 отдельной строки
-     для столовых нет). Состояния 03 §5: скелетон только при ответе
-     > 300 мс, ошибка с «Повторить», офлайн — баннер каркаса. Вставка —
-     только createElement/textContent (02 §6.4). */
+  /* ---------- экран «Столовые» (views/canteens.csp; дизайн v3, шаг 20) ---------- */
+  /* Данные — ТЕ ЖЕ JSON-роуты, что за API (02 §5.2): список GET /v1/canteens
+     {id,name,building,hours} → чипы «Название · Корпус»; меню выбранной —
+     GET /v1/canteens/{id}/menu (гонку ответов гасит seq) → строка часов,
+     комбо-блоки .combo (is_combo) и группы категорий (soup/main/drink/
+     bakery; неизвестная — «Другое») строками .list-row; КБЖУ nullable:
+     kcal == null → «КБЖУ: нет данных», отдельное null-значение → «нет
+     данных» (не ноль).
+     «Ваш обед» (эталон #meal-planner) — калькулятор ТОЛЬКО в памяти
+     страницы: Map id → {позиция, столовая, порции 1..9}; без localStorage,
+     без отправки (подпись «заказ не отправляется»). Сумма цены и КБЖУ;
+     если у какой-то выбранной позиции КБЖУ null, итог КБЖУ — «нет данных»
+     с пояснением (null не считается нулём). Набор переживает смену столовой (в
+     строке — название столовой). «Сохранить набор» эталона (localStorage)
+     не перенесён. */
   if (document.body.dataset.page === 'canteens') {
     const show = (sel, on) => { const n = document.querySelector(sel); if (n) n.hidden = !on; };
     const el = (tag, className, text) => {
@@ -3135,85 +3135,200 @@
       return node;
     };
     const CATEGORY = [
-      ['soup', 'Первое'],
-      ['main', 'Горячее'],
-      ['drink', 'Напитки'],
-      ['bakery', 'Выпечка'],
+      ['soup', 'canteens.cat.soup', 'Первое'],
+      ['main', 'canteens.cat.main', 'Горячее'],
+      ['drink', 'canteens.cat.drink', 'Напитки'],
+      ['bakery', 'canteens.cat.bakery', 'Выпечка'],
     ];
+    const MAX_PORTIONS = 9;
     const chipsBox = document.querySelector('[data-canteen-chips]');
-    const state = { canteens: [], id: null, seq: 0 };
+    const mealItems = document.querySelector('[data-meal-items]');
+    const mealTotal = document.querySelector('[data-meal-total]');
+    const mealClear = document.querySelector('[data-meal-clear]');
+    const mealStatus = document.querySelector('[data-meal-status]');
+    const planNote = mealStatus ? mealStatus.textContent : '';
+    const state = { canteens: [], id: null, seq: 0, menu: [] };
+    const meal = new Map(); /* id позиции → {item, canteen, count} — только память страницы */
     let skTimer = 0; /* таймер показа скелетона (03 §5.1: ответ > 300 мс) */
 
-    /* «620 ккал · Б 28 · Ж 22 · У 65» (формат 03 §4.9.6); null КБЖУ — null */
-    const kbjuOf = (item) => {
-      if (item.kcal == null) return null;
-      const n = (v) => (v == null ? '' : String(Number(v)));
-      return item.kcal + ' ккал · Б ' + n(item.protein) + ' · Ж ' + n(item.fat) + ' · У ' + n(item.carbs);
+    const num = (v) => Number(v).toLocaleString(LOCALE, { maximumFractionDigits: 1 });
+    const val = (v) => (v == null ? t('canteens.noData', 'нет данных') : num(v));
+    const price = (v) => (v == null ? '—' : num(v)) + ' ₽';
+    const kbjuLine = (o, key) => t(key, '{kcal} ккал · Б {p} · Ж {f} · У {c}')
+      .replace('{kcal}', val(o.kcal)).replace('{p}', val(o.protein)).replace('{f}', val(o.fat)).replace('{c}', val(o.carbs));
+    const kbjuOf = (item) => (item.kcal == null ? t('canteens.kbjuNone', 'КБЖУ: нет данных') : kbjuLine(item, 'canteens.kbju'));
+
+    /* --- кнопка «Добавить +» / «В наборе N +» ------------------------------ */
+    const addButton = (item) => {
+      const btn = el('button', 'button ghost enh-add-food');
+      btn.type = 'button';
+      btn.dataset.addFood = String(item.id);
+      btn.setAttribute('aria-label', t('canteens.addAria', 'Добавить в набор: {name}').replace('{name}', item.name || ''));
+      btn.addEventListener('click', () => changeMeal(item, 1));
+      paintAdd(btn, item.id);
+      return btn;
+    };
+    const paintAdd = (btn, id) => {
+      const entry = meal.get(id);
+      const count = entry ? entry.count : 0;
+      btn.replaceChildren(document.createTextNode(count
+        ? t('canteens.inSet', 'В наборе {n}').replace('{n}', String(count)) + ' '
+        : t('canteens.add', 'Добавить') + ' '));
+      const plus = el('span', null, '+');
+      plus.setAttribute('aria-hidden', 'true');
+      btn.append(plus);
+      btn.disabled = count >= MAX_PORTIONS;
     };
 
     const comboBlock = (item) => {
       const box = el('div', 'combo section');
-      box.append(el('p', 'overline', 'Комбо'));
+      box.append(el('p', 'overline', t('canteens.combo', 'Комбо')));
       const head = el('div', 'row section');
       head.append(el('h2', null, item.name || ''));
-      head.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      head.append(el('span', 'price', price(item.price)));
       box.append(head);
-      const kbju = kbjuOf(item);
-      if (kbju) {
-        const det = document.createElement('details');
-        const sum = document.createElement('summary');
-        sum.textContent = 'Состав и КБЖУ';
-        const body = el('div');
-        body.append(el('p', 'small', kbju));
-        det.append(sum, body);
-        box.append(det);
-      }
+      const det = document.createElement('details');
+      det.append(el('summary', null, t('canteens.kbjuTitle', 'КБЖУ')));
+      const body = el('div');
+      body.append(el('p', 'small', kbjuOf(item)));
+      det.append(body);
+      box.append(det);
+      box.append(addButton(item));
       return box;
     };
-
     const itemRow = (item) => {
       const row = el('div', 'list-row');
       const mid = el('div');
       mid.append(el('strong', null, item.name || ''));
-      const kbju = kbjuOf(item);
-      if (kbju) mid.append(el('p', 'caption', kbju));
-      row.append(mid);
-      row.append(el('span', 'price', (item.price != null ? item.price : '—') + ' ₽'));
+      mid.append(el('p', 'caption', kbjuOf(item)));
+      row.append(mid, el('span', 'price', price(item.price)), addButton(item));
       return row;
     };
 
+    /* --- «Ваш обед»: строки со степпером, итог, «Очистить» ----------------- */
+    const renderMeal = () => {
+      if (!mealItems) return;
+      mealItems.replaceChildren();
+      const entries = Array.from(meal.values());
+      if (!entries.length) {
+        mealItems.append(el('p', 'small muted', t('canteens.mealEmpty', 'Добавьте блюда, чтобы увидеть стоимость и КБЖУ всего набора.')));
+      }
+      const sum = { price: 0, kcal: 0, protein: 0, fat: 0, carbs: 0 };
+      let partial = false;
+      entries.forEach((e) => {
+        Object.keys(sum).forEach((k) => {
+          if (sum[k] == null) return;
+          if (e.item[k] == null) { sum[k] = null; if (k !== 'price') partial = true; return; }
+          sum[k] += Number(e.item[k]) * e.count;
+        });
+        const row = el('div', 'enh-saved-row');
+        const info = el('div');
+        info.append(el('strong', null, e.item.name || ''));
+        info.append(el('p', 'caption', [e.canteen, e.item.price == null ? '' : price(Number(e.item.price) * e.count)].filter(Boolean).join(' · ')));
+        const stepper = el('div', 'enh-stepper');
+        const minus = el('button', 'icon-button', '−');
+        minus.type = 'button';
+        minus.dataset.mealStep = '-1';
+        minus.dataset.mealId = String(e.item.id);
+        minus.setAttribute('aria-label', t('canteens.minusAria', 'Убрать одну порцию: {name}').replace('{name}', e.item.name || ''));
+        const out = el('output', null, String(e.count));
+        out.setAttribute('aria-label', t('canteens.portions', 'Количество порций'));
+        const plus = el('button', 'icon-button', '+');
+        plus.type = 'button';
+        plus.dataset.mealStep = '1';
+        plus.dataset.mealId = String(e.item.id);
+        plus.disabled = e.count >= MAX_PORTIONS;
+        plus.setAttribute('aria-label', t('canteens.plusAria', 'Добавить одну порцию: {name}').replace('{name}', e.item.name || ''));
+        stepper.append(minus, out, plus);
+        row.append(info, stepper);
+        mealItems.append(row);
+      });
+      if (mealTotal) {
+        mealTotal.replaceChildren();
+        if (entries.length) {
+          const head = el('div', 'row');
+          head.append(el('strong', null, t('canteens.total', 'Итого')), el('strong', null, price(sum.price)));
+          /* null у любой выбранной позиции → сумма КБЖУ неизвестна: «нет данных» */
+          mealTotal.append(head, el('p', 'caption', partial ? t('canteens.kbjuNone', 'КБЖУ: нет данных') : kbjuLine(sum, 'canteens.kbjuG')));
+          if (partial) mealTotal.append(el('p', 'caption', t('canteens.partial', 'У части блюд в наборе нет КБЖУ — общую сумму КБЖУ не считаем.')));
+        }
+        mealTotal.hidden = !entries.length;
+      }
+      if (mealClear) mealClear.disabled = !entries.length;
+      document.querySelectorAll('[data-add-food]').forEach((b) => paintAdd(b, Number(b.dataset.addFood)));
+    };
+    const changeMeal = (item, delta) => {
+      const cur = meal.get(item.id);
+      const count = Math.min(MAX_PORTIONS, Math.max(0, (cur ? cur.count : 0) + delta));
+      if (!count) meal.delete(item.id);
+      else {
+        const c = state.canteens.find((x) => x.id === state.id);
+        meal.set(item.id, { item, canteen: cur ? cur.canteen : (c ? c.name : ''), count });
+      }
+      if (mealStatus) mealStatus.textContent = planNote;
+      renderMeal();
+    };
+    if (mealItems) {
+      mealItems.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-meal-step]');
+        if (!btn || btn.disabled) return;
+        const id = Number(btn.dataset.mealId);
+        const step = btn.dataset.mealStep;
+        const entry = meal.get(id);
+        if (!entry) return;
+        changeMeal(entry.item, Number(step));
+        /* фокус остаётся на той же кнопке пересобранной строки, иначе — на «Добавить» */
+        const next = mealItems.querySelector('[data-meal-id="' + id + '"][data-meal-step="' + step + '"]')
+          || document.querySelector('[data-add-food="' + id + '"]') || mealClear;
+        if (next && !next.disabled) next.focus();
+      });
+    }
+    if (mealClear) {
+      mealClear.addEventListener('click', () => {
+        meal.clear();
+        renderMeal();
+        if (mealStatus) mealStatus.textContent = t('canteens.cleared', 'Набор очищен') + '. ' + planNote;
+      });
+    }
+
+    /* --- меню выбранной столовой ------------------------------------------- */
     const loadMenu = async () => {
       if (!state.id) return;
       const seq = ++state.seq;
       clearTimeout(skTimer);
-      show('[data-menu-loading]', false);
       show('[data-menu-empty]', false);
       show('[data-menu-error]', false);
-      show('[data-menu-body]', false);
-      skTimer = setTimeout(() => show('[data-menu-loading]', true), 300);
+      skTimer = setTimeout(() => {
+        show('[data-menu-body]', false);
+        show('[data-menu-loading]', true);
+      }, 300);
       const data = await fetchJSON('/v1/canteens/' + state.id + '/menu');
       if (seq !== state.seq) return;
       clearTimeout(skTimer);
       show('[data-menu-loading]', false);
       if (!data || !Array.isArray(data.menu)) {
+        show('[data-menu-body]', false);
         show('[data-menu-error]', true);
         return;
       }
       const hours = document.querySelector('[data-canteen-hours]');
       if (hours) {
-        hours.textContent = 'Часы работы: ' + (data.hours || '—');
+        hours.textContent = t('canteens.hours', 'Часы работы: {hours}').replace('{hours}', data.hours || '—');
         hours.hidden = false;
       }
-      if (!data.menu.length) {
+      state.menu = data.menu;
+      const body = document.querySelector('[data-menu-body]');
+      if (!data.menu.length || !body) {
+        show('[data-menu-body]', false);
         show('[data-menu-empty]', true);
         return;
       }
-      const body = document.querySelector('[data-menu-body]');
-      if (!body) return;
       body.replaceChildren();
       data.menu.filter((m) => m.is_combo).forEach((m) => body.append(comboBlock(m)));
-      CATEGORY.forEach(([key, label]) => {
-        const items = data.menu.filter((m) => !m.is_combo && m.category === key);
+      const known = CATEGORY.map((c) => c[0]);
+      const groups = CATEGORY.map(([key, k, fb]) => [t(k, fb), data.menu.filter((m) => !m.is_combo && m.category === key)]);
+      groups.push([t('canteens.cat.other', 'Другое'), data.menu.filter((m) => !m.is_combo && !known.includes(m.category))]);
+      groups.forEach(([label, items]) => {
         if (!items.length) return;
         const section = el('section', 'section');
         const title = el('div', 'section-title');
@@ -3225,16 +3340,24 @@
       body.hidden = false;
     };
 
+    const syncChips = () => {
+      if (!chipsBox) return;
+      chipsBox.querySelectorAll('.chip').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String(Number(chip.dataset.canteenId) === state.id));
+      });
+    };
     const loadCanteens = async () => {
       const data = await fetchJSON('/v1/canteens');
-      if (!data || !Array.isArray(data.canteens) || !chipsBox) return;
+      if (!data || !Array.isArray(data.canteens) || !chipsBox) {
+        show('[data-menu-error]', true);
+        return;
+      }
       state.canteens = data.canteens;
       chipsBox.replaceChildren();
       state.canteens.forEach((c) => {
-        const chip = el('button', 'chip');
+        const chip = el('button', 'chip', [c.name, c.building].filter(Boolean).join(' · '));
         chip.type = 'button';
         chip.dataset.canteenId = String(c.id);
-        chip.textContent = [c.name, c.building, c.hours].filter(Boolean).join(' · ');
         chip.addEventListener('click', () => {
           if (state.id === c.id) return;
           state.id = c.id;
@@ -3243,19 +3366,17 @@
         });
         chipsBox.append(chip);
       });
-      if (!state.canteens.length) return;
-      state.id = state.canteens[0].id;
+      if (!state.canteens.length) {
+        show('[data-menu-empty]', true);
+        return;
+      }
+      if (!state.canteens.some((c) => c.id === state.id)) state.id = state.canteens[0].id;
       syncChips();
       loadMenu();
     };
-    const syncChips = () => {
-      chipsBox.querySelectorAll('.chip').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(Number(chip.dataset.canteenId) === state.id));
-      });
-    };
 
     const menuRetry = document.querySelector('[data-menu-retry]');
-    if (menuRetry) menuRetry.addEventListener('click', () => loadMenu());
+    if (menuRetry) menuRetry.addEventListener('click', () => (state.canteens.length ? loadMenu() : loadCanteens()));
 
     loadCanteens();
   }
