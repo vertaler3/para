@@ -5881,4 +5881,140 @@
     loadQueue();
     loadFeed(true);
   }
+  /* ---------- AI-ассистент (идея 5.19, Р-36; views/dashboard.csp) ---------- */
+  /* Плавающая кнопка открывает sheet-<dialog>. Переписка: GET
+     /v1/assistant/history (20 своих), вопрос: POST /v1/assistant/chat
+     {message} → {reply}. CSRF добавляет перехватчик fetch выше. Состояния:
+     скелетон (загрузка переписки) / пусто (подсказки-вопросы) / ошибка с
+     «Повторить» (повтор загрузки или повтор вопроса) / офлайн. Ответ модели
+     и история — только textContent (данные сервера, правило XSS 02 §6.4). */
+  const assistant = document.getElementById('assistant-sheet');
+  const assistantOpen = document.querySelector('[data-assistant-open]');
+  if (assistant && assistantOpen) {
+    const part = (sel) => assistant.querySelector(sel);
+    const list = part('[data-assistant-list]');
+    const feed = part('[data-assistant-feed]');
+    const input = part('[data-assistant-input]');
+    const form = part('[data-assistant-form]');
+    const send = part('[data-assistant-send]');
+    const showPart = (sel, on) => { const n = part(sel); if (n) n.hidden = !on; };
+    let loaded = false;
+    let busy = false;
+    let retryAction = null;
+
+    const scrollDown = () => { if (feed) feed.scrollTop = feed.scrollHeight; };
+    const addMessage = (role, text) => {
+      const li = document.createElement('li');
+      li.className = 'assistant-msg ' + (role === 'user' ? 'from-user' : 'from-bot');
+      const who = document.createElement('span');
+      who.className = 'sr-only';
+      who.textContent = (role === 'user' ? t('assistant.you', 'Вы') : t('assistant.bot', 'Ассистент')) + ': ';
+      li.append(who, document.createTextNode(String(text || '')));
+      list.append(li);
+      showPart('[data-assistant-empty]', false);
+      scrollDown();
+      return li;
+    };
+    const setError = (text, action) => {
+      retryAction = action || null;
+      const txt = part('[data-assistant-error-text]');
+      if (txt) txt.textContent = text || '';
+      showPart('[data-assistant-error]', Boolean(text));
+      showPart('[data-assistant-retry]', Boolean(action));
+    };
+    const setOffline = (on) => { showPart('[data-assistant-offline]', on); };
+    const setBusy = (on) => {
+      busy = on;
+      if (send) send.disabled = on;
+      showPart('[data-assistant-typing]', on);
+      if (feed) feed.setAttribute('aria-busy', on ? 'true' : 'false');
+      if (on) scrollDown();
+    };
+    const errorText = (status) => {
+      if (status === 429) return t('assistant.errRate', 'Слишком много сообщений — подождите минуту.');
+      if (status === 400) return t('assistant.errTooLong', 'Вопрос длиннее 700 символов — сократите его.');
+      return t('assistant.errUnavailable', 'Ассистент сейчас недоступен — попробуйте чуть позже.');
+    };
+
+    const loadHistory = async () => {
+      setError('');
+      if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
+      setOffline(false);
+      showPart('[data-assistant-empty]', false);
+      showPart('[data-assistant-skeleton]', true);
+      try {
+        const resp = await fetch('/v1/assistant/history', { headers: { Accept: 'application/json' } });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        list.replaceChildren();
+        (data.messages || []).forEach((m) => addMessage(m.role, m.content));
+        loaded = true;
+        showPart('[data-assistant-empty]', !list.children.length);
+      } catch (e) {
+        if (!navigator.onLine) { setOffline(true); applyOffline(true); }
+        else setError(t('assistant.errHistory', 'Не получилось загрузить переписку'), loadHistory);
+      } finally {
+        showPart('[data-assistant-skeleton]', false);
+        scrollDown();
+      }
+    };
+
+    const ask = async (text) => {
+      const message = String(text || '').trim();
+      if (!message || busy) { if (input) input.focus(); return; }
+      setError('');
+      if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
+      setOffline(false);
+      const bubble = addMessage('user', message);
+      if (input) { input.value = ''; input.style.height = ''; }
+      setBusy(true);
+      try {
+        const resp = await fetch('/v1/assistant/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        if (!resp.ok) {
+          bubble.remove();
+          if (input && !input.value) input.value = message;
+          setError(errorText(resp.status), resp.status === 400 ? null : () => ask(message));
+          if (!list.children.length) showPart('[data-assistant-empty]', true);
+          return;
+        }
+        const data = await resp.json();
+        addMessage('assistant', data.reply);
+      } catch (e) {
+        bubble.remove();
+        if (input && !input.value) input.value = message;
+        if (!navigator.onLine) { setOffline(true); applyOffline(true); }
+        else setError(errorText(0), () => ask(message));
+        if (!list.children.length) showPart('[data-assistant-empty]', true);
+      } finally {
+        setBusy(false);
+        if (input) input.focus();
+      }
+    };
+
+    assistantOpen.addEventListener('click', () => {
+      if (!assistant.open) assistant.showModal();
+      if (!loaded) loadHistory();
+      if (input) input.focus();
+    });
+    assistant.querySelectorAll('[data-assistant-close]').forEach((b) => b.addEventListener('click', () => assistant.close()));
+    assistant.addEventListener('click', (e) => { if (e.target === assistant) assistant.close(); });
+    assistant.addEventListener('close', () => assistantOpen.focus());
+    form.addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(input.value); }
+    });
+    input.addEventListener('input', () => {
+      input.style.height = '';
+      input.style.height = Math.min(input.scrollHeight, 128) + 'px';
+    });
+    assistant.querySelectorAll('[data-assistant-suggest]').forEach((b) => b.addEventListener('click', () => ask(b.textContent)));
+    const retry = part('[data-assistant-retry]');
+    if (retry) retry.addEventListener('click', () => { if (retryAction) retryAction(); });
+    window.addEventListener('online', () => { setOffline(false); if (assistant.open && !loaded) loadHistory(); });
+    window.addEventListener('offline', () => { if (assistant.open) setOffline(true); });
+  }
 })();

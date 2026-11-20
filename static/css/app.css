@@ -1058,3 +1058,35 @@ body .week-board .lesson.moved{box-shadow:inset 3px 0 0 0 var(--danger-text)}
 /* Навигация сотрудника: на ≥1100 «Люди»/«Карта» уже в «В кампусе» — в верхнем блоке не дублируются; таб-бар <1024 — подписи без переноса по слогам */
 @media(min-width:1100px){.staff-primary-nav .nav-link:is([data-nav=people],[data-nav=map]){display:none}}
 @media(max-width:1023px){.staff-primary-nav .nav-link span{font-size:.62rem;line-height:1.15;text-align:center;overflow-wrap:normal;word-break:normal;hyphens:none}}
+/* AI-ассистент (5.19, Р-36): плавающая кнопка над таб-баром + sheet переписки */
+.assistant-fab{position:fixed;z-index:40;right:1rem;bottom:calc(92px + env(safe-area-inset-bottom));display:inline-flex;align-items:center;gap:.5rem;min-height:52px;padding:.75rem 1.1rem;border-radius:var(--r-full);background:var(--primary);color:var(--on-primary);font-weight:600;font-size:.9375rem;box-shadow:var(--e3)}
+.assistant-fab:hover{background:var(--primary-hover)}.assistant-fab:active{background:var(--primary-pressed)}
+.assistant-fab .icon{width:22px;height:22px}
+@media(min-width:1024px){.assistant-fab{bottom:1.5rem;right:1.5rem}}
+@media(max-width:599px){.assistant-fab{width:56px;height:56px;padding:0;justify-content:center}.assistant-fab span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
+dialog.assistant-sheet{width:min(520px,calc(100% - 24px));height:min(680px,85dvh);max-height:85dvh;padding:1.25rem 1.25rem calc(.75rem + env(safe-area-inset-bottom));overflow:hidden;overscroll-behavior:contain}
+dialog.assistant-sheet[open]{display:flex;flex-direction:column;gap:.75rem}
+@media(max-width:599px){dialog.assistant-sheet{width:100%;height:88dvh;max-height:88dvh;padding-inline:1rem}}
+.assistant-head{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem}
+.assistant-head h2{margin-bottom:.15rem;font-size:1.125rem}
+.assistant-head .caption{font-size:.75rem}
+.assistant-feed{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;border-top:1px solid var(--border);padding-top:.75rem}
+.assistant-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.6rem}
+.assistant-msg{max-width:86%;padding:.65rem .9rem;border-radius:var(--r-lg);font-size:.9375rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.assistant-msg.from-user{align-self:flex-end;background:var(--primary-soft-bg);color:var(--primary-soft-text);border-bottom-right-radius:var(--r-sm)}
+.assistant-msg.from-bot{align-self:flex-start;background:var(--surface-2);color:var(--text);border-bottom-left-radius:var(--r-sm)}
+.assistant-typing{display:flex;align-items:center;gap:.5rem;margin-top:.75rem;font-size:.875rem;color:var(--text-2)}
+.assistant-dots{display:inline-flex;gap:3px}.assistant-dots span{width:6px;height:6px;border-radius:var(--r-full);background:var(--text-2);animation:breathe 1.2s ease-in-out infinite}
+.assistant-dots span:nth-child(2){animation-delay:.2s}.assistant-dots span:nth-child(3){animation-delay:.4s}
+@media(prefers-reduced-motion:reduce){.assistant-dots span{animation:none}}
+.assistant-skeleton .skeleton.block{height:3.5rem;width:80%}.assistant-skeleton-right{margin-left:auto}
+.assistant-empty{padding:.5rem 0}.assistant-empty h3{margin-bottom:.4rem}
+.assistant-suggest{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem}
+.assistant-error{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.75rem 1rem;border:1px solid var(--danger-text);border-radius:var(--r-md);background:var(--danger-bg);color:var(--danger-text)}
+.assistant-error [data-assistant-retry]{flex:none;white-space:nowrap}.assistant-error strong{font-size:.875rem}.assistant-error .caption{color:var(--danger-text)}
+.assistant-offline{padding:.75rem 1rem;border-radius:var(--r-md);background:var(--surface-2);color:var(--text-2);font-size:.875rem}
+.assistant-form{display:flex;gap:.5rem;align-items:flex-end}
+.assistant-form textarea{flex:1;min-height:48px;max-height:8rem;resize:none;line-height:1.4}
+.assistant-send{flex:none;width:48px;padding:0;color:var(--on-primary);background:var(--primary);border-color:var(--primary)}
+.assistant-send:hover{background:var(--primary-hover)}.assistant-send:disabled{background:var(--surface-2);color:var(--text-2);border-color:var(--border)}
+.assistant-note{font-size:.75rem;text-align:center}
