@@ -4245,7 +4245,8 @@
        Э7/Р-18): после обмена initCurrentSegment() перечитывает
        data-segment контейнера и запускает логику активной вкладки.
        Данные — клиент: лента — прежний GET /v1/notifications (Э6, без
-       изменений), новости/события — GET /v1/news (NewsCtrl, 5.17).
+       изменений), новости — GET /v1/news + GET /v1/announcements одной
+       лентой (фикс 2026-11-20), события — GET /v1/news (NewsCtrl, 5.17).
        Контролы — делегирование на document: контейнер сегмента
        перерисовывается htmx ЦЕЛИКОМ, слушатели на его элементах не
        переживают обмен (тот же приём, что у sheet «Детали пары» экрана
@@ -4331,7 +4332,9 @@
       const full = row.querySelector('.news-full');
       if (full) full.hidden = !open;
     };
-    const newsState = { mode: null, cursor: null, items: [] };
+    /* annCursor — курсор ленты объявлений в смешанной ленте «Новости»
+       (фикс 2026-11-20); в «Событиях»/«Объявлениях» не используется */
+    const newsState = { mode: null, cursor: null, annCursor: null, items: [] };
     const renderNewsList = () => {
       const list = document.querySelector('[data-news-list]');
       if (!list) return;
@@ -4344,7 +4347,56 @@
        на клиенте). Страница могла не дать ни одного события: пока
        строк-событий нет и есть next_cursor, догружаем следующую страницу
        сами (кап 10 — лента конечна, детектор next_cursor её закрывает). */
+    /* строка объявления деканата (GET /v1/announcements) в форме новости:
+       бейдж «Объявление» вместо категории (renderNewsRow) */
+    const annToNews = (a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' });
+    const byPublishedDesc = (x, y) => String(y.published_at || '').localeCompare(String(x.published_at || ''));
+    /* фикс 2026-11-20: «Новости» — ОДНА лента новостей (GET /v1/news) и
+       объявлений (GET /v1/announcements), по published_at, свежее сверху.
+       У каждой ленты свой курсор; «Ещё» догружает те, где курсор есть, и
+       пересортировывает всю ленту. Сбой любой из лент — как сбой ленты:
+       первая страница — экранная ошибка с «Повторить» (иначе объявления
+       молча пропадут), догрузка — inline-предупреждение у «Ещё». */
+    const loadMixedNews = async (more) => {
+      show('[data-news-error]', false);
+      show('[data-news-warn]', false);
+      if (!more) {
+        show('[data-news-list]', false);
+        show('[data-news-empty]', false);
+        show('[data-news-more]', false);
+        show('[data-news-loading]', true);
+      }
+      const q = (c) => (c ? '?cursor=' + encodeURIComponent(c) : '');
+      const wantNews = !more || Boolean(newsState.cursor);
+      const wantAnn = !more || Boolean(newsState.annCursor);
+      const [news, ann] = await Promise.all([
+        wantNews ? fetchJSON('/v1/news' + q(more ? newsState.cursor : null)) : Promise.resolve({ news: [] }),
+        wantAnn ? fetchJSON('/v1/announcements' + q(more ? newsState.annCursor : null)) : Promise.resolve({ announcements: [] })
+      ]);
+      show('[data-news-loading]', false);
+      const okNews = news && Array.isArray(news.news);
+      const okAnn = ann && Array.isArray(ann.announcements);
+      if (!okNews || !okAnn) {
+        if (more) {
+          const warn = document.querySelector('[data-news-warn]');
+          if (warn) warn.textContent = t('toast.failLoadMore', 'Не получилось загрузить ещё — попробуйте ещё раз');
+          show('[data-news-warn]', true);
+        } else {
+          show('[data-news-list]', false);
+          show('[data-news-error]', true);
+        }
+        return;
+      }
+      if (wantNews) newsState.cursor = news.next_cursor || null;
+      if (wantAnn) newsState.annCursor = ann.next_cursor || null;
+      const page = news.news.concat(ann.announcements.map(annToNews));
+      newsState.items = (more ? newsState.items.concat(page) : page).sort(byPublishedDesc);
+      renderNewsList();
+      show('[data-news-more]', Boolean(newsState.cursor || newsState.annCursor));
+      if (!newsState.items.length) show('[data-news-empty]', true);
+    };
     const loadNews = async (cursor, depth) => {
+      if (newsState.mode === 'news') { loadMixedNews(Boolean(cursor)); return; }
       show('[data-news-error]', false);
       show('[data-news-warn]', false);
       if (!cursor) {
@@ -4360,7 +4412,7 @@
       const base = isAnn ? '/v1/announcements' : '/v1/news';
       const raw = await fetchJSON(base + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
       const data = isAnn && raw && Array.isArray(raw.announcements)
-        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' })) }
+        ? { next_cursor: raw.next_cursor, news: raw.announcements.map(annToNews) }
         : raw;
       show('[data-news-loading]', false);
       if (!data || !Array.isArray(data.news)) {
@@ -4400,6 +4452,7 @@
       if (seg === 'news' || seg === 'events' || seg === 'announcements') {
         newsState.mode = seg;
         newsState.cursor = null;
+        newsState.annCursor = null;
         newsState.items = [];
         loadNews(null, 0);
         return;
@@ -4553,6 +4606,7 @@
       const newsMore = event.target.closest('[data-news-more]');
       if (newsMore) {
         if (newsState.cursor) loadNews(newsState.cursor, 0);
+        else if (newsState.mode === 'news' && newsState.annCursor) loadMixedNews(true);
         return;
       }
       const newsRetry = event.target.closest('[data-news-retry]');
@@ -5880,5 +5934,157 @@
     loadSummary(false);
     loadQueue();
     loadFeed(true);
+  }
+  /* ---------- AI-ассистент (идея 5.19, Р-36; views/dashboard.csp) ---------- */
+  /* Плавающая кнопка открывает sheet-<dialog>. Переписка: GET
+     /v1/assistant/history (20 своих), вопрос: POST /v1/assistant/chat
+     {message} → {reply}. CSRF добавляет перехватчик fetch выше. Состояния:
+     скелетон (загрузка переписки) / пусто (подсказки-вопросы) / ошибка с
+     «Повторить» (повтор загрузки или повтор вопроса) / офлайн. Ответ модели
+     и история — только textContent (данные сервера, правило XSS 02 §6.4). */
+  const assistant = document.getElementById('assistant-sheet');
+  const assistantOpen = document.querySelector('[data-assistant-open]');
+  if (assistant && assistantOpen) {
+    const part = (sel) => assistant.querySelector(sel);
+    const list = part('[data-assistant-list]');
+    const feed = part('[data-assistant-feed]');
+    const input = part('[data-assistant-input]');
+    const form = part('[data-assistant-form]');
+    const send = part('[data-assistant-send]');
+    const showPart = (sel, on) => { const n = part(sel); if (n) n.hidden = !on; };
+    let loaded = false;
+    let busy = false;
+    let retryAction = null;
+
+    const scrollDown = () => { if (feed) feed.scrollTop = feed.scrollHeight; };
+    const addMessage = (role, text) => {
+      const li = document.createElement('li');
+      li.className = 'assistant-msg ' + (role === 'user' ? 'from-user' : 'from-bot');
+      const who = document.createElement('span');
+      who.className = 'sr-only';
+      who.textContent = (role === 'user' ? t('assistant.you', 'Вы') : t('assistant.bot', 'Ассистент')) + ': ';
+      li.append(who, document.createTextNode(String(text || '')));
+      list.append(li);
+      showPart('[data-assistant-empty]', false);
+      scrollDown();
+      return li;
+    };
+    const setError = (text, action) => {
+      retryAction = action || null;
+      const txt = part('[data-assistant-error-text]');
+      if (txt) txt.textContent = text || '';
+      showPart('[data-assistant-error]', Boolean(text));
+      showPart('[data-assistant-retry]', Boolean(action));
+    };
+    const setOffline = (on) => { showPart('[data-assistant-offline]', on); };
+    const setBusy = (on) => {
+      busy = on;
+      if (send) send.disabled = on;
+      showPart('[data-assistant-typing]', on);
+      if (feed) feed.setAttribute('aria-busy', on ? 'true' : 'false');
+      if (on) scrollDown();
+    };
+    const errorText = (status) => {
+      if (status === 429) return t('assistant.errRate', 'Слишком много сообщений — подождите минуту.');
+      if (status === 401 || status === 403) return t('assistant.errSession', 'Сессия устарела — обновите страницу.');
+      if (status === 400) return t('assistant.errTooLong', 'Вопрос длиннее 700 символов — сократите его.');
+      return t('assistant.errUnavailable', 'Ассистент сейчас недоступен — попробуйте чуть позже.');
+    };
+
+    let loadingHistory = false;
+    const loadHistory = async () => {
+      if (loadingHistory) return;
+      setError('');
+      if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
+      setOffline(false);
+      showPart('[data-assistant-empty]', false);
+      showPart('[data-assistant-skeleton]', true);
+      /* пока грузится история, отправка закрыта: иначе replaceChildren
+         стёр бы свежий вопрос (находка checker) */
+      loadingHistory = true;
+      if (send) send.disabled = true;
+      try {
+        const resp = await fetch('/v1/assistant/history', { headers: { Accept: 'application/json' } });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        list.replaceChildren();
+        (data.messages || []).forEach((m) => addMessage(m.role, m.content));
+        loaded = true;
+        showPart('[data-assistant-empty]', !list.children.length);
+      } catch (e) {
+        if (!navigator.onLine) { setOffline(true); applyOffline(true); }
+        else setError(t('assistant.errHistory', 'Не получилось загрузить переписку'), loadHistory);
+      } finally {
+        loadingHistory = false;
+        if (send) send.disabled = busy;
+        showPart('[data-assistant-skeleton]', false);
+        scrollDown();
+      }
+    };
+
+    const ask = async (text) => {
+      const message = String(text || '').trim();
+      if (!message || busy || loadingHistory) { if (input) input.focus(); return; }
+      setError('');
+      if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
+      setOffline(false);
+      const bubble = addMessage('user', message);
+      if (input) { input.value = ''; input.style.height = ''; }
+      setBusy(true);
+      try {
+        const resp = await fetch('/v1/assistant/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        if (!resp.ok) {
+          bubble.remove();
+          if (input && !input.value) input.value = message;
+          setError(errorText(resp.status), [400, 401, 403].includes(resp.status) ? null : () => ask(message));
+          if (!list.children.length) showPart('[data-assistant-empty]', true);
+          return;
+        }
+        const data = await resp.json();
+        addMessage('assistant', data.reply);
+      } catch (e) {
+        bubble.remove();
+        if (input && !input.value) input.value = message;
+        if (!navigator.onLine) { setOffline(true); applyOffline(true); }
+        else setError(errorText(0), () => ask(message));
+        if (!list.children.length) showPart('[data-assistant-empty]', true);
+      } finally {
+        setBusy(false);
+        if (input) input.focus();
+      }
+    };
+
+    assistantOpen.addEventListener('click', () => {
+      if (!assistant.open) assistant.showModal();
+      if (!loaded) loadHistory();
+      if (input) input.focus();
+    });
+    assistant.querySelectorAll('[data-assistant-close]').forEach((b) => b.addEventListener('click', () => assistant.close()));
+    /* закрытие только по подложке: клик в паддинг самого dialog тоже даёт
+       target === dialog — сверяем координаты с его прямоугольником */
+    assistant.addEventListener('click', (e) => {
+      if (e.target !== assistant) return;
+      const r = assistant.getBoundingClientRect();
+      const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      if (!inside) assistant.close();
+    });
+    assistant.addEventListener('close', () => assistantOpen.focus());
+    form.addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(input.value); }
+    });
+    input.addEventListener('input', () => {
+      input.style.height = '';
+      input.style.height = Math.min(input.scrollHeight, 128) + 'px';
+    });
+    assistant.querySelectorAll('[data-assistant-suggest]').forEach((b) => b.addEventListener('click', () => ask(b.textContent)));
+    const retry = part('[data-assistant-retry]');
+    if (retry) retry.addEventListener('click', () => { if (retryAction) retryAction(); });
+    window.addEventListener('online', () => { setOffline(false); if (assistant.open && !loaded) loadHistory(); });
+    window.addEventListener('offline', () => { if (assistant.open) setOffline(true); });
   }
 })();
