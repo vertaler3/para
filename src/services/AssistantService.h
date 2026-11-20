@@ -31,10 +31,22 @@ namespace para {
 // модель и системный промт в коде и репозитории не живут, в лог не пишутся.
 //
 // Изоляция (02 §6.3 п.2): контекст запроса собирается ТОЛЬКО из данных
-// пользователя сессии — его группа (расписание сегодня/завтра), его план
-// сессии, его заявки, дедлайны его группы и личные, новости видимой ему
-// аудитории; история — WHERE user_id = сессия. Чужих строк в промте нет по
-// построению — path-id у роутов нет, OwnershipGuard не применим.
+// пользователя сессии — его группа (расписание сегодня/завтра, в контексте
+// помечено «расписание твоей группы» — модель не подставляет его вместо
+// чужих групп), его план сессии, его заявки, дедлайны его группы и личные,
+// новости видимой ему аудитории; история — WHERE user_id = сессия. Чужих
+// строк в промте нет по построению — path-id у роутов нет, OwnershipGuard
+// не применим.
+//
+// Аудитории: если в сообщении есть номер вида «1207»/«Б-204» (roomQuery),
+// в контекст добавляется результат поиска по карте — та же логика, что
+// GET /v1/map/rooms?q=… (корпус/этаж/тип), чтобы вопросы «где ауд. N»
+// не оставались без данных портала.
+//
+// Время в контексте — без перевода часовых поясов, ровно как в остальных
+// экранах портала (сырое «HH:MM» из БД): чат и расписание говорят одно и
+// то же время (фикс 21.11: раньше контекст сдвигал UTC→МСК и модель
+// называла 13:00 там, где UI показывает 10:00).
 //
 // fail-closed: ошибка БД при сборке контекста → Error (500), частичный
 // контекст модели не уходит (иначе она «честно» ответит «пар нет»). Ошибка
@@ -107,10 +119,17 @@ class AssistantService
     };
 
     // --- Контекст и запрос к модели (чистые функции — юнит-тесты) --------
-    // ISO «…Z» → «HH:MM» по Москве (UTC+3, без перехода на летнее время).
-    static std::string mskTime(const std::string& iso);
-    // ISO «…Z» → «ДД.ММ HH:MM» по Москве.
-    static std::string mskDateTime(const std::string& iso);
+    // ISO «…Z» → «HH:MM» БЕЗ перевода поясов — как время показано в
+    // остальных экранах портала (сырое время БД; фикс 21.11).
+    static std::string portalTime(const std::string& iso);
+    // ISO «…Z» → «ДД.ММ HH:MM» без перевода поясов.
+    static std::string portalDateTime(const std::string& iso);
+
+    // Номер аудитории в тексте сообщения («1207», «Б-204», «3105») или
+    // пустая строка. 2–4 символа: 1–2 буквы + необязательный дефис +
+    // 3–4 цифры; буквы приводятся к верхнему регистру. Нужна, чтобы
+    // подмешать в контекст поиск по карте (см. collectContext).
+    static std::string roomQuery(const std::string& message);
 
     struct ContextData
     {
@@ -120,6 +139,8 @@ class AssistantService
         Json::Value deadlines;  // [{title, kind, due_at}]
         Json::Value applications;  // активные заявки (appJson)
         Json::Value campus;     // будущие события ленты news
+        Json::Value rooms;      // карта по номеру из сообщения [{name,
+                                //  building, floor, kind}] (roomQuery)
     };
     static std::string renderContext(const ContextData& d);
 
@@ -157,10 +178,13 @@ class AssistantService
     using ChatCb = std::function<void(ChatResult)>;
 
     // Собрать контекст только этой сессии (тестам — отдельно от chat).
+    // message нужен для roomQuery: аудитория из вопроса подмешивается
+    // из карты портала (MapService-подобный LIKE-поиск).
     using ContextCb = std::function<void(bool ok, ContextData)>;
     static void collectContext(drogon::orm::DbClientPtr db,
                                const SessionInfo& session,
                                const std::string& today,
+                               const std::string& message,
                                ContextCb cb);
 
     static void chat(drogon::orm::DbClientPtr db,

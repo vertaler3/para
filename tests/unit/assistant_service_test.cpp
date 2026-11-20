@@ -318,7 +318,7 @@ TEST_CASE("ассистент: контекст и промт — только �
     CHECK(msgs[0]["role"].asString() == "system");
     const std::string sys = msgs[0]["content"].asString();
     CHECK(sys.rfind("SYSTEM-PROMPT-TEST", 0) == 0);
-    CHECK(sys.find("Расписание на завтра") != std::string::npos);
+    CHECK(sys.find("Расписание твоей группы на завтра") != std::string::npos);
     CHECK(sys.find("МАРКЕР-СВОЙ-ДЕДЛАЙН-АНИ") != std::string::npos);
     // Чужое: личный дедлайн Марка (группа 2) и заявка Дины «в работе».
     CHECK(sys.find("МАРКЕР-ЧУЖОЙ-ДЕДЛАЙН-МАРКА") == std::string::npos);
@@ -481,4 +481,75 @@ TEST_CASE("ассистент: сбой одного источника конт
                            llm.transport());
     CHECK(r.status == AssistantService::Status::Error);
     CHECK(*llm.calls == 0);
+}
+
+// Фикс 21.11 (журнал 2026-11-21-ассистент-фиксы.md): аудитория из вопроса
+// подмешивается из карты (как GET /v1/map/rooms?q=…), расписание в контексте
+// помечено «твоей группы» и чужих групп не содержит, время — без перевода
+// поясов, как в UI портала.
+TEST_CASE("ассистент: контекст — аудитория из карты и только своя группа")
+{
+    // Извлечение номера аудитории: формы «1207», «Б-204», «в-216» → в
+    // каноническом виде; вопросы без аудитории — пусто.
+    CHECK(AssistantService::roomQuery("Где аудитория 1207?") == "1207");
+    CHECK(AssistantService::roomQuery("как пройти в Б-204?") == "Б-204");
+    CHECK(AssistantService::roomQuery("Что в ауд. в-216 завтра?") == "В-216");
+    CHECK(AssistantService::roomQuery("когда пара в 3105?") == "3105");
+    CHECK(AssistantService::roomQuery("Какие у меня дедлайны?").empty());
+    CHECK(AssistantService::roomQuery("пары у группы 4-МЭО в пятницу")
+              .empty());
+
+    // Время без перевода поясов: 10:00Z — это «10:00» (не «13:00» МСК),
+    // как в остальных экранах портала.
+    CHECK(AssistantService::portalTime("2026-11-20T10:00:00Z") == "10:00");
+    CHECK(AssistantService::portalDateTime("2026-11-30T21:00:00Z") ==
+          "30.11 21:00");
+
+    Fixture f;
+    // Чужая пара-маркер: дисциплина-маркер + событие группы 2 (4-МЭО)
+    // сегодня в 12:00 Z — в контексте Ани её быть не может, в контексте
+    // Марка (группа 2) она есть в разделе «Расписание твоей группы».
+    exec(f.dbPath,
+         "INSERT INTO disciplines(code, title, control_type) VALUES"
+         " ('M-ARKER', 'МАРКЕР-ЧУЖАЯ-ПАРА', 'credit');"
+         "INSERT INTO schedule_events(group_id, discipline_id, teacher_id,"
+         " room, kind, starts_at, ends_at, status) VALUES"
+         " (2, (SELECT id FROM disciplines WHERE title='МАРКЕР-ЧУЖАЯ-ПАРА'),"
+         " NULL, '3105', 'seminar',"
+         " strftime('%Y-%m-%dT12:00:00Z','now'),"
+         " strftime('%Y-%m-%dT13:30:00Z','now'), 'normal');");
+
+    FakeLlm llm;
+    llm.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "Где аудитория 1207?",
+                    config(), llm.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys = (*llm.seen)["messages"][0]["content"].asString();
+    // Аудитория из вопроса — данными карты (фикстуры: 1207 → Корпус Б,
+    // этаж 2, аудитория; UPDATE rooms в fixtures.sql).
+    CHECK(sys.find("1207 — Корпус Б") != std::string::npos);
+    CHECK(sys.find("этаж 2") != std::string::npos);
+    CHECK(sys.find("аудитория") != std::string::npos);
+    // Расписание помечено «твоей группы», чужих групп в контексте нет.
+    CHECK(sys.find("Расписание твоей группы на сегодня") != std::string::npos);
+    CHECK(sys.find("расписание твоей группы") != std::string::npos);
+    CHECK(sys.find("МАРКЕР-ЧУЖАЯ-ПАРА") == std::string::npos);
+    CHECK(sys.find("без перевода поясов") != std::string::npos);
+
+    // Марк (группа 2) свою пару-маркер видит — положительный контроль.
+    FakeLlm llm2;
+    llm2.reply = "ok";
+    REQUIRE(runChat(f, session(3, "mark.demo"), "что у меня сегодня?",
+                    config(), llm2.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys2 = (*llm2.seen)["messages"][0]["content"].asString();
+    CHECK(sys2.find("МАРКЕР-ЧУЖАЯ-ПАРА") != std::string::npos);
+    // Вопрос без аудитории — секции карты в контексте нет.
+    FakeLlm llm3;
+    llm3.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "какие дедлайны?", config(),
+                    llm3.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys3 = (*llm3.seen)["messages"][0]["content"].asString();
+    CHECK(sys3.find("из карты портала") == std::string::npos);
 }

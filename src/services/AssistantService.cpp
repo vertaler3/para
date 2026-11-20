@@ -56,26 +56,27 @@ std::time_t parseIso(const std::string& iso)
     return timegm(&tm);
 }
 
-constexpr std::time_t kMskOffset = 3 * 3600;  // UTC+3 круглый год
-
-std::string fmtMsk(const std::string& iso, const char* pattern)
+// Форматирование времени контекста БЕЗ перевода поясов — как в остальных
+// экранах портала: чат и расписание называют одно и то же время (фикс
+// 21.11: раньше контекст сдвигал UTC→МСК и модель говорила «13:00» там,
+// где UI показывает «10:00»).
+std::string fmtPortal(const std::string& iso, const char* pattern)
 {
     const std::time_t t = parseIso(iso);
     if (t < 0)
         return iso;
-    const std::time_t local = t + kMskOffset;
     std::tm tm{};
-    gmtime_r(&local, &tm);
+    gmtime_r(&t, &tm);
     char buf[32];
     std::strftime(buf, sizeof buf, pattern, &tm);
     return buf;
 }
 
-// «Сегодня» по Москве: контекст подписан «время московское», и с 00:00 до
-// 03:00 МСК UTC-дата ещё вчерашняя (находка checker).
-std::string todayMsk()
+// «Сегодня» в UTC-календаре проекта — тот же «сегодня», что в
+// /v1/schedule/today и на дашборде.
+std::string todayUtc()
 {
-    const std::time_t t = std::time(nullptr) + kMskOffset;
+    const std::time_t t = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&t, &tm);
     char buf[16];
@@ -83,9 +84,10 @@ std::string todayMsk()
     return buf;
 }
 
-std::string mskDay(const std::string& iso)
+// День ISO-строки «…Z» как есть (UTC-календарь портала).
+std::string isoDay(const std::string& iso)
 {
-    return fmtMsk(iso, "%Y-%m-%d");
+    return iso.size() >= 10 ? iso.substr(0, 10) : iso;
 }
 
 const char* weekdayRu(const std::string& date)
@@ -133,8 +135,8 @@ std::string str(const Json::Value& v, const char* key)
 
 void renderLesson(std::string& out, const Json::Value& e)
 {
-    out += "- " + AssistantService::mskTime(str(e, "starts_at")) + "–" +
-           AssistantService::mskTime(str(e, "ends_at")) + " " +
+    out += "- " + AssistantService::portalTime(str(e, "starts_at")) + "–" +
+           AssistantService::portalTime(str(e, "ends_at")) + " " +
            str(e, "discipline") + " (" + lessonKind(str(e, "kind")) +
            "), ауд. " + str(e, "room");
     if (!str(e, "building").empty())
@@ -147,7 +149,7 @@ void renderLesson(std::string& out, const Json::Value& e)
         out += " — ПЕРЕНЕСЕНА";
         std::string was;
         if (!str(e, "prev_starts_at").empty())
-            was += AssistantService::mskDateTime(str(e, "prev_starts_at"));
+            was += AssistantService::portalDateTime(str(e, "prev_starts_at"));
         if (!str(e, "prev_room").empty())
             was += (was.empty() ? "ауд. " : ", ауд. ") + str(e, "prev_room");
         if (!was.empty())
@@ -267,33 +269,111 @@ AssistantService::RateLimiter& AssistantService::RateLimiter::instance()
 
 // --- Контекст ------------------------------------------------------------------
 
-std::string AssistantService::mskTime(const std::string& iso)
+std::string AssistantService::portalTime(const std::string& iso)
 {
-    return fmtMsk(iso, "%H:%M");
+    return fmtPortal(iso, "%H:%M");
 }
 
-std::string AssistantService::mskDateTime(const std::string& iso)
+std::string AssistantService::portalDateTime(const std::string& iso)
 {
-    return fmtMsk(iso, "%d.%m %H:%M");
+    return fmtPortal(iso, "%d.%m %H:%M");
+}
+
+std::string AssistantService::roomQuery(const std::string& message)
+{
+    // Токен = буквы/цифры/дефис; валиден, если 0–2 БУКВЫ + необязательный
+    // дефис + 3–4 ЦИФРЫ («1207», «3105», «Б-204», «в-216» → «В-216»).
+    // Годы и проценты не фильтруем специально: LIKE по rooms честно
+    // вернёт пусто — в контекст ничего лишнего не попадёт.
+    std::string token;
+    auto flush = [&token]() {
+        if (token.empty())
+            return std::string();
+        std::string letters, digits;
+        std::size_t i = 0;
+        for (; i < token.size() &&
+               (std::isalpha(static_cast<unsigned char>(token[i])) ||
+                token[i] & 0x80);  // кириллица — байты >= 0x80
+             ++i)
+            letters += token[i];
+        if (i < token.size() && token[i] == '-')
+            ++i;
+        digits = token.substr(i);
+        const bool shape = digits.size() >= 3 && digits.size() <= 4 &&
+                           digits.find_first_not_of("0123456789") ==
+                               std::string::npos &&
+                           letters.size() <= 4;  // ≤2 буквы в UTF-8 = ≤4 байт
+        if (!shape)
+        {
+            token.clear();
+            return std::string();
+        }
+        // Кириллица нижний→верхний регистр (UTF-8, U+0430..U+044F, Ё U+0451).
+        std::string upper;
+        for (std::size_t k = 0; k < letters.size(); ++k)
+        {
+            unsigned char a = letters[k], b = k + 1 < letters.size()
+                                                 ? letters[k + 1]
+                                                 : '\0';
+            if (a == 0xD0 && b >= 0xB0 && b <= 0xBF)
+            {
+                upper += a;
+                upper += static_cast<char>(b - 0x20);
+                ++k;
+            }
+            else if (a == 0xD1 && (b == 0x91 || (b >= 0x80 && b <= 0x8F)))
+            {
+                // ё→Ё, р..я → Р..Я
+                upper += a;
+                upper += static_cast<char>(b == 0x91 ? 0x81 : b - 0x20);
+                ++k;
+            }
+            else
+                upper += static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(a)));
+        }
+        std::string result = upper;
+        if (!letters.empty() && i > 0 && token[i - 1] == '-')
+            result += "-";
+        result += digits;
+        token.clear();
+        return result;
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' ||
+            static_cast<unsigned char>(c) >= 0x80)  // кириллица
+            token += c;
+        else
+        {
+            const std::string found = flush();
+            if (!found.empty())
+                return found;
+        }
+    }
+    return flush();
 }
 
 std::string AssistantService::renderContext(const ContextData& d)
 {
     const std::string tomorrow = ScheduleService::addDays(d.today, 1);
     std::string out;
-    out += "ДАННЫЕ ПОРТАЛА ДЛЯ ЭТОГО СТУДЕНТА (вымышленные; время московское):\n";
+    out += "ДАННЫЕ ПОРТАЛА ДЛЯ ЭТОГО СТУДЕНТА (вымышленные; время — как в "
+           "интерфейсе портала, без перевода поясов):\n";
     out += "Сегодня " + d.today + ", " + weekdayRu(d.today) + ".\n";
+    out += "Ниже — только твои данные: расписание твоей группы и твои дела."
+           " Данных о других группах в этом контексте нет.\n";
 
     for (const auto& [day, label] :
-         {std::pair{d.today, "Расписание на сегодня"},
-          std::pair{tomorrow, "Расписание на завтра"}})
+         {std::pair{d.today, "Расписание твоей группы на сегодня"},
+          std::pair{tomorrow, "Расписание твоей группы на завтра"}})
     {
         out += std::string("\n") + label + " (" + day + ", " + weekdayRu(day) +
                "):\n";
         bool any = false;
         if (d.events.isArray())
             for (const auto& e : d.events)
-                if (mskDay(str(e, "starts_at")) == day)
+                if (isoDay(str(e, "starts_at")) == day)
                 {
                     renderLesson(out, e);
                     any = true;
@@ -309,7 +389,7 @@ std::string AssistantService::renderContext(const ContextData& d)
         for (const auto& e : d.exams)
             if (str(e, "starts_at") >= now)
             {
-                out += "- " + mskDateTime(str(e, "starts_at")) + " " +
+                out += "- " + portalDateTime(str(e, "starts_at")) + " " +
                        planKind(str(e, "kind")) + ": " + str(e, "discipline") +
                        ", ауд. " + str(e, "room") + "\n";
                 anyExam = true;
@@ -320,7 +400,7 @@ std::string AssistantService::renderContext(const ContextData& d)
     out += "\nАктивные дедлайны:\n";
     if (d.deadlines.isArray() && !d.deadlines.empty())
         for (const auto& x : d.deadlines)
-            out += "- до " + mskDateTime(str(x, "due_at")) + ": " +
+            out += "- до " + portalDateTime(str(x, "due_at")) + ": " +
                    str(x, "title") + " (" + planKind(str(x, "kind")) + ")\n";
     else
         out += "- нет\n";
@@ -340,7 +420,7 @@ std::string AssistantService::renderContext(const ContextData& d)
     if (d.campus.isArray() && !d.campus.empty())
         for (const auto& n : d.campus)
         {
-            out += "- " + mskDateTime(str(n, "event_at")) + " " +
+            out += "- " + portalDateTime(str(n, "event_at")) + " " +
                    str(n, "title");
             if (!str(n, "location").empty())
                 out += ", " + str(n, "location");
@@ -348,6 +428,22 @@ std::string AssistantService::renderContext(const ContextData& d)
         }
     else
         out += "- нет\n";
+
+    // Аудитории из вопроса (карта портала): раздел добавляем только при
+    // непустом результате — пустой не подсказывает модели «нет аудитории».
+    if (d.rooms.isArray() && !d.rooms.empty())
+    {
+        out += "\nАудитории по твоему вопросу (из карты портала):\n";
+        for (const auto& r : d.rooms)
+        {
+            out += "- " + str(r, "name") + " — " + str(r, "building");
+            if (r["floor"].isIntegral())
+                out += ", этаж " + std::to_string(r["floor"].asInt64());
+            if (!str(r, "kind").empty())
+                out += " (" + str(r, "kind") + ")";
+            out += "\n";
+        }
+    }
     return out;
 }
 
@@ -478,6 +574,13 @@ const std::string kInsertPairSql =
     "INSERT INTO assistant_messages(user_id, role, content) VALUES "
     "($1, 'user', $2), ($3, 'assistant', $4)";
 
+// Поиск аудитории для контекста — та же логика, что GET /v1/map/rooms?q=…
+// (MapService::rooms): подстрочный LIKE по имени с экранированием.
+const std::string kRoomSql =
+    "SELECT r.name, b.name AS building, r.floor, r.kind FROM rooms r"
+    " JOIN buildings b ON b.id = r.building_id"
+    " WHERE r.name LIKE $1 ESCAPE '\\' ORDER BY r.id ASC LIMIT 5";
+
 // Сборщик параллельных источников: cb стреляет ровно один раз — когда
 // отработали все, либо при первой ошибке (fail-closed).
 struct Gather
@@ -504,13 +607,15 @@ struct Gather
 void AssistantService::collectContext(orm::DbClientPtr db,
                                       const SessionInfo& session,
                                       const std::string& today,
+                                      const std::string& message,
                                       ContextCb cb)
 {
     const int64_t userId = session.userId;
     ScheduleService::groupOfUser(
         db, userId,
-        [db, session, today, userId, cb](ScheduleService::GroupLookup lookup,
-                                         std::optional<int64_t> groupId) {
+        [db, session, today, message, userId, cb](
+            ScheduleService::GroupLookup lookup,
+            std::optional<int64_t> groupId) {
             if (lookup == ScheduleService::GroupLookup::Error)
             {
                 cb(false, ContextData{});
@@ -524,15 +629,61 @@ void AssistantService::collectContext(orm::DbClientPtr db,
             g->data.deadlines = Json::Value(Json::arrayValue);
             g->data.applications = Json::Value(Json::arrayValue);
             g->data.campus = Json::Value(Json::arrayValue);
+            g->data.rooms = Json::Value(Json::arrayValue);
             const bool hasGroup = groupId.has_value();
-            g->pending = hasGroup ? 5 : 4;
+            // +1 источник, если в вопросе есть номер аудитории — ищем по
+            // карте (GET /v1/map/rooms?q=…): «где аудитория 1207?» больше
+            // не остаётся без данных портала.
+            const std::string room = roomQuery(message);
+            g->pending = (hasGroup ? 5 : 4) + (room.empty() ? 0 : 1);
             const std::string now = nowIso();
+
+            if (!room.empty())
+            {
+                // Экранирование спецсимволов LIKE — как MapService::rooms.
+                std::string like = "%";
+                for (char c : room)
+                {
+                    if (c == '\\' || c == '%' || c == '_')
+                        like += '\\';
+                    like += c;
+                }
+                like += '%';
+                *db << kRoomSql << like >>
+                    [g](const orm::Result& rows) {
+                        Json::Value arr(Json::arrayValue);
+                        for (const auto& r : rows)
+                        {
+                            Json::Value x(Json::objectValue);
+                            x["name"] = r["name"].as<std::string>();
+                            x["building"] = r["building"].as<std::string>();
+                            if (r["floor"].isNull())
+                                x["floor"] = Json::Value();
+                            else
+                                x["floor"] = r["floor"].as<int64_t>();
+                            if (r["kind"].isNull())
+                                x["kind"] = Json::Value();
+                            else
+                                x["kind"] = r["kind"].as<std::string>();
+                            arr.append(std::move(x));
+                        }
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.rooms = std::move(arr);
+                        }
+                        g->done(true);
+                    } >>
+                    [g, room](const DrogonDbException& e) {
+                        LOG_ERROR << "AssistantService: карта(" << room
+                                  << "): " << e.base().what();
+                        g->done(false);
+                    };
+            }
 
             if (hasGroup)
                 ScheduleService::eventsOnRange(
-                    // Московские сутки сегодня+завтра шире UTC-окна на
-                    // 3 ч — берём с запасом, по дням раскладывает
-                    // renderContext (mskDay).
+                    // Окно с запасом вокруг сегодня+завтра; по дням
+                    // раскладывает renderContext (isoDay).
                     db, *groupId,
                     ScheduleService::addDays(today, -1) + "T00:00:00Z",
                     ScheduleService::addDays(today, 3) + "T00:00:00Z",
@@ -667,7 +818,7 @@ void AssistantService::chat(orm::DbClientPtr db,
     }
     const int64_t userId = session.userId;
     collectContext(
-        db, session, todayMsk(),
+        db, session, todayUtc(), message,
         [db, userId, message, cfg, transport, cb](bool ok, ContextData data) {
             if (!ok)
             {
