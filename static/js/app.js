@@ -4245,7 +4245,8 @@
        Э7/Р-18): после обмена initCurrentSegment() перечитывает
        data-segment контейнера и запускает логику активной вкладки.
        Данные — клиент: лента — прежний GET /v1/notifications (Э6, без
-       изменений), новости/события — GET /v1/news (NewsCtrl, 5.17).
+       изменений), новости — GET /v1/news + GET /v1/announcements одной
+       лентой (фикс 2026-11-20), события — GET /v1/news (NewsCtrl, 5.17).
        Контролы — делегирование на document: контейнер сегмента
        перерисовывается htmx ЦЕЛИКОМ, слушатели на его элементах не
        переживают обмен (тот же приём, что у sheet «Детали пары» экрана
@@ -4331,7 +4332,9 @@
       const full = row.querySelector('.news-full');
       if (full) full.hidden = !open;
     };
-    const newsState = { mode: null, cursor: null, items: [] };
+    /* annCursor — курсор ленты объявлений в смешанной ленте «Новости»
+       (фикс 2026-11-20); в «Событиях»/«Объявлениях» не используется */
+    const newsState = { mode: null, cursor: null, annCursor: null, items: [] };
     const renderNewsList = () => {
       const list = document.querySelector('[data-news-list]');
       if (!list) return;
@@ -4344,7 +4347,56 @@
        на клиенте). Страница могла не дать ни одного события: пока
        строк-событий нет и есть next_cursor, догружаем следующую страницу
        сами (кап 10 — лента конечна, детектор next_cursor её закрывает). */
+    /* строка объявления деканата (GET /v1/announcements) в форме новости:
+       бейдж «Объявление» вместо категории (renderNewsRow) */
+    const annToNews = (a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' });
+    const byPublishedDesc = (x, y) => String(y.published_at || '').localeCompare(String(x.published_at || ''));
+    /* фикс 2026-11-20: «Новости» — ОДНА лента новостей (GET /v1/news) и
+       объявлений (GET /v1/announcements), по published_at, свежее сверху.
+       У каждой ленты свой курсор; «Ещё» догружает те, где курсор есть, и
+       пересортировывает всю ленту. Сбой любой из лент — как сбой ленты:
+       первая страница — экранная ошибка с «Повторить» (иначе объявления
+       молча пропадут), догрузка — inline-предупреждение у «Ещё». */
+    const loadMixedNews = async (more) => {
+      show('[data-news-error]', false);
+      show('[data-news-warn]', false);
+      if (!more) {
+        show('[data-news-list]', false);
+        show('[data-news-empty]', false);
+        show('[data-news-more]', false);
+        show('[data-news-loading]', true);
+      }
+      const q = (c) => (c ? '?cursor=' + encodeURIComponent(c) : '');
+      const wantNews = !more || Boolean(newsState.cursor);
+      const wantAnn = !more || Boolean(newsState.annCursor);
+      const [news, ann] = await Promise.all([
+        wantNews ? fetchJSON('/v1/news' + q(more ? newsState.cursor : null)) : Promise.resolve({ news: [] }),
+        wantAnn ? fetchJSON('/v1/announcements' + q(more ? newsState.annCursor : null)) : Promise.resolve({ announcements: [] })
+      ]);
+      show('[data-news-loading]', false);
+      const okNews = news && Array.isArray(news.news);
+      const okAnn = ann && Array.isArray(ann.announcements);
+      if (!okNews || !okAnn) {
+        if (more) {
+          const warn = document.querySelector('[data-news-warn]');
+          if (warn) warn.textContent = t('toast.failLoadMore', 'Не получилось загрузить ещё — попробуйте ещё раз');
+          show('[data-news-warn]', true);
+        } else {
+          show('[data-news-list]', false);
+          show('[data-news-error]', true);
+        }
+        return;
+      }
+      if (wantNews) newsState.cursor = news.next_cursor || null;
+      if (wantAnn) newsState.annCursor = ann.next_cursor || null;
+      const page = news.news.concat(ann.announcements.map(annToNews));
+      newsState.items = (more ? newsState.items.concat(page) : page).sort(byPublishedDesc);
+      renderNewsList();
+      show('[data-news-more]', Boolean(newsState.cursor || newsState.annCursor));
+      if (!newsState.items.length) show('[data-news-empty]', true);
+    };
     const loadNews = async (cursor, depth) => {
+      if (newsState.mode === 'news') { loadMixedNews(Boolean(cursor)); return; }
       show('[data-news-error]', false);
       show('[data-news-warn]', false);
       if (!cursor) {
@@ -4360,7 +4412,7 @@
       const base = isAnn ? '/v1/announcements' : '/v1/news';
       const raw = await fetchJSON(base + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
       const data = isAnn && raw && Array.isArray(raw.announcements)
-        ? { next_cursor: raw.next_cursor, news: raw.announcements.map((a) => ({ id: 'a' + a.id, kind: 'announcement', title: a.title, body: a.body, published_at: a.published_at, location: '' })) }
+        ? { next_cursor: raw.next_cursor, news: raw.announcements.map(annToNews) }
         : raw;
       show('[data-news-loading]', false);
       if (!data || !Array.isArray(data.news)) {
@@ -4400,6 +4452,7 @@
       if (seg === 'news' || seg === 'events' || seg === 'announcements') {
         newsState.mode = seg;
         newsState.cursor = null;
+        newsState.annCursor = null;
         newsState.items = [];
         loadNews(null, 0);
         return;
@@ -4553,6 +4606,7 @@
       const newsMore = event.target.closest('[data-news-more]');
       if (newsMore) {
         if (newsState.cursor) loadNews(newsState.cursor, 0);
+        else if (newsState.mode === 'news' && newsState.annCursor) loadMixedNews(true);
         return;
       }
       const newsRetry = event.target.closest('[data-news-retry]');
