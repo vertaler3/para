@@ -139,6 +139,9 @@ set(PARA_APP_SOURCES
                src/utils/NotFoundPage.cpp
                # фиксы 2026-11-19 (Р-35): навигация/редиректы сотрудника.
                src/utils/StaffRouting.cpp
+               # 5.19 (Р-36): AI-ассистент — сервис + тонкий контроллер.
+               src/services/AssistantService.cpp
+               src/controllers/AssistantCtrl.cpp
                src/filters/LoginFilter.cpp
                src/filters/CsrfCheck.cpp
                src/filters/SecurityHeaders.cpp
