@@ -25,9 +25,10 @@ services:
     profiles: ["tests"]
     working_dir: /src
     # Сборка вне /src/build (он занята образом) — во временный каталог.
+    # -j4: без -j"$(nproc)" — машина владельца греется (фикс 21.11).
     command: >
       bash -c "cmake -B /tmp/build-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
-      && cmake --build /tmp/build-tests -j\"$(nproc)\"
+      && cmake --build /tmp/build-tests -j4
       && ctest --test-dir /tmp/build-tests --output-on-failure"
 
 volumes:
