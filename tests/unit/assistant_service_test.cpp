@@ -494,10 +494,20 @@ TEST_CASE("ассистент: контекст — аудитория из ка
     CHECK(AssistantService::roomQuery("Где аудитория 1207?") == "1207");
     CHECK(AssistantService::roomQuery("как пройти в Б-204?") == "Б-204");
     CHECK(AssistantService::roomQuery("Что в ауд. в-216 завтра?") == "В-216");
+    // р..я в нижнем регистре (у = D1 83 → У = D0 A3) — регресс upperRu.
+    CHECK(AssistantService::roomQuery("где аудитория у-204?") == "У-204");
     CHECK(AssistantService::roomQuery("когда пара в 3105?") == "3105");
     CHECK(AssistantService::roomQuery("Какие у меня дедлайны?").empty());
     CHECK(AssistantService::roomQuery("пары у группы 4-МЭО в пятницу")
               .empty());
+
+    // Группа из вопроса: канонизация регистра; не группа — пусто.
+    CHECK(AssistantService::mentionedGroup("пары у группы 4-МЭО в пятницу") ==
+          "4-МЭО");
+    CHECK(AssistantService::mentionedGroup("расписание 1-фмо на неделю") ==
+          "1-ФМО");
+    CHECK(AssistantService::mentionedGroup("что у меня завтра?").empty());
+    CHECK(AssistantService::mentionedGroup("где аудитория 1207?").empty());
 
     // Время без перевода поясов: 10:00Z — это «10:00» (не «13:00» МСК),
     // как в остальных экранах портала.
@@ -536,14 +546,51 @@ TEST_CASE("ассистент: контекст — аудитория из ка
     CHECK(sys.find("МАРКЕР-ЧУЖАЯ-ПАРА") == std::string::npos);
     CHECK(sys.find("без перевода поясов") != std::string::npos);
 
-    // Марк (группа 2) свою пару-маркер видит — положительный контроль.
+    // Марк (группа 2) свою пару-маркер видит — положительный контроль;
+    // вопрос о СВОЕЙ группе предупреждения о чужой не включает.
     FakeLlm llm2;
     llm2.reply = "ok";
-    REQUIRE(runChat(f, session(3, "mark.demo"), "что у меня сегодня?",
+    REQUIRE(runChat(f, session(3, "mark.demo"), "что у меня сегодня 4-МЭО?",
                     config(), llm2.transport())
                 .status == AssistantService::Status::Ok);
     const std::string sys2 = (*llm2.seen)["messages"][0]["content"].asString();
     CHECK(sys2.find("МАРКЕР-ЧУЖАЯ-ПАРА") != std::string::npos);
+    CHECK(sys2.find("Твоя группа — 4-МЭО") != std::string::npos);
+    CHECK(sys2.find("это НЕ твоя группа") == std::string::npos);
+
+    // Вопрос о ЧУЖОЙ группе → детерминированное предупреждение в контексте
+    // (аудит 21.11: модель подменяла расписание пользователя).
+    FakeLlm llm4;
+    llm4.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"),
+                    "пары у группы 4-МЭО в пятницу", config(),
+                    llm4.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys4 = (*llm4.seen)["messages"][0]["content"].asString();
+    CHECK(sys4.find("Твоя группа — 1-ФМО") != std::string::npos);
+    CHECK(sys4.find("группа 4-МЭО — это НЕ твоя группа") !=
+          std::string::npos);
+    CHECK(sys4.find("НЕ подставляй") != std::string::npos);
+
+    // «Проверь моё решение» → контекст требует наводящий вопрос без итога.
+    FakeLlm llm5;
+    llm5.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"),
+                    "Проверь моё решение задачи: 6 − 4 = 2", config(),
+                    llm5.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys5 = (*llm5.seen)["messages"][0]["content"].asString();
+    CHECK(sys5.find("проверить его решение") != std::string::npos);
+    CHECK(sys5.find("наводящий вопрос") != std::string::npos);
+    // «проверь расписание» — не решение, маркер не включается.
+    FakeLlm llm6;
+    llm6.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "проверь расписание",
+                    config(), llm6.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys6 = (*llm6.seen)["messages"][0]["content"].asString();
+    CHECK(sys6.find("проверить его решение") == std::string::npos);
+
     // Вопрос без аудитории — секции карты в контексте нет.
     FakeLlm llm3;
     llm3.reply = "ok";
@@ -552,4 +599,5 @@ TEST_CASE("ассистент: контекст — аудитория из ка
                 .status == AssistantService::Status::Ok);
     const std::string sys3 = (*llm3.seen)["messages"][0]["content"].asString();
     CHECK(sys3.find("из карты портала") == std::string::npos);
+    CHECK(sys3.find("это НЕ твоя группа") == std::string::npos);
 }

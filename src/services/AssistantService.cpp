@@ -279,6 +279,39 @@ std::string AssistantService::portalDateTime(const std::string& iso)
     return fmtPortal(iso, "%d.%m %H:%M");
 }
 
+// Верхний регистр для ASCII + кириллицы (UTF-8, U+0430..U+044F, Ё U+0451).
+std::string upperRu(const std::string& s)
+{
+    std::string upper;
+    for (std::size_t k = 0; k < s.size(); ++k)
+    {
+        unsigned char a = s[k],
+                      b = k + 1 < s.size() ? s[k + 1] : '\0';
+        if (a == 0xD0 && b >= 0xB0 && b <= 0xBF)  // а..п → А..П
+        {
+            upper += a;
+            upper += static_cast<char>(b - 0x20);
+            ++k;
+        }
+        else if (a == 0xD1 && b == 0x91)  // ё → Ё
+        {
+            upper += a;
+            upper += static_cast<char>(0x81);
+            ++k;
+        }
+        else if (a == 0xD1 && b >= 0x80 && b <= 0x8F)  // р..я → Р..Я
+        {
+            upper += static_cast<char>(0xD0);
+            upper += static_cast<char>(b + 0x20);
+            ++k;
+        }
+        else
+            upper += static_cast<char>(
+                std::toupper(static_cast<unsigned char>(a)));
+    }
+    return upper;
+}
+
 std::string AssistantService::roomQuery(const std::string& message)
 {
     // Токен = буквы/цифры/дефис; валиден, если 0–2 БУКВЫ + необязательный
@@ -308,31 +341,7 @@ std::string AssistantService::roomQuery(const std::string& message)
             token.clear();
             return std::string();
         }
-        // Кириллица нижний→верхний регистр (UTF-8, U+0430..U+044F, Ё U+0451).
-        std::string upper;
-        for (std::size_t k = 0; k < letters.size(); ++k)
-        {
-            unsigned char a = letters[k], b = k + 1 < letters.size()
-                                                 ? letters[k + 1]
-                                                 : '\0';
-            if (a == 0xD0 && b >= 0xB0 && b <= 0xBF)
-            {
-                upper += a;
-                upper += static_cast<char>(b - 0x20);
-                ++k;
-            }
-            else if (a == 0xD1 && (b == 0x91 || (b >= 0x80 && b <= 0x8F)))
-            {
-                // ё→Ё, р..я → Р..Я
-                upper += a;
-                upper += static_cast<char>(b == 0x91 ? 0x81 : b - 0x20);
-                ++k;
-            }
-            else
-                upper += static_cast<char>(
-                    std::toupper(static_cast<unsigned char>(a)));
-        }
-        std::string result = upper;
+        std::string result = upperRu(letters);
         if (!letters.empty() && i > 0 && token[i - 1] == '-')
             result += "-";
         result += digits;
@@ -354,6 +363,56 @@ std::string AssistantService::roomQuery(const std::string& message)
     return flush();
 }
 
+std::string AssistantService::mentionedGroup(const std::string& message)
+{
+    // Токены букв/цифр/дефиса; валиден, если 1–2 ЦИФРЫ + дефис + 2–6 БУКВ
+    // («4-МЭО», «1-фмо» → «1-ФМО»). Даты и номера аудиторий не подходят.
+    std::string token;
+    auto flush = [&token]() {
+        if (token.empty())
+            return std::string();
+        std::size_t i = 0;
+        while (i < token.size() &&
+               std::isdigit(static_cast<unsigned char>(token[i])))
+            ++i;
+        const std::string digits = token.substr(0, i);
+        const bool shape = digits.size() >= 1 && digits.size() <= 2 &&
+                           i < token.size() && token[i] == '-';
+        if (!shape)
+        {
+            token.clear();
+            return std::string();
+        }
+        ++i;  // дефис
+        std::string letters = token.substr(i);
+        token.clear();
+        if (letters.empty() || letters.size() > 12)  // ≤6 букв в UTF-8
+            return std::string();
+        for (const char c : letters)
+        {
+            const unsigned char b = static_cast<unsigned char>(c);
+            // буквы: ASCII-буквы или байты кириллицы (>= 0x80); цифры и
+            // прочее — не группа.
+            if (b < 0x80 && !std::isalpha(b))
+                return std::string();
+        }
+        return digits + "-" + upperRu(letters);
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' ||
+            static_cast<unsigned char>(c) >= 0x80)
+            token += c;
+        else
+        {
+            const std::string found = flush();
+            if (!found.empty())
+                return found;
+        }
+    }
+    return flush();
+}
+
 std::string AssistantService::renderContext(const ContextData& d)
 {
     const std::string tomorrow = ScheduleService::addDays(d.today, 1);
@@ -363,6 +422,22 @@ std::string AssistantService::renderContext(const ContextData& d)
     out += "Сегодня " + d.today + ", " + weekdayRu(d.today) + ".\n";
     out += "Ниже — только твои данные: расписание твоей группы и твои дела."
            " Данных о других группах в этом контексте нет.\n";
+    if (!d.group.empty())
+        out += "Твоя группа — " + d.group + ".\n";
+    if (!d.foreignGroup.empty())
+        out += "ВНИМАНИЕ: в вопросе упомянута группа " + d.foreignGroup +
+               " — это НЕ твоя группа, и данных о ней в этом контексте"
+               " нет. На вопрос о группе " + d.foreignGroup +
+               " отвечай: «в портале нет такой информации» (расписание"
+               " другой группы смотри в разделе «Расписание» на месте)."
+               " Своё расписание вместо группы " + d.foreignGroup +
+               " НЕ подставляй.\n";
+    if (d.solutionCheck)
+        out += "ВНИМАНИЕ: студент просит проверить его решение. НЕ"
+               " подтверждай и не опровергай итог, НЕ переписывай решение."
+               " Задай ОДИН наводящий вопрос и укажи, какой шаг проверить"
+               " (например, точную формулу или единицы измерения), без"
+               " готового результата.\n";
 
     for (const auto& [day, label] :
          {std::pair{d.today, "Расписание твоей группы на сегодня"},
@@ -631,12 +706,52 @@ void AssistantService::collectContext(orm::DbClientPtr db,
             g->data.campus = Json::Value(Json::arrayValue);
             g->data.rooms = Json::Value(Json::arrayValue);
             const bool hasGroup = groupId.has_value();
+            // «Проверь моё решение»: детерминированный маркер контекста —
+            // слабой модели нужен явный запрет + наводящий вопрос. Слово
+            // проверки + слово «решение/расчёт/задача», чтобы «проверь
+            // расписание» маркер не включало. Регистронезависимо
+            // («Проверь…» с заглавной — живой кейс 21.11).
+            const std::string upperMsg = upperRu(message);
+            const auto has = [&upperMsg](const char* needle) {
+                return upperMsg.find(needle) != std::string::npos;
+            };
+            const bool checkWord = has("ПРОВЕРЬ") || has("ПРОВЕРИТЬ") ||
+                                   has("ПРАВИЛЬНО ЛИ");
+            const bool solutionWord = has("РЕШЕНИ") || has("РАСЧЁТ") ||
+                                      has("РАСЧЕТ") || has("ПОСЧИТАЛ") ||
+                                      has("ЗАДАЧ") || has("ПРИМЕР");
+            g->data.solutionCheck = checkWord && solutionWord;
             // +1 источник, если в вопросе есть номер аудитории — ищем по
             // карте (GET /v1/map/rooms?q=…): «где аудитория 1207?» больше
             // не остаётся без данных портала.
             const std::string room = roomQuery(message);
-            g->pending = (hasGroup ? 5 : 4) + (room.empty() ? 0 : 1);
+            g->pending = (hasGroup ? 6 : 4) + (room.empty() ? 0 : 1);
             const std::string now = nowIso();
+
+            if (hasGroup)
+                *db << "SELECT name FROM groups WHERE id = $1"
+                    << *groupId >>
+                    [g, mentioned = mentionedGroup(message)](
+                        const orm::Result& rows) {
+                        if (!rows.empty())
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.group =
+                                rows[0]["name"].as<std::string>();
+                            // Чужая группа в вопросе → предупреждение в
+                            // контексте (аудит 21.11: модель подменяла
+                            // расписание пользователя).
+                            if (!mentioned.empty() &&
+                                mentioned != g->data.group)
+                                g->data.foreignGroup = mentioned;
+                        }
+                        g->done(true);
+                    } >>
+                    [g](const DrogonDbException& e) {
+                        LOG_ERROR << "AssistantService: группа: "
+                                  << e.base().what();
+                        g->done(false);
+                    };
 
             if (!room.empty())
             {

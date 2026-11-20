@@ -131,9 +131,20 @@ class AssistantService
     // подмешать в контекст поиск по карте (см. collectContext).
     static std::string roomQuery(const std::string& message);
 
+    // Группа в тексте сообщения («4-МЭО», «1-фмо» → «1-ФМО») или пустая
+    // строка: 1–2 цифры + дефис + 2–6 букв. Если названная группа ≠
+    // группе пользователя, в контекст добавляется явное предупреждение —
+    // слабая модель иначе подставляет собственное расписание (аудит
+    // 20–21.11: вопрос про 4-МЭО отвечался парой самой Ани).
+    static std::string mentionedGroup(const std::string& message);
+
     struct ContextData
     {
         std::string today;      // YYYY-MM-DD (UTC проекта)
+        std::string group;      // имя своей группы («1-ФМО»), может быть
+                                // пусто (staff без профиля)
+        std::string foreignGroup;  // группа из вопроса, если ≠ своей
+        bool solutionCheck = false;  // в вопросе «проверь моё решение»
         Json::Value events;     // события группы сегодня+завтра (eventJson)
         Json::Value exams;      // план сессии (GradesService::exams)
         Json::Value deadlines;  // [{title, kind, due_at}]
