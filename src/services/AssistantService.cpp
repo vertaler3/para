@@ -71,6 +71,18 @@ std::string fmtMsk(const std::string& iso, const char* pattern)
     return buf;
 }
 
+// «Сегодня» по Москве: контекст подписан «время московское», и с 00:00 до
+// 03:00 МСК UTC-дата ещё вчерашняя (находка checker).
+std::string todayMsk()
+{
+    const std::time_t t = std::time(nullptr) + kMskOffset;
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[16];
+    std::strftime(buf, sizeof buf, "%Y-%m-%d", &tm);
+    return buf;
+}
+
 std::string mskDay(const std::string& iso)
 {
     return fmtMsk(iso, "%Y-%m-%d");
@@ -518,8 +530,12 @@ void AssistantService::collectContext(orm::DbClientPtr db,
 
             if (hasGroup)
                 ScheduleService::eventsOnRange(
-                    db, *groupId, today + "T00:00:00Z",
-                    ScheduleService::addDays(today, 2) + "T00:00:00Z",
+                    // Московские сутки сегодня+завтра шире UTC-окна на
+                    // 3 ч — берём с запасом, по дням раскладывает
+                    // renderContext (mskDay).
+                    db, *groupId,
+                    ScheduleService::addDays(today, -1) + "T00:00:00Z",
+                    ScheduleService::addDays(today, 3) + "T00:00:00Z",
                     [g](bool ok, Json::Value events) {
                         if (ok)
                         {
@@ -651,7 +667,7 @@ void AssistantService::chat(orm::DbClientPtr db,
     }
     const int64_t userId = session.userId;
     collectContext(
-        db, session, ScheduleService::todayUtc(),
+        db, session, todayMsk(),
         [db, userId, message, cfg, transport, cb](bool ok, ContextData data) {
             if (!ok)
             {

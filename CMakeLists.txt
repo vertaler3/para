@@ -207,6 +207,11 @@ add_executable(para-tests
                # контроллеры (I18nView — зависимость ApplicationsCtrl;
                # LoginFilter/CsrfCheck — чтобы app().run() в Env теста
                # находил middleware роутов и не шумел в лог).
+               # 5.19 (Р-36): AssistantService — валидация/лимит/env/fail-closed/
+               # изоляция на реальных миграциях+фикстурах (PARA_SOURCE_DIR).
+               tests/unit/assistant_service_test.cpp
+               src/services/AssistantService.cpp
+               src/services/DashboardService.cpp
                tests/unit/api_contract_test.cpp
                src/controllers/ApplicationsCtrl.cpp
                src/controllers/IcsCtrl.cpp
@@ -248,6 +253,9 @@ add_executable(para-tests
                src/utils/LoginLimiter.cpp
                src/utils/NameMask.cpp)
 
+# Корень исходников для assistant_service_test (миграции + фикстуры).
+target_compile_definitions(para-tests PRIVATE
+                           PARA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(para-tests
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                    ${CMAKE_CURRENT_SOURCE_DIR}/tests

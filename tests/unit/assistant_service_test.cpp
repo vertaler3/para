@@ -1,0 +1,484 @@
+// Юнит-тесты AssistantService (идея 5.19, Р-36; шаг 4 журнала
+// docs/agents-log/2026-11-20-ai-ассистент.md).
+//
+// Что проверяется:
+//   - вход: пусто/не строка/пробелы → Empty (400), > 700 кодпоинтов →
+//     TooLong (400), ровно 700 кириллицей (1400 байт) — Ok;
+//   - лимит 10/мин на пользователя: 11-я попытка → отказ с Retry-After,
+//     окно скользит, пользователи независимы (429);
+//   - настройки из .env: раскрытие кавычек/\n, URI модели YandexGPT;
+//   - разбор ответа модели (не-200 / мусор / пустой content → nullopt);
+//   - fail-closed: транспорт-ошибка, недостижимый URL реального
+//     HttpClient, «не настроено» → Unavailable (502), история НЕ пишется;
+//     БД без таблиц → Error (500);
+//   - изоляция: контекст и промт — только данные своей сессии (чужие
+//     дедлайн/заявка не попадают), история — WHERE user_id = сессия.
+// БД — реальные миграции + фикстуры (MigrationRunner, как в проде) во
+// временном каталоге; модель — инъецированный фейковый транспорт, сеть
+// наружу тесты не трогают.
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <future>
+#include <string>
+
+#include <sqlite3.h>
+
+#include <doctest.hpp>
+#include <drogon/orm/DbClient.h>
+#include <trantor/net/EventLoopThread.h>
+
+#include "services/AssistantService.h"
+#include "services/MigrationRunner.h"
+#include "services/SessionService.h"
+
+namespace fs = std::filesystem;
+using para::AssistantService;
+using para::SessionInfo;
+
+namespace {
+
+constexpr auto kWait = std::chrono::seconds(30);
+
+struct TempDir
+{
+    fs::path path;
+    TempDir()
+    {
+        static int counter = 0;
+        path = fs::temp_directory_path() /
+               ("para-assistant-" +
+                std::to_string(std::chrono::steady_clock::now()
+                                   .time_since_epoch()
+                                   .count()) +
+                "-" + std::to_string(++counter));
+        fs::create_directories(path);
+    }
+    ~TempDir()
+    {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+};
+
+void exec(const std::string& dbPath, const std::string& sql)
+{
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(dbPath.c_str(), &raw) == SQLITE_OK);
+    char* err = nullptr;
+    const int rc = sqlite3_exec(raw, sql.c_str(), nullptr, nullptr, &err);
+    if (err != nullptr)
+    {
+        MESSAGE(err);
+        sqlite3_free(err);
+    }
+    sqlite3_close(raw);
+    REQUIRE(rc == SQLITE_OK);
+}
+
+int count(const std::string& dbPath, const std::string& sql)
+{
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(dbPath.c_str(), &raw) == SQLITE_OK);
+    sqlite3_stmt* st = nullptr;
+    REQUIRE(sqlite3_prepare_v2(raw, sql.c_str(), -1, &st, nullptr) ==
+            SQLITE_OK);
+    int n = -1;
+    if (sqlite3_step(st) == SQLITE_ROW)
+        n = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    sqlite3_close(raw);
+    return n;
+}
+
+// Демо-БД как в проде: все миграции (включая 0009) + фикстуры. Сверху —
+// маркеры «чужих» данных с датой в далёком будущем (не зависят от «сейчас»):
+// личный дедлайн Марка и личный дедлайн Ани.
+struct Fixture
+{
+    TempDir tmp;
+    std::string dbPath{(tmp.path / "para.db").string()};
+    drogon::orm::DbClientPtr db;
+
+    explicit Fixture(bool withSchema = true)
+    {
+        if (withSchema)
+        {
+            const std::string root = PARA_SOURCE_DIR;
+            const auto r = para::MigrationRunner::run(
+                dbPath, root + "/sql/migrations", root + "/sql/fixtures.sql",
+                true);
+            REQUIRE(r.appliedMigrations >= 9);
+            exec(dbPath,
+                 "INSERT INTO deadlines(group_id, user_id, title, kind, "
+                 "due_at) VALUES "
+                 "(2, 3, 'МАРКЕР-ЧУЖОЙ-ДЕДЛАЙН-МАРКА', 'work', "
+                 "'2099-01-10T10:00:00Z'),"
+                 "(1, 1, 'МАРКЕР-СВОЙ-ДЕДЛАЙН-АНИ', 'work', "
+                 "'2099-01-11T10:00:00Z');");
+        }
+        db = drogon::orm::DbClient::newSqlite3Client(
+            "filename=" + dbPath, 1, {"PRAGMA foreign_keys=ON;"});
+    }
+};
+
+SessionInfo session(int64_t id, const std::string& login)
+{
+    SessionInfo s;
+    s.userId = id;
+    s.login = login;
+    s.role = "student";
+    return s;
+}
+
+AssistantService::Config config()
+{
+    AssistantService::Config c;
+    c.url = "http://fake.invalid/v1/chat/completions";
+    c.key = "test-key";
+    c.model = "gpt://folder/yandexgpt-lite/latest";
+    c.systemPrompt = "SYSTEM-PROMPT-TEST";
+    return c;
+}
+
+// Фейковый транспорт: запоминает payload, отвечает reply (nullopt — сбой).
+struct FakeLlm
+{
+    std::shared_ptr<Json::Value> seen = std::make_shared<Json::Value>();
+    std::shared_ptr<int> calls = std::make_shared<int>(0);
+    std::optional<std::string> reply;
+    AssistantService::Transport transport() const
+    {
+        auto seenP = seen;
+        auto callsP = calls;
+        auto r = reply;
+        return [seenP, callsP, r](const AssistantService::Config&,
+                                  const Json::Value& payload,
+                                  AssistantService::ReplyCb cb) {
+            *seenP = payload;
+            ++*callsP;
+            cb(r);
+        };
+    }
+};
+
+AssistantService::ChatResult runChat(Fixture& f,
+                                     const SessionInfo& s,
+                                     const std::string& message,
+                                     const AssistantService::Config& cfg,
+                                     AssistantService::Transport transport)
+{
+    std::promise<AssistantService::ChatResult> p;
+    auto fut = p.get_future();
+    AssistantService::chat(f.db, s, message, cfg, std::move(transport),
+                           [&p](AssistantService::ChatResult r) {
+                               p.set_value(std::move(r));
+                           });
+    REQUIRE(fut.wait_for(kWait) == std::future_status::ready);
+    return fut.get();
+}
+
+Json::Value runHistory(Fixture& f, int64_t userId, int limit, bool* ok)
+{
+    std::promise<std::pair<bool, Json::Value>> p;
+    auto fut = p.get_future();
+    AssistantService::history(f.db, userId, limit,
+                              [&p](bool good, Json::Value m) {
+                                  p.set_value({good, std::move(m)});
+                              });
+    REQUIRE(fut.wait_for(kWait) == std::future_status::ready);
+    auto r = fut.get();
+    if (ok != nullptr)
+        *ok = r.first;
+    return r.second;
+}
+
+std::string repeat(const std::string& unit, int n)
+{
+    std::string s;
+    for (int i = 0; i < n; ++i)
+        s += unit;
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("ассистент: валидация входа — пусто 400, > 700 кодпоинтов 400")
+{
+    std::string out;
+    CHECK(AssistantService::validate(nullptr, out) ==
+          AssistantService::Input::Empty);  // тело не JSON
+
+    Json::Value body(Json::objectValue);
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::Empty);  // нет поля
+    body["message"] = 42;
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::Empty);  // не строка
+    body["message"] = "  \n\t ";
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::Empty);  // одни пробелы
+
+    body["message"] = "  что у меня завтра?  ";
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::Ok);
+    CHECK(out == "что у меня завтра?");
+
+    // Кириллица — 2 байта на символ: 700 символов = 1400 байт — допустимо.
+    body["message"] = repeat("я", 700);
+    CHECK(AssistantService::utf8Length(body["message"].asString()) == 700);
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::Ok);
+    body["message"] = repeat("я", 701);
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::TooLong);
+    body["message"] = repeat("я", 800);
+    CHECK(AssistantService::validate(&body, out) ==
+          AssistantService::Input::TooLong);
+    CHECK(out.empty());
+}
+
+TEST_CASE("ассистент: rate-limit 10/мин на пользователя → 429 + Retry-After")
+{
+    AssistantService::RateLimiter lim;
+    const int64_t t0 = 1'000'000;
+    for (int i = 0; i < AssistantService::RateLimiter::kMax; ++i)
+        CHECK(lim.acquire(1, t0 + i) == 0);
+    // 11-я в той же минуте — отказ; ждать до освобождения первого слота.
+    const int64_t wait = lim.acquire(1, t0 + 10);
+    CHECK(wait == 50);
+    CHECK(lim.acquire(1, t0 + 11) > 0);  // 12-я — тоже отказ
+    // Другой пользователь — свой счётчик.
+    CHECK(lim.acquire(2, t0 + 11) == 0);
+    // Окно скользит: через 60 с после первой — слот свободен.
+    CHECK(lim.acquire(1, t0 + 60) == 0);
+    CHECK(lim.acquire(1, t0 + 60) > 0);
+}
+
+TEST_CASE("ассистент: настройки из .env — кавычки, \\n и URI модели")
+{
+    CHECK(AssistantService::unquoteEnv("plain") == "plain");
+    CHECK(AssistantService::unquoteEnv("\"a\\nb \\\"c\\\" \\\\d\"") ==
+          "a\nb \"c\" \\d");
+    CHECK(AssistantService::unquoteEnv("'raw \\n'") == "raw \\n");
+    CHECK(AssistantService::unquoteEnv("\"") == "\"");
+
+    CHECK(AssistantService::resolveModel("yandexgpt-lite", "test-folder") ==
+          "gpt://test-folder/yandexgpt-lite/latest");
+    CHECK(AssistantService::resolveModel("yandexgpt-lite/rc", "test-folder") ==
+          "gpt://test-folder/yandexgpt-lite/rc");
+    CHECK(AssistantService::resolveModel("gpt://x/yandexgpt/latest",
+                                         "test-folder") ==
+          "gpt://x/yandexgpt/latest");
+    CHECK(AssistantService::resolveModel("yandexgpt-lite", "") ==
+          "yandexgpt-lite");
+
+    // Пустое окружение → не настроено (fail-closed 502 в chat).
+    ::unsetenv("ASSISTANT_API_URL");
+    ::unsetenv("ASSISTANT_API_KEY");
+    CHECK_FALSE(AssistantService::configFromEnv().configured());
+    CHECK(config().configured());
+}
+
+TEST_CASE("ассистент: разбор ответа модели")
+{
+    const std::string ok =
+        R"({"choices":[{"message":{"role":"assistant","content":"  Привет!  "}}]})";
+    CHECK(AssistantService::parseReply(200, ok).value_or("") == "Привет!");
+    CHECK_FALSE(AssistantService::parseReply(403, ok).has_value());
+    CHECK_FALSE(AssistantService::parseReply(200, "не json").has_value());
+    CHECK_FALSE(AssistantService::parseReply(200, R"({"choices":[]})")
+                    .has_value());
+    CHECK_FALSE(
+        AssistantService::parseReply(
+            200, R"({"choices":[{"message":{"content":"   "}}]})")
+            .has_value());
+    CHECK_FALSE(AssistantService::parseReply(
+                    200, R"({"error":{"message":"denied"}})")
+                    .has_value());
+}
+
+TEST_CASE("ассистент: контекст и промт — только данные своей сессии")
+{
+    Fixture f;
+    FakeLlm llm;
+    llm.reply = "Завтра пар нет.";
+    const auto r = runChat(f, session(1, "anya.demo"), "что у меня завтра?",
+                           config(), llm.transport());
+    REQUIRE(r.status == AssistantService::Status::Ok);
+    CHECK(r.reply == "Завтра пар нет.");
+    REQUIRE(*llm.calls == 1);
+
+    const Json::Value& p = *llm.seen;
+    CHECK(p["model"].asString() == "gpt://folder/yandexgpt-lite/latest");
+    CHECK(p["max_tokens"].asInt() == AssistantService::kMaxTokens);
+    const auto& msgs = p["messages"];
+    REQUIRE(msgs.size() == 2);  // system(промт+контекст) + вопрос
+    CHECK(msgs[0]["role"].asString() == "system");
+    const std::string sys = msgs[0]["content"].asString();
+    CHECK(sys.rfind("SYSTEM-PROMPT-TEST", 0) == 0);
+    CHECK(sys.find("Расписание на завтра") != std::string::npos);
+    CHECK(sys.find("МАРКЕР-СВОЙ-ДЕДЛАЙН-АНИ") != std::string::npos);
+    // Чужое: личный дедлайн Марка (группа 2) и заявка Дины «в работе».
+    CHECK(sys.find("МАРКЕР-ЧУЖОЙ-ДЕДЛАЙН-МАРКА") == std::string::npos);
+    CHECK(sys.find("Академическая справка") == std::string::npos);
+    CHECK(msgs[1]["role"].asString() == "user");
+    CHECK(msgs[1]["content"].asString() == "что у меня завтра?");
+
+    // Тот же запрос сессией Марка — видит свой маркер и не видит Анин.
+    FakeLlm llm2;
+    llm2.reply = "ok";
+    REQUIRE(runChat(f, session(3, "mark.demo"), "дедлайны?", config(),
+                    llm2.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys2 = (*llm2.seen)["messages"][0]["content"].asString();
+    CHECK(sys2.find("МАРКЕР-ЧУЖОЙ-ДЕДЛАЙН-МАРКА") != std::string::npos);
+    CHECK(sys2.find("МАРКЕР-СВОЙ-ДЕДЛАЙН-АНИ") == std::string::npos);
+
+    // Пара записана в историю владельца: вопрос + ответ.
+    CHECK(count(f.dbPath, "SELECT COUNT(*) FROM assistant_messages WHERE "
+                          "user_id = 1") == 2);
+}
+
+TEST_CASE("ассистент: история изолирована по user_id и идёт в промт (≤10)")
+{
+    Fixture f;
+    // 12 реплик Ани и 3 реплики Олега напрямую в таблицу.
+    std::string sql = "INSERT INTO assistant_messages(user_id, role, content) "
+                      "VALUES ";
+    for (int i = 1; i <= 12; ++i)
+        sql += std::string(i > 1 ? "," : "") + "(1, '" +
+               (i % 2 ? "user" : "assistant") + "', 'аня-" +
+               std::to_string(i) + "')";
+    sql += ",(2, 'user', 'олег-секрет-1'),(2, 'assistant', 'олег-2'),"
+           "(2, 'user', 'олег-3')";
+    exec(f.dbPath, sql);
+
+    bool ok = false;
+    const auto anya = runHistory(f, 1, AssistantService::kHistoryForClient, &ok);
+    REQUIRE(ok);
+    REQUIRE(anya.size() == 12);
+    CHECK(anya[0]["content"].asString() == "аня-1");    // по возрастанию
+    CHECK(anya[11]["content"].asString() == "аня-12");
+    for (const auto& m : anya)
+        CHECK(m["content"].asString().find("олег") == std::string::npos);
+
+    const auto oleg = runHistory(f, 2, 20, &ok);
+    REQUIRE(oleg.size() == 3);
+    CHECK(oleg[0]["content"].asString() == "олег-секрет-1");
+
+    const auto last5 = runHistory(f, 1, 5, &ok);
+    REQUIRE(last5.size() == 5);
+    CHECK(last5[0]["content"].asString() == "аня-8");
+
+    // В промт уходят последние 10 СВОИХ реплик, без чужих.
+    FakeLlm llm;
+    llm.reply = "ответ";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "вопрос", config(),
+                    llm.transport())
+                .status == AssistantService::Status::Ok);
+    const auto& msgs = (*llm.seen)["messages"];
+    REQUIRE(msgs.size() == 1 + AssistantService::kHistoryForPrompt + 1);
+    CHECK(msgs[1]["content"].asString() == "аня-3");
+    CHECK(msgs[10]["content"].asString() == "аня-12");
+    for (const auto& m : msgs)
+        CHECK(m["content"].asString().find("олег") == std::string::npos);
+}
+
+TEST_CASE("ассистент: fail-closed — ошибка LLM → 502, история не пишется")
+{
+    Fixture f;
+    const auto before =
+        count(f.dbPath, "SELECT COUNT(*) FROM assistant_messages");
+
+    SUBCASE("транспорт вернул ошибку")
+    {
+        FakeLlm llm;  // reply = nullopt
+        const auto r = runChat(f, session(1, "anya.demo"), "привет",
+                               config(), llm.transport());
+        CHECK(r.status == AssistantService::Status::Unavailable);
+        CHECK(r.reply.empty());
+    }
+    SUBCASE("не настроено — модель даже не вызывается")
+    {
+        FakeLlm llm;
+        llm.reply = "не должно прийти";
+        auto cfg = config();
+        cfg.key.clear();
+        const auto r = runChat(f, session(1, "anya.demo"), "привет", cfg,
+                               llm.transport());
+        CHECK(r.status == AssistantService::Status::Unavailable);
+        CHECK(*llm.calls == 0);
+    }
+    SUBCASE("реальный HttpClient: фейковый недостижимый URL")
+    {
+        trantor::EventLoopThread loopThread;
+        loopThread.run();
+        auto cfg = config();
+        cfg.url = "http://127.0.0.1:1/v1/chat/completions";
+        const auto r =
+            runChat(f, session(1, "anya.demo"), "привет", cfg,
+                    AssistantService::httpTransport(loopThread.getLoop()));
+        CHECK(r.status == AssistantService::Status::Unavailable);
+    }
+    SUBCASE("URL без схемы")
+    {
+        auto cfg = config();
+        cfg.url = "llm.example/v1";
+        const auto r = runChat(f, session(1, "anya.demo"), "привет", cfg,
+                               AssistantService::httpTransport(nullptr));
+        CHECK(r.status == AssistantService::Status::Unavailable);
+    }
+    CHECK(count(f.dbPath, "SELECT COUNT(*) FROM assistant_messages") ==
+          before);
+}
+
+TEST_CASE("ассистент: ошибка БД → Error (500), модель не вызывается")
+{
+    Fixture f(false);  // пустая БД без таблиц
+    FakeLlm llm;
+    llm.reply = "не должно прийти";
+    const auto r = runChat(f, session(1, "anya.demo"), "привет", config(),
+                           llm.transport());
+    CHECK(r.status == AssistantService::Status::Error);
+    CHECK(*llm.calls == 0);
+    bool ok = true;
+    runHistory(f, 1, 20, &ok);
+    CHECK_FALSE(ok);
+}
+
+TEST_CASE("ассистент: свои заявки в работе попадают в промт")
+{
+    Fixture f;
+    FakeLlm llm;
+    llm.reply = "ok";
+    // Дина (id 4) — «Академическая справка» в статусе in_progress (фикстуры).
+    REQUIRE(runChat(f, session(4, "dina.demo"), "что с заявкой?", config(),
+                    llm.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys = (*llm.seen)["messages"][0]["content"].asString();
+    CHECK(sys.find("Академическая справка — статус: В работе") !=
+          std::string::npos);
+    // Олег (id 2) — «подана» видна ему, справки Дины в его промте нет.
+    FakeLlm llm2;
+    llm2.reply = "ok";
+    REQUIRE(runChat(f, session(2, "oleg.demo"), "что с заявкой?", config(),
+                    llm2.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys2 = (*llm2.seen)["messages"][0]["content"].asString();
+    CHECK(sys2.find("статус: Подана") != std::string::npos);
+    CHECK(sys2.find("Академическая справка") == std::string::npos);
+}
+
+TEST_CASE("ассистент: сбой одного источника контекста → Error, модели не уходит")
+{
+    Fixture f;
+    exec(f.dbPath, "DROP TABLE deadline_reminders; DROP TABLE deadlines;");
+    FakeLlm llm;
+    llm.reply = "не должно прийти";
+    const auto r = runChat(f, session(1, "anya.demo"), "дедлайны?", config(),
+                           llm.transport());
+    CHECK(r.status == AssistantService::Status::Error);
+    CHECK(*llm.calls == 0);
+}

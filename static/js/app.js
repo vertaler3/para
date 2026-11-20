@@ -5932,16 +5932,23 @@
     };
     const errorText = (status) => {
       if (status === 429) return t('assistant.errRate', 'Слишком много сообщений — подождите минуту.');
+      if (status === 401 || status === 403) return t('assistant.errSession', 'Сессия устарела — обновите страницу.');
       if (status === 400) return t('assistant.errTooLong', 'Вопрос длиннее 700 символов — сократите его.');
       return t('assistant.errUnavailable', 'Ассистент сейчас недоступен — попробуйте чуть позже.');
     };
 
+    let loadingHistory = false;
     const loadHistory = async () => {
+      if (loadingHistory) return;
       setError('');
       if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
       setOffline(false);
       showPart('[data-assistant-empty]', false);
       showPart('[data-assistant-skeleton]', true);
+      /* пока грузится история, отправка закрыта: иначе replaceChildren
+         стёр бы свежий вопрос (находка checker) */
+      loadingHistory = true;
+      if (send) send.disabled = true;
       try {
         const resp = await fetch('/v1/assistant/history', { headers: { Accept: 'application/json' } });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -5954,6 +5961,8 @@
         if (!navigator.onLine) { setOffline(true); applyOffline(true); }
         else setError(t('assistant.errHistory', 'Не получилось загрузить переписку'), loadHistory);
       } finally {
+        loadingHistory = false;
+        if (send) send.disabled = busy;
         showPart('[data-assistant-skeleton]', false);
         scrollDown();
       }
@@ -5961,7 +5970,7 @@
 
     const ask = async (text) => {
       const message = String(text || '').trim();
-      if (!message || busy) { if (input) input.focus(); return; }
+      if (!message || busy || loadingHistory) { if (input) input.focus(); return; }
       setError('');
       if (!navigator.onLine) { setOffline(true); applyOffline(true); return; }
       setOffline(false);
@@ -5977,7 +5986,7 @@
         if (!resp.ok) {
           bubble.remove();
           if (input && !input.value) input.value = message;
-          setError(errorText(resp.status), resp.status === 400 ? null : () => ask(message));
+          setError(errorText(resp.status), [400, 401, 403].includes(resp.status) ? null : () => ask(message));
           if (!list.children.length) showPart('[data-assistant-empty]', true);
           return;
         }
@@ -6001,7 +6010,14 @@
       if (input) input.focus();
     });
     assistant.querySelectorAll('[data-assistant-close]').forEach((b) => b.addEventListener('click', () => assistant.close()));
-    assistant.addEventListener('click', (e) => { if (e.target === assistant) assistant.close(); });
+    /* закрытие только по подложке: клик в паддинг самого dialog тоже даёт
+       target === dialog — сверяем координаты с его прямоугольником */
+    assistant.addEventListener('click', (e) => {
+      if (e.target !== assistant) return;
+      const r = assistant.getBoundingClientRect();
+      const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      if (!inside) assistant.close();
+    });
     assistant.addEventListener('close', () => assistantOpen.focus());
     form.addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });
     input.addEventListener('keydown', (e) => {
