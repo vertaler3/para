@@ -281,6 +281,39 @@ TEST_CASE("ассистент: настройки из .env — кавычки, 
     CHECK(config().configured());
 }
 
+TEST_CASE("ассистент: системный промт — дефолт из кода, env переопределяет")
+{
+    // Инцидент 21.11: .env в gitignore, git-деплой не переносил промт на
+    // сервер — там оставался старый «мягкий» текст. Теперь канонический
+    // промт зашит в код (kDefaultSystemPrompt) и применяется, когда env
+    // пуст/отсутствует; env-значение переопределяет.
+    ::setenv("ASSISTANT_API_URL", "https://example/v1", 0);
+    ::setenv("ASSISTANT_API_KEY", "k", 0);
+    ::setenv("ASSISTANT_MODEL", "yandexgpt-lite", 0);
+    ::unsetenv("ASSISTANT_SYSTEM_PROMPT");
+    const auto def = AssistantService::configFromEnv();
+    REQUIRE(def.configured());
+    CHECK(def.systemPrompt.find("ПРОВЕРКА РЕШЕНИЙ") != std::string::npos);
+    CHECK(def.systemPrompt.find("Никогда не говори «ваш расчёт верен»") !=
+          std::string::npos);
+    CHECK(def.systemPrompt.find("БЕЗ перевода часовых поясов") !=
+          std::string::npos);
+    CHECK(def.systemPrompt.find("НАВИГАЦИЯ") != std::string::npos);
+
+    // Пустое значение env — тоже дефолт (не «не настроено»).
+    ::setenv("ASSISTANT_SYSTEM_PROMPT", "\"\"", 1);
+    CHECK(AssistantService::configFromEnv().systemPrompt ==
+          def.systemPrompt);
+
+    // Явное значение — переопределение (однострочный промт без кавычек).
+    ::setenv("ASSISTANT_SYSTEM_PROMPT", "TEST-OVERRIDE", 1);
+    CHECK(AssistantService::configFromEnv().systemPrompt == "TEST-OVERRIDE");
+    ::unsetenv("ASSISTANT_SYSTEM_PROMPT");
+    ::unsetenv("ASSISTANT_API_URL");
+    ::unsetenv("ASSISTANT_API_KEY");
+    ::unsetenv("ASSISTANT_MODEL");
+}
+
 TEST_CASE("ассистент: разбор ответа модели")
 {
     const std::string ok =
