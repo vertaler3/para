@@ -1058,7 +1058,10 @@ body .week-board .lesson.moved{box-shadow:inset 3px 0 0 0 var(--danger-text)}
 .assistant-fab:hover{background:var(--primary-hover)}.assistant-fab:active{background:var(--primary-pressed)}
 .assistant-fab .icon{width:22px;height:22px}
 @media(min-width:1024px){.assistant-fab{bottom:1.5rem;right:1.5rem}}
-@media(max-width:599px){.assistant-fab{width:56px;height:56px;padding:0;justify-content:center}.assistant-fab span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
+/* фикс 22.11 (баг 3): на <600px fab — та же пилюля с иконкой и подписью
+   «Ассистент», что на десктопе (базовое правило выше); прежде мобильный
+   коллапс в кружок 56×56 прятал подпись (sr-only). Тап-зона не меньше:
+   базовая min-height 52px ≥ 44px на всех ширинах. */
 dialog.assistant-sheet{width:min(520px,calc(100% - 24px));height:min(680px,85dvh);max-height:85dvh;padding:1.25rem 1.25rem calc(.75rem + env(safe-area-inset-bottom));overflow:hidden;overscroll-behavior:contain}
 dialog.assistant-sheet[open]{display:flex;flex-direction:column;gap:.75rem}
 @media(max-width:599px){dialog.assistant-sheet{width:100%;height:88dvh;max-height:88dvh;padding-inline:1rem}}
