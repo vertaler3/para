@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -214,6 +215,20 @@ std::set<std::string> appliedVersions(sqlite3* db)
 
 }  // namespace
 
+std::string MigrationRunner::fileDigest(const std::string& content)
+{
+    // 64-бит FNV-1a по байтам файла; hex фиксированной ширины (16).
+    unsigned long long hash = 1469598103934665603ULL;
+    for (const unsigned char c : content)
+    {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", hash);
+    return std::string(hex);
+}
+
 std::vector<std::string> MigrationRunner::collectMigrations(
     const std::string& migrationsDir)
 {
@@ -328,11 +343,52 @@ MigrationRunner::Result MigrationRunner::run(const std::string& dbPath,
         }
         else if (applied.count(kFixturesVersion) != 0)
         {
-            LOG_INFO << "--seed: фикстуры уже применены (маркер '"
-                     << kFixturesVersion
-                     << "' в schema_migrations), повторное сидирование "
-                        "пропущено";
             result.fixturesSkipped = true;
+            // Сверка отпечатка применённого сида с текущим fixtures.sql
+            // (детекция «том засеян раньше, чем в фикстры добавили
+            // данные» — дефект пустых «Новостей» 21.11). Автоперезаливание
+            // НЕ делаем: в демо-контуре могут быть живые изменения.
+            const std::string digest = fileDigest(readFile(fixturesPath));
+            std::string seen;
+            for (const std::string& v : applied)
+                if (v.rfind(kFixturesDigestPrefix, 0) == 0)
+                {
+                    seen = v;
+                    break;
+                }
+            if (seen.empty())
+            {
+                result.fixturesStale = true;
+                LOG_WARN
+                    << "--seed: сид старее детекции изменений фикстур "
+                       "(нет строки '"
+                    << kFixturesDigestPrefix
+                    << "*'): в БД может не хватать данных, добавленных в "
+                       "sql/fixtures.sql позже последнего сида. Если демо-"
+                       "контур должен показывать все фикстуры — пересейте: "
+                       "docker compose down -v && docker compose up -d "
+                       "--build";
+            }
+            else if (seen != std::string(kFixturesDigestPrefix) + digest)
+            {
+                result.fixturesStale = true;
+                LOG_WARN << "--seed: sql/fixtures.sql изменился после "
+                            "последнего сида (в БД — отпечаток "
+                         << seen.substr(std::string(kFixturesDigestPrefix)
+                                            .size())
+                         << ", текущий файл — " << digest
+                         << "): добавленные после сида строки в БД "
+                            "отсутствуют, повторное сидирование пропущено. "
+                            "Пересейте демо-контур: docker compose down -v "
+                            "&& docker compose up -d --build";
+            }
+            else
+            {
+                LOG_INFO << "--seed: фикстуры уже применены и не "
+                            "изменились (маркер '"
+                         << kFixturesVersion << "', отпечаток " << digest
+                         << ")";
+            }
         }
         else
         {
@@ -340,10 +396,15 @@ MigrationRunner::Result MigrationRunner::run(const std::string& dbPath,
             // + маркер — атомарно; идемпотентность второго старта — маркер
             // (docs/decisions.md Р-5). user_version не трогаем: фикстуры —
             // не схема.
-            applyInTransaction(handle,
-                               kFixturesVersion,
-                               readFile(fixturesPath),
-                               -1);
+            const std::string fixturesSql = readFile(fixturesPath);
+            applyInTransaction(handle, kFixturesVersion, fixturesSql, -1);
+            applied.insert(kFixturesVersion);
+            // Отпечаток применённого файла — для сверки на следующих
+            // seed-стартах (см. skip-ветку выше).
+            const std::string digestRow =
+                std::string(kFixturesDigestPrefix) + fileDigest(fixturesSql);
+            applyInTransaction(handle, digestRow, "", -1);
+            applied.insert(digestRow);
             result.fixturesApplied = true;
             LOG_INFO << "фикстуры применены: " << fixturesPath;
         }
@@ -408,7 +469,10 @@ MigrationRunner::Result MigrationRunner::run(const std::string& dbPath,
                      ? (result.fixturesApplied
                             ? ", фикстуры применены"
                             : (result.fixturesSkipped
-                                   ? ", фикстуры уже были"
+                                   ? (result.fixturesStale
+                                          ? ", фикстуры уже были, НО "
+                                            "УСТАРЕЛИ (см. WARN выше)"
+                                          : ", фикстуры уже были")
                                    : ", фикстуры отсутствуют"))
                      : "");
     return result;

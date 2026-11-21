@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -56,26 +57,27 @@ std::time_t parseIso(const std::string& iso)
     return timegm(&tm);
 }
 
-constexpr std::time_t kMskOffset = 3 * 3600;  // UTC+3 круглый год
-
-std::string fmtMsk(const std::string& iso, const char* pattern)
+// Форматирование времени контекста БЕЗ перевода поясов — как в остальных
+// экранах портала: чат и расписание называют одно и то же время (фикс
+// 21.11: раньше контекст сдвигал UTC→МСК и модель говорила «13:00» там,
+// где UI показывает «10:00»).
+std::string fmtPortal(const std::string& iso, const char* pattern)
 {
     const std::time_t t = parseIso(iso);
     if (t < 0)
         return iso;
-    const std::time_t local = t + kMskOffset;
     std::tm tm{};
-    gmtime_r(&local, &tm);
+    gmtime_r(&t, &tm);
     char buf[32];
     std::strftime(buf, sizeof buf, pattern, &tm);
     return buf;
 }
 
-// «Сегодня» по Москве: контекст подписан «время московское», и с 00:00 до
-// 03:00 МСК UTC-дата ещё вчерашняя (находка checker).
-std::string todayMsk()
+// «Сегодня» в UTC-календаре проекта — тот же «сегодня», что в
+// /v1/schedule/today и на дашборде.
+std::string todayUtc()
 {
-    const std::time_t t = std::time(nullptr) + kMskOffset;
+    const std::time_t t = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&t, &tm);
     char buf[16];
@@ -83,9 +85,10 @@ std::string todayMsk()
     return buf;
 }
 
-std::string mskDay(const std::string& iso)
+// День ISO-строки «…Z» как есть (UTC-календарь портала).
+std::string isoDay(const std::string& iso)
 {
-    return fmtMsk(iso, "%Y-%m-%d");
+    return iso.size() >= 10 ? iso.substr(0, 10) : iso;
 }
 
 const char* weekdayRu(const std::string& date)
@@ -133,8 +136,8 @@ std::string str(const Json::Value& v, const char* key)
 
 void renderLesson(std::string& out, const Json::Value& e)
 {
-    out += "- " + AssistantService::mskTime(str(e, "starts_at")) + "–" +
-           AssistantService::mskTime(str(e, "ends_at")) + " " +
+    out += "- " + AssistantService::portalTime(str(e, "starts_at")) + "–" +
+           AssistantService::portalTime(str(e, "ends_at")) + " " +
            str(e, "discipline") + " (" + lessonKind(str(e, "kind")) +
            "), ауд. " + str(e, "room");
     if (!str(e, "building").empty())
@@ -147,7 +150,7 @@ void renderLesson(std::string& out, const Json::Value& e)
         out += " — ПЕРЕНЕСЕНА";
         std::string was;
         if (!str(e, "prev_starts_at").empty())
-            was += AssistantService::mskDateTime(str(e, "prev_starts_at"));
+            was += AssistantService::portalDateTime(str(e, "prev_starts_at"));
         if (!str(e, "prev_room").empty())
             was += (was.empty() ? "ауд. " : ", ауд. ") + str(e, "prev_room");
         if (!was.empty())
@@ -267,38 +270,362 @@ AssistantService::RateLimiter& AssistantService::RateLimiter::instance()
 
 // --- Контекст ------------------------------------------------------------------
 
-std::string AssistantService::mskTime(const std::string& iso)
+std::string AssistantService::portalTime(const std::string& iso)
 {
-    return fmtMsk(iso, "%H:%M");
+    return fmtPortal(iso, "%H:%M");
 }
 
-std::string AssistantService::mskDateTime(const std::string& iso)
+std::string AssistantService::portalDateTime(const std::string& iso)
 {
-    return fmtMsk(iso, "%d.%m %H:%M");
+    return fmtPortal(iso, "%d.%m %H:%M");
+}
+
+// Верхний регистр для ASCII + кириллицы (UTF-8, U+0430..U+044F, Ё U+0451).
+std::string upperRu(const std::string& s)
+{
+    std::string upper;
+    for (std::size_t k = 0; k < s.size(); ++k)
+    {
+        unsigned char a = s[k],
+                      b = k + 1 < s.size() ? s[k + 1] : '\0';
+        if (a == 0xD0 && b >= 0xB0 && b <= 0xBF)  // а..п → А..П
+        {
+            upper += a;
+            upper += static_cast<char>(b - 0x20);
+            ++k;
+        }
+        else if (a == 0xD1 && b == 0x91)  // ё → Ё
+        {
+            upper += a;
+            upper += static_cast<char>(0x81);
+            ++k;
+        }
+        else if (a == 0xD1 && b >= 0x80 && b <= 0x8F)  // р..я → Р..Я
+        {
+            upper += static_cast<char>(0xD0);
+            upper += static_cast<char>(b + 0x20);
+            ++k;
+        }
+        else
+            upper += static_cast<char>(
+                std::toupper(static_cast<unsigned char>(a)));
+    }
+    return upper;
+}
+
+std::string AssistantService::roomQuery(const std::string& message)
+{
+    // Токен = буквы/цифры/дефис; валиден, если 0–2 БУКВЫ + необязательный
+    // дефис + 3–4 ЦИФРЫ («1207», «3105», «Б-204», «в-216» → «В-216»).
+    // Годы и проценты не фильтруем специально: LIKE по rooms честно
+    // вернёт пусто — в контекст ничего лишнего не попадёт.
+    std::string token;
+    auto flush = [&token]() {
+        if (token.empty())
+            return std::string();
+        std::string letters, digits;
+        std::size_t i = 0;
+        for (; i < token.size() &&
+               (std::isalpha(static_cast<unsigned char>(token[i])) ||
+                token[i] & 0x80);  // кириллица — байты >= 0x80
+             ++i)
+            letters += token[i];
+        if (i < token.size() && token[i] == '-')
+            ++i;
+        digits = token.substr(i);
+        const bool shape = digits.size() >= 3 && digits.size() <= 4 &&
+                           digits.find_first_not_of("0123456789") ==
+                               std::string::npos &&
+                           letters.size() <= 4;  // ≤2 буквы в UTF-8 = ≤4 байт
+        if (!shape)
+        {
+            token.clear();
+            return std::string();
+        }
+        std::string result = upperRu(letters);
+        if (!letters.empty() && i > 0 && token[i - 1] == '-')
+            result += "-";
+        result += digits;
+        token.clear();
+        return result;
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' ||
+            static_cast<unsigned char>(c) >= 0x80)  // кириллица
+            token += c;
+        else
+        {
+            const std::string found = flush();
+            if (!found.empty())
+                return found;
+        }
+    }
+    return flush();
+}
+
+std::string AssistantService::mentionedGroup(const std::string& message)
+{
+    // Токены букв/цифр/дефиса; валиден, если 1–2 ЦИФРЫ + дефис + 2–6 БУКВ
+    // («4-МЭО», «1-фмо» → «1-ФМО»). Даты и номера аудиторий не подходят.
+    std::string token;
+    auto flush = [&token]() {
+        if (token.empty())
+            return std::string();
+        std::size_t i = 0;
+        while (i < token.size() &&
+               std::isdigit(static_cast<unsigned char>(token[i])))
+            ++i;
+        const std::string digits = token.substr(0, i);
+        const bool shape = digits.size() >= 1 && digits.size() <= 2 &&
+                           i < token.size() && token[i] == '-';
+        if (!shape)
+        {
+            token.clear();
+            return std::string();
+        }
+        ++i;  // дефис
+        std::string letters = token.substr(i);
+        token.clear();
+        if (letters.empty() || letters.size() > 12)  // ≤6 букв в UTF-8
+            return std::string();
+        for (const char c : letters)
+        {
+            const unsigned char b = static_cast<unsigned char>(c);
+            // буквы: ASCII-буквы или байты кириллицы (>= 0x80); цифры и
+            // прочее — не группа.
+            if (b < 0x80 && !std::isalpha(b))
+                return std::string();
+        }
+        return digits + "-" + upperRu(letters);
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' ||
+            static_cast<unsigned char>(c) >= 0x80)
+            token += c;
+        else
+        {
+            const std::string found = flush();
+            if (!found.empty())
+                return found;
+        }
+    }
+    return flush();
+}
+
+namespace {
+
+// «2026-11-25» + дней → «2026-12-02» (арифметика через timegm/gmtime).
+std::string addDaysStr(const std::string& ymd, int days)
+{
+    const std::time_t t = parseIso(ymd + "T12:00:00Z");
+    if (t < 0)
+        return std::string();
+    std::tm tm{};
+    const std::time_t shifted = t + days * 86400;
+    gmtime_r(&shifted, &tm);
+    char buf[16];
+    std::strftime(buf, sizeof buf, "%Y-%m-%d", &tm);
+    return buf;
+}
+
+int dayOfMonth(const std::string& ymd)
+{
+    return ymd.size() >= 10 ? std::atoi(ymd.c_str() + 8) : 0;
+}
+
+}  // namespace
+
+std::string AssistantService::mentionedDate(const std::string& message,
+                                            const std::string& today)
+{
+    if (today.size() < 10)
+        return std::string();
+    const int todayYear = std::atoi(today.c_str());
+    // Токены: буквы/цифры/точки (кириллица — байты >= 0x80).
+    std::vector<std::string> tokens;
+    std::string token;
+    auto flush = [&tokens, &token]() {
+        if (!token.empty())
+        {
+            tokens.push_back(token);
+            token.clear();
+        }
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '.' ||
+            static_cast<unsigned char>(c) >= 0x80)
+            token += c;
+        else
+            flush();
+    }
+    flush();
+    if (tokens.empty())
+        return std::string();
+
+    // Месяцы по префиксу в ВЕРХНЕМ регистре (токен прогоняется через
+    // upperRu; именительный/родительный: «ноябрь»/«ноября»).
+    static const std::pair<const char*, int> kMonths[] = {
+        {"ЯНВ", 1},  {"ФЕВ", 2},  {"МАР", 3},  {"АПР", 4},  {"МАЯ", 5},
+        {"МАЙ", 5},  {"МАЕ", 5},  {"МАЮ", 5},  {"ИЮН", 6},  {"ИЮЛ", 7},
+        {"АВГ", 8},  {"СЕН", 9},  {"ОКТ", 10}, {"НОЯ", 11}, {"ДЕК", 12}};
+    // Будни (в любом падеже — матчится по префиксу), верхний регистр.
+    static const std::pair<const char*, int> kWeekdays[] = {
+        {"ПОНЕДЕЛ", 1}, {"ВТОРНИ", 2},  {"СРЕД", 3}, {"ЧЕТВЕР", 4},
+        {"ПЯТНИЦ", 5},   {"СУББОТ", 6},  {"ВОСКРЕСЕН", 0}};
+
+    const auto toUpper = [](const std::string& s) { return upperRu(s); };
+
+    for (std::size_t i = 0; i < tokens.size(); ++i)
+    {
+        const std::string& t = tokens[i];
+        // 1) «25.11» / «25.11.2026» — целиком цифро-точечный токен.
+        // Токен без точки («25») сюда не попадает и уходит в правило 2
+        // (число + месяц).
+        if (t.find_first_not_of("0123456789.") == std::string::npos &&
+            t.find('.') != std::string::npos)
+        {
+            int d = 0, m = 0, y = 0;
+            const auto first = t.find('.');
+            const auto second = t.find('.', first + 1);
+            d = std::atoi(t.substr(0, first).c_str());
+            if (second == std::string::npos)
+                m = std::atoi(t.substr(first + 1).c_str());
+            else
+            {
+                m = std::atoi(t.substr(first + 1, second - first - 1)
+                                  .c_str());
+                y = std::atoi(t.substr(second + 1).c_str());
+            }
+            if (d >= 1 && d <= 31 && m >= 1 && m <= 12 &&
+                (y == 0 || (y >= 2000 && y <= 2100)))
+            {
+                int year = y != 0 ? y : todayYear;
+                char buf[16];
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", year, m,
+                              d);
+                std::string ymd(buf);
+                if (ymd < today && y == 0)
+                    ymd = addDaysStr(ymd, 365);  // спрашивают будущее
+                return ymd;
+            }
+            continue;
+        }
+        // 2) «25 ноября» — число + следующий токен месяц.
+        if (t.find_first_not_of("0123456789") == std::string::npos)
+        {
+            const int d = std::atoi(t.c_str());
+            if (d >= 1 && d <= 31 && i + 1 < tokens.size())
+            {
+                const std::string next = toUpper(tokens[i + 1]);
+                for (const auto& [p, m] : kMonths)
+                    if (next.rfind(p, 0) == 0)
+                    {
+                        char buf[16];
+                        std::snprintf(buf, sizeof buf, "%04d-%02d-%02d",
+                                      todayYear, m, d);
+                        std::string ymd(buf);
+                        if (ymd < today)
+                            ymd = addDaysStr(ymd, 365);
+                        return ymd;
+                    }
+            }
+            continue;
+        }
+        // 3) «в среду» / «среда» — ближайший будень СТРОГО после today.
+        {
+            const std::string up = toUpper(t);
+            for (const auto& [p, wd] : kWeekdays)
+                if (up.rfind(p, 0) == 0)
+                {
+                    const std::time_t cur =
+                        parseIso(today + "T12:00:00Z");
+                    if (cur < 0)
+                        return std::string();
+                    std::tm tm{};
+                    gmtime_r(&cur, &tm);
+                    int delta = (wd - tm.tm_wday + 7) % 7;
+                    if (delta == 0)
+                        delta = 7;
+                    return addDaysStr(today, delta);
+                }
+        }
+    }
+    return std::string();
 }
 
 std::string AssistantService::renderContext(const ContextData& d)
 {
     const std::string tomorrow = ScheduleService::addDays(d.today, 1);
     std::string out;
-    out += "ДАННЫЕ ПОРТАЛА ДЛЯ ЭТОГО СТУДЕНТА (вымышленные; время московское):\n";
+    out += "ДАННЫЕ ПОРТАЛА ДЛЯ ЭТОГО СТУДЕНТА (вымышленные; время — как в "
+           "интерфейсе портала, без перевода поясов):\n";
     out += "Сегодня " + d.today + ", " + weekdayRu(d.today) + ".\n";
+    out += "Ниже — только твои данные: расписание твоей группы и твои дела."
+           " Данных о других группах в этом контексте нет.\n";
+    if (!d.group.empty())
+        out += "Твоя группа — " + d.group + ".\n";
+    if (!d.foreignGroup.empty())
+        out += "ВНИМАНИЕ: в вопросе упомянута группа " + d.foreignGroup +
+               " — это НЕ твоя группа, и данных о ней в этом контексте"
+               " нет. На вопрос о группе " + d.foreignGroup +
+               " отвечай: «в портале нет такой информации» (расписание"
+               " другой группы смотри в разделе «Расписание» на месте)."
+               " Своё расписание вместо группы " + d.foreignGroup +
+               " НЕ подставляй.\n";
+    if (d.solutionCheck)
+        out += "ВНИМАНИЕ: студент просит проверить его решение. НЕ"
+               " подтверждай и не опровергай итог, НЕ переписывай решение."
+               " Задай ОДИН наводящий вопрос и укажи, какой шаг проверить"
+               " (например, точную формулу или единицы измерения), без"
+               " готового результата.\n";
 
     for (const auto& [day, label] :
-         {std::pair{d.today, "Расписание на сегодня"},
-          std::pair{tomorrow, "Расписание на завтра"}})
+         {std::pair{d.today, "Расписание твоей группы на сегодня"},
+          std::pair{tomorrow, "Расписание твоей группы на завтра"}})
     {
         out += std::string("\n") + label + " (" + day + ", " + weekdayRu(day) +
                "):\n";
         bool any = false;
         if (d.events.isArray())
             for (const auto& e : d.events)
-                if (mskDay(str(e, "starts_at")) == day)
+                if (isoDay(str(e, "starts_at")) == day)
                 {
                     renderLesson(out, e);
                     any = true;
                 }
         if (!any)
+            out += "- пар нет\n";
+    }
+
+    // Дата из вопроса («что за пары 25 ноября») — догруженная секция.
+    if (!d.dateAsked.empty())
+    {
+        static const char* kMonthsGen[] = {
+            "января", "февраля", "марта",     "апреля",   "мая",
+            "июня",   "июля",     "августа",  "сентября", "октября",
+            "ноября", "декабря"};
+        const int m = d.dateAsked.size() >= 10
+                          ? std::atoi(d.dateAsked.c_str() + 5)
+                          : 0;
+        const int day = dayOfMonth(d.dateAsked);
+        const int year = std::atoi(d.dateAsked.c_str());
+        std::string title = d.dateAsked;
+        if (m >= 1 && m <= 12 && day > 0)
+            title = std::to_string(day) + " " + kMonthsGen[m - 1] + " " +
+                    std::to_string(year);
+        out += "\nРасписание твоей группы на " + title + ", " +
+               weekdayRu(d.dateAsked) + ":\n";
+        bool anyDate = false;
+        if (d.dateEvents.isArray())
+            for (const auto& e : d.dateEvents)
+            {
+                renderLesson(out, e);
+                anyDate = true;
+            }
+        if (!anyDate)
             out += "- пар нет\n";
     }
 
@@ -309,7 +636,7 @@ std::string AssistantService::renderContext(const ContextData& d)
         for (const auto& e : d.exams)
             if (str(e, "starts_at") >= now)
             {
-                out += "- " + mskDateTime(str(e, "starts_at")) + " " +
+                out += "- " + portalDateTime(str(e, "starts_at")) + " " +
                        planKind(str(e, "kind")) + ": " + str(e, "discipline") +
                        ", ауд. " + str(e, "room") + "\n";
                 anyExam = true;
@@ -320,7 +647,7 @@ std::string AssistantService::renderContext(const ContextData& d)
     out += "\nАктивные дедлайны:\n";
     if (d.deadlines.isArray() && !d.deadlines.empty())
         for (const auto& x : d.deadlines)
-            out += "- до " + mskDateTime(str(x, "due_at")) + ": " +
+            out += "- до " + portalDateTime(str(x, "due_at")) + ": " +
                    str(x, "title") + " (" + planKind(str(x, "kind")) + ")\n";
     else
         out += "- нет\n";
@@ -340,7 +667,7 @@ std::string AssistantService::renderContext(const ContextData& d)
     if (d.campus.isArray() && !d.campus.empty())
         for (const auto& n : d.campus)
         {
-            out += "- " + mskDateTime(str(n, "event_at")) + " " +
+            out += "- " + portalDateTime(str(n, "event_at")) + " " +
                    str(n, "title");
             if (!str(n, "location").empty())
                 out += ", " + str(n, "location");
@@ -348,6 +675,22 @@ std::string AssistantService::renderContext(const ContextData& d)
         }
     else
         out += "- нет\n";
+
+    // Аудитории из вопроса (карта портала): раздел добавляем только при
+    // непустом результате — пустой не подсказывает модели «нет аудитории».
+    if (d.rooms.isArray() && !d.rooms.empty())
+    {
+        out += "\nАудитории по твоему вопросу (из карты портала):\n";
+        for (const auto& r : d.rooms)
+        {
+            out += "- " + str(r, "name") + " — " + str(r, "building");
+            if (r["floor"].isIntegral())
+                out += ", этаж " + std::to_string(r["floor"].asInt64());
+            if (!str(r, "kind").empty())
+                out += " (" + str(r, "kind") + ")";
+            out += "\n";
+        }
+    }
     return out;
 }
 
@@ -478,6 +821,13 @@ const std::string kInsertPairSql =
     "INSERT INTO assistant_messages(user_id, role, content) VALUES "
     "($1, 'user', $2), ($3, 'assistant', $4)";
 
+// Поиск аудитории для контекста — та же логика, что GET /v1/map/rooms?q=…
+// (MapService::rooms): подстрочный LIKE по имени с экранированием.
+const std::string kRoomSql =
+    "SELECT r.name, b.name AS building, r.floor, r.kind FROM rooms r"
+    " JOIN buildings b ON b.id = r.building_id"
+    " WHERE r.name LIKE $1 ESCAPE '\\' ORDER BY r.id ASC LIMIT 5";
+
 // Сборщик параллельных источников: cb стреляет ровно один раз — когда
 // отработали все, либо при первой ошибке (fail-closed).
 struct Gather
@@ -504,13 +854,15 @@ struct Gather
 void AssistantService::collectContext(orm::DbClientPtr db,
                                       const SessionInfo& session,
                                       const std::string& today,
+                                      const std::string& message,
                                       ContextCb cb)
 {
     const int64_t userId = session.userId;
     ScheduleService::groupOfUser(
         db, userId,
-        [db, session, today, userId, cb](ScheduleService::GroupLookup lookup,
-                                         std::optional<int64_t> groupId) {
+        [db, session, today, message, userId, cb](
+            ScheduleService::GroupLookup lookup,
+            std::optional<int64_t> groupId) {
             if (lookup == ScheduleService::GroupLookup::Error)
             {
                 cb(false, ContextData{});
@@ -524,15 +876,126 @@ void AssistantService::collectContext(orm::DbClientPtr db,
             g->data.deadlines = Json::Value(Json::arrayValue);
             g->data.applications = Json::Value(Json::arrayValue);
             g->data.campus = Json::Value(Json::arrayValue);
+            g->data.rooms = Json::Value(Json::arrayValue);
             const bool hasGroup = groupId.has_value();
-            g->pending = hasGroup ? 5 : 4;
+            // «Проверь моё решение»: детерминированный маркер контекста —
+            // слабой модели нужен явный запрет + наводящий вопрос. Слово
+            // проверки + слово «решение/расчёт/задача», чтобы «проверь
+            // расписание» маркер не включало. Регистронезависимо
+            // («Проверь…» с заглавной — живой кейс 21.11).
+            const std::string upperMsg = upperRu(message);
+            const auto has = [&upperMsg](const char* needle) {
+                return upperMsg.find(needle) != std::string::npos;
+            };
+            const bool checkWord = has("ПРОВЕРЬ") || has("ПРОВЕРИТЬ") ||
+                                   has("ПРАВИЛЬНО ЛИ");
+            const bool solutionWord = has("РЕШЕНИ") || has("РАСЧЁТ") ||
+                                      has("РАСЧЕТ") || has("ПОСЧИТАЛ") ||
+                                      has("ЗАДАЧ") || has("ПРИМЕР");
+            g->data.solutionCheck = checkWord && solutionWord;
+            // +1 источник, если в вопросе есть номер аудитории — ищем по
+            // карте (GET /v1/map/rooms?q=…): «где аудитория 1207?» больше
+            // не остаётся без данных портала.
+            const std::string room = roomQuery(message);
+            // Дата из вопроса («что за пары 25 ноября») → догрузить
+            // расписание этой даты: сегодня/завтра уже в контексте, их
+            // не дублируем (иначе модель видела «нет информации» на любой
+            // день дальше завтра — живой кейс 21.11).
+            std::string dateAsked = mentionedDate(message, today);
+            if (dateAsked == today ||
+                dateAsked == ScheduleService::addDays(today, 1))
+                dateAsked.clear();
+            const bool needDate = hasGroup && !dateAsked.empty();
+            if (needDate)
+                g->data.dateAsked = dateAsked;
+            g->pending = (hasGroup ? 6 : 4) + (room.empty() ? 0 : 1) +
+                         (needDate ? 1 : 0);
             const std::string now = nowIso();
+
+            if (needDate)
+                ScheduleService::eventsOnRange(
+                    db, *groupId, dateAsked + "T00:00:00Z",
+                    ScheduleService::addDays(dateAsked, 1) + "T00:00:00Z",
+                    [g](bool ok, Json::Value events) {
+                        if (ok)
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.dateEvents = std::move(events);
+                        }
+                        g->done(ok);
+                    });
+
+            if (hasGroup)
+                *db << "SELECT name FROM groups WHERE id = $1"
+                    << *groupId >>
+                    [g, mentioned = mentionedGroup(message)](
+                        const orm::Result& rows) {
+                        if (!rows.empty())
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.group =
+                                rows[0]["name"].as<std::string>();
+                            // Чужая группа в вопросе → предупреждение в
+                            // контексте (аудит 21.11: модель подменяла
+                            // расписание пользователя).
+                            if (!mentioned.empty() &&
+                                mentioned != g->data.group)
+                                g->data.foreignGroup = mentioned;
+                        }
+                        g->done(true);
+                    } >>
+                    [g](const DrogonDbException& e) {
+                        LOG_ERROR << "AssistantService: группа: "
+                                  << e.base().what();
+                        g->done(false);
+                    };
+
+            if (!room.empty())
+            {
+                // Экранирование спецсимволов LIKE — как MapService::rooms.
+                std::string like = "%";
+                for (char c : room)
+                {
+                    if (c == '\\' || c == '%' || c == '_')
+                        like += '\\';
+                    like += c;
+                }
+                like += '%';
+                *db << kRoomSql << like >>
+                    [g](const orm::Result& rows) {
+                        Json::Value arr(Json::arrayValue);
+                        for (const auto& r : rows)
+                        {
+                            Json::Value x(Json::objectValue);
+                            x["name"] = r["name"].as<std::string>();
+                            x["building"] = r["building"].as<std::string>();
+                            if (r["floor"].isNull())
+                                x["floor"] = Json::Value();
+                            else
+                                x["floor"] = r["floor"].as<int64_t>();
+                            if (r["kind"].isNull())
+                                x["kind"] = Json::Value();
+                            else
+                                x["kind"] = r["kind"].as<std::string>();
+                            arr.append(std::move(x));
+                        }
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.rooms = std::move(arr);
+                        }
+                        g->done(true);
+                    } >>
+                    [g, room](const DrogonDbException& e) {
+                        LOG_ERROR << "AssistantService: карта(" << room
+                                  << "): " << e.base().what();
+                        g->done(false);
+                    };
+            }
 
             if (hasGroup)
                 ScheduleService::eventsOnRange(
-                    // Московские сутки сегодня+завтра шире UTC-окна на
-                    // 3 ч — берём с запасом, по дням раскладывает
-                    // renderContext (mskDay).
+                    // Окно с запасом вокруг сегодня+завтра; по дням
+                    // раскладывает renderContext (isoDay).
                     db, *groupId,
                     ScheduleService::addDays(today, -1) + "T00:00:00Z",
                     ScheduleService::addDays(today, 3) + "T00:00:00Z",
@@ -667,7 +1130,7 @@ void AssistantService::chat(orm::DbClientPtr db,
     }
     const int64_t userId = session.userId;
     collectContext(
-        db, session, todayMsk(),
+        db, session, todayUtc(), message,
         [db, userId, message, cfg, transport, cb](bool ok, ContextData data) {
             if (!ok)
             {
