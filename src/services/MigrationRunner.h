@@ -38,6 +38,13 @@ class MigrationRunner
         bool fixturesApplied = false;
         // seedMode, но маркер 'fixtures' уже стоит — корректный пропуск.
         bool fixturesSkipped = false;
+        // seedMode, фикстуры пропущены, НО fixtures.sql не совпадает с
+        // применённым сидом (или сид старее детекции): в БД нет данных,
+        // добавленных в фикстуры позже первого сида. Не ошибка (данные
+        // демо-контура могут содержать живые изменения) — громкий WARN в
+        // лог с инструкцией пересева (дефект «пустые Новости» 21.11:
+        // том засеян до news-блока фикстур, сид молча пропускался).
+        bool fixturesStale = false;
     };
 
     // dbPath — файл SQLite (каталог создаётся при необходимости);
@@ -60,6 +67,16 @@ class MigrationRunner
 
     // Маркер фикстур в schema_migrations (docs/decisions.md Р-5).
     static constexpr const char* kFixturesVersion = "fixtures";
+    // Префикс строки-отпечатка применённого fixtures.sql (FNV-1a, hex):
+    // 'fixtures-digest-<hex>'; записывается сразу после фикстур той же
+    // схемой учёта. При seed-старте отпечаток сверен с текущим файлом —
+    // расхождение/отсутствие = fixturesStale (WARN, пересев руками).
+    static constexpr const char* kFixturesDigestPrefix = "fixtures-digest-";
+
+    // Отпечаток содержимого файла (64-бит FNV-1a, 16 hex-символов). Не
+    // криптография — детектор изменений fixtures.sql между сидами.
+    // Публично для юнит-тестов.
+    static std::string fileDigest(const std::string& content);
 };
 
 }  // namespace para

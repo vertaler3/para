@@ -95,7 +95,12 @@ TEST_CASE("идемпотентность: второй прогон ничег�
         CHECK(r1.appliedMigrations == 2);
         CHECK(r1.fixturesApplied);
         CHECK(!r1.fixturesSkipped);
-        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "3");
+        CHECK(!r1.fixturesStale);
+        // 2 миграции + 'fixtures' + 'fixtures-digest-…' (детекция 21.11)
+        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "4");
+        CHECK(scalar(db,
+                     "SELECT count(*) FROM schema_migrations WHERE version "
+                     "LIKE 'fixtures-digest-%'") == "1");
         CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
         // дублёр счётчика — номер последней миграции (02 §8.3)
         CHECK(scalar(db, "PRAGMA user_version") == "2");
@@ -110,7 +115,8 @@ TEST_CASE("идемпотентность: второй прогон ничег�
         CHECK(r2.appliedMigrations == 0);
         CHECK(!r2.fixturesApplied);
         CHECK(r2.fixturesSkipped);
-        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "3");
+        CHECK(!r2.fixturesStale);  // файл не менялся — сид актуален
+        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "4");
         // фикстуры не задублировались — идемпотентность второго старта
         CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
         CHECK(scalar(db, "PRAGMA user_version") == "2");
@@ -123,8 +129,71 @@ TEST_CASE("идемпотентность: второй прогон ничег�
         CHECK(r3.appliedMigrations == 0);
         CHECK(!r3.fixturesApplied);
         CHECK(!r3.fixturesSkipped);
-        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "3");
+        CHECK(scalar(db, "SELECT count(*) FROM schema_migrations") == "4");
         CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
+    }
+}
+
+// Детекция устаревшего сида (дефект 21.11 «пустые Новости»): том засеян
+// раньше, чем в fixtures.sql добавили данные, — маркер 'fixtures' стоит,
+// идемпотентный skip молча не доносил новые строки. Теперь раннер сверяет
+// отпечаток применённого файла с текущим и громко предупреждает, НЕ
+// трогая данные (в демо-контуре могут быть живые изменения).
+TEST_CASE("seed: изменившийся fixtures.sql → fixturesStale + WARN, данные не тронуты")
+{
+    TempDir tmp;
+    const fs::path migrations = tmp.path / "migrations";
+    fs::create_directories(migrations);
+    writeFile(migrations / "0001_test_persons.sql",
+              "CREATE TABLE persons(id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+    const fs::path fixtures = tmp.path / "fixtures.sql";
+    writeFile(fixtures, "INSERT INTO persons(id, name) VALUES(1, 'Аня демо');");
+    const std::string db = (tmp.path / "para.db").string();
+    const std::string mig = migrations.string();
+    const std::string fix = fixtures.string();
+    MigrationRunner::run(db, mig, fix, true);
+
+    SUBCASE("файл изменился → stale при каждом seed-старте, данные прежние")
+    {
+        writeFile(fixtures,
+                  "INSERT INTO persons(id, name) VALUES(1, 'Аня демо'),"
+                  "(2, 'Марк демо');");
+        const auto r = MigrationRunner::run(db, mig, fix, true);
+        CHECK(r.fixturesSkipped);
+        CHECK(r.fixturesStale);
+        CHECK(!r.fixturesApplied);
+        // новые строки НЕ залиты и старые НЕ тронуты — только предупреждение
+        CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
+        // повторный старт без изменений файла — по-прежнему stale (данные
+        // в БД так и не совпадают с файлом)
+        const auto r2 = MigrationRunner::run(db, mig, fix, true);
+        CHECK(r2.fixturesStale);
+        CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
+    }
+
+    SUBCASE("сид старее детекции (нет digest-строки) → stale")
+    {
+        sqlite3* raw = nullptr;
+        REQUIRE(sqlite3_open(db.c_str(), &raw) == SQLITE_OK);
+        char* err = nullptr;
+        REQUIRE(sqlite3_exec(raw,
+                             "DELETE FROM schema_migrations WHERE version "
+                             "LIKE 'fixtures-digest-%';",
+                             nullptr, nullptr, &err) == SQLITE_OK);
+        sqlite3_close(raw);
+        const auto r = MigrationRunner::run(db, mig, fix, true);
+        CHECK(r.fixturesSkipped);
+        CHECK(r.fixturesStale);
+        CHECK(scalar(db, "SELECT count(*) FROM persons") == "1");
+    }
+
+    SUBCASE("отпечаток устойчив: fileDigest детерминирован и различает файлы")
+    {
+        const std::string a = MigrationRunner::fileDigest("abc");
+        CHECK(a.size() == 16);
+        CHECK(a == MigrationRunner::fileDigest("abc"));
+        CHECK(a != MigrationRunner::fileDigest("abd"));
+        CHECK(MigrationRunner::fileDigest("") != a);
     }
 }
 
