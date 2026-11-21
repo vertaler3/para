@@ -94,6 +94,12 @@ class RoomsService
     // "date", "slots": [{"starts_at", "ends_at", "state"}, ...]} — сетка
     // дня по 60 минут, каждый слот со своим состоянием (см. выше);
     // starts_at/ends_at — «…Z»-строки сетки (UTC), state — free|booked|mine.
+    // nowIso передаёт контроллер (SessionService::utcNow — как upcoming в
+    // myBookings): слот, ЗАКОНЧИВШИЙСЯ к nowIso (slotEnd <= nowIso), не
+    // помечается "free" — в трёх состояниях 02 §5.2 это "booked" (не
+    // тапается; «ваша бронь» остаётся "mine" и у прошедшего — отмена из
+    // сетки работает). Без этого сетка прошедшего дня предлагала
+    // «свободно» слоты, которые create уже не принимает (фикс 22.11).
     // userId — из сессии (контроллер): «ваша бронь» определяется им;
     // владение БРОНЬЮ (не комнатой) — другой объект шага 2/3, здесь только
     // признак «эта строка моя». Исходы — раздельно (404/500 контроллером):
@@ -115,6 +121,7 @@ class RoomsService
                       int64_t roomId,
                       int64_t userId,
                       const std::string& date,
+                      const std::string& nowIso,
                       std::function<void(SlotsResult)> cb);
 
     // --- Брони (Э5а шаг 2; 02 §5.2) ----------------------------------------
@@ -124,6 +131,14 @@ class RoomsService
     // принимает произвольный интервал ends_at > starts_at: пересекающий
     // запрос 10:30–11:30 должен дойти до проверки пересечения (409), а не
     // отсеиваться «не слот» на валидации.
+    //
+    // nowIso передаёт контроллер (SessionService::utcNow — тот же паттерн,
+    // что upcoming в myBookings): интервал из ПРОШЛОГО отвергается на
+    // валидации (startsAt <= nowIso → InvalidBody). Без этого create
+    // принимал уже закончившиеся интервалы (201 «Забронировано»), которые
+    // upcoming-фильтр «Моих броней» (ends_at >= now) скрывал — успешная
+    // бронь, которой нет в списке (фикс 22.11: консистентность веток
+    // одного сервиса).
     //
     // Двойная защита от двойной брони (гайд BE §8):
     //   1) серверная проверка пересечений активных броней этой комнаты
@@ -144,7 +159,8 @@ class RoomsService
         SlotTaken,  // 400 — двойная бронь того же слота (сервер или UNIQUE)
         Conflict,   // 409 — пересечение интервала («только что заняли»)
         Blocked,    // 409 — интервал пересекает блокировку деканата (шаг 3)
-        InvalidBody,  // 400 — не ISO «…Z» / ends_at <= starts_at
+        InvalidBody,  // 400 — не ISO «…Z» / ends_at <= starts_at /
+                    //     starts_at в прошлом (startsAt <= nowIso)
         NotFound,   // 404 — аудитории нет
         Error       // 500 — ошибка БД (fail-closed)
     };
@@ -168,6 +184,7 @@ class RoomsService
                        int64_t userId,
                        const std::string& startsAt,
                        const std::string& endsAt,
+                       const std::string& nowIso,
                        std::function<void(CreateResult)> cb);
 
     // Внутренняя (вызывается только из create): классификация занятого

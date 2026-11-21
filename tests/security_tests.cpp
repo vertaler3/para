@@ -1097,13 +1097,17 @@ int main()
         StepScope s("Шаг 8 (02 §9.3): Олег DELETE чужой брони → 403 "
                     "(бронь — тоже личный объект)");
         Json::Value slot;
-        slot["starts_at"] = "2026-11-13T10:00:00Z";
-        slot["ends_at"] = "2026-11-13T11:00:00Z";
+        // Фикс 22.11 (RoomsService::create): интервалы с starts_at в
+        // прошлом (контроллер передаёт utcNow) → 400 InvalidBody — слот
+        // предусловия обязан быть будущим. Далёкая фиксированная дата
+        // вместо бывшей 13.11 (прошедшей): тест не зависит от wall-clock.
+        slot["starts_at"] = "2099-06-01T10:00:00Z";
+        slot["ends_at"] = "2099-06-01T11:00:00Z";
         auto created = post(anya, "/v1/rooms/1/bookings", slot);
         expectStatus(created,
                      drogon::k201Created,
                      "предусловие шага 8: POST /v1/rooms/1/bookings (Аня, "
-                     "13.11 10:00–11:00Z) → 201",
+                     "будущий слот 10:00–11:00Z) → 201",
                      "POST /v1/rooms/1/bookings");
         if (created != nullptr)
         {
