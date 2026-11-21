@@ -11,6 +11,9 @@
 //   - fail-closed: транспорт-ошибка, недостижимый URL реального
 //     HttpClient, «не настроено» → Unavailable (502), история НЕ пишется;
 //     БД без таблиц → Error (500);
+//   - предфильтр «вне компетенции»: арифметика («5*3», «сколько будет
+//     2+2», «синус 30») и переводы — canned-ответ ДО модели (LLM не
+//     вызывается), пара пишется в историю; вопросы портала не задеваются;
 //   - изоляция: контекст и промт — только данные своей сессии (чужие
 //     дедлайн/заявка не попадают), история — WHERE user_id = сессия.
 // БД — реальные миграции + фикстуры (MigrationRunner, как в проде) во
@@ -312,6 +315,49 @@ TEST_CASE("ассистент: системный промт — дефолт и
     ::unsetenv("ASSISTANT_API_URL");
     ::unsetenv("ASSISTANT_API_KEY");
     ::unsetenv("ASSISTANT_MODEL");
+}
+
+TEST_CASE("ассистент: предфильтр — арифметика/переводы не ходят в модель")
+{
+    // Инцидент 21.11 («5*3»): промптовый запрет вероятностный, операторная
+    // запись решалась моделью 3/3 запросов. Теперь — детерминированный
+    // фильтр ДО модели. Намеренно узкий: вопросы портала не задевает.
+    CHECK(AssistantService::isOutOfScopeRequest("5*3"));
+    CHECK(AssistantService::isOutOfScopeRequest("2+2"));
+    CHECK(AssistantService::isOutOfScopeRequest(" 17 * 23 "));
+    CHECK(AssistantService::isOutOfScopeRequest("сколько будет 2+2?"));
+    CHECK(AssistantService::isOutOfScopeRequest("Чему равен синус 30"));
+    CHECK(AssistantService::isOutOfScopeRequest(
+        "Переведи на английский: я люблю"));
+    CHECK_FALSE(AssistantService::isOutOfScopeRequest("что у меня завтра?"));
+    CHECK_FALSE(AssistantService::isOutOfScopeRequest("какие пары 25.11?"));
+    CHECK_FALSE(AssistantService::isOutOfScopeRequest("какие у меня пары 25"));
+    CHECK_FALSE(AssistantService::isOutOfScopeRequest("пара 25 ноября?"));
+    CHECK_FALSE(
+        AssistantService::isOutOfScopeRequest("проверь моё решение"));
+
+    // Полный путь: canned-ответ, LLM НЕ вызывается, пара в истории.
+    Fixture f;
+    FakeLlm llm;
+    llm.reply = "не должно быть использовано";
+    const auto r =
+        runChat(f, session(1, "anya.demo"), "5*3", config(), llm.transport());
+    REQUIRE(r.status == AssistantService::Status::Ok);
+    REQUIRE(*llm.calls == 0);
+    CHECK(r.reply.find("в портале нет такой информации") !=
+          std::string::npos);
+    CHECK(r.reply.find("не решаю примеры") != std::string::npos);
+    CHECK(count(f.dbPath, "SELECT COUNT(*) FROM assistant_messages WHERE "
+                          "user_id = 1") == 2);
+
+    // Контроль: обычный вопрос — прежний путь, модель вызвана (1 вызов).
+    FakeLlm llm2;
+    llm2.reply = "Завтра пар нет.";
+    const auto r2 = runChat(f, session(1, "anya.demo"), "что у меня завтра?",
+                            config(), llm2.transport());
+    REQUIRE(r2.status == AssistantService::Status::Ok);
+    CHECK(r2.reply == "Завтра пар нет.");
+    REQUIRE(*llm2.calls == 1);
 }
 
 TEST_CASE("ассистент: разбор ответа модели")

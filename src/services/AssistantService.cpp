@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include <drogon/HttpClient.h>
@@ -1139,6 +1140,107 @@ void AssistantService::history(orm::DbClientPtr db,
         };
 }
 
+// --- Предфильтр «вне компетенции» --------------------------------------------
+
+namespace {
+
+// Canned-ответ: тон модельных отказов («в портале нет такой информации» +
+// куда смотреть), 1–2 предложения — по правилам промта.
+const char* kOutOfScopeReply =
+    "в портале нет такой информации. Я не решаю примеры и не перевожу "
+    "тексты — помогаю по разделам портала: расписание, учёба, заявки, "
+    "дедлайны.";
+
+// Только ли арифметика в строке: цифры, операторы, скобки, точка/запятая
+// (десятичные), «×»/«÷» (UTF-8 C3 97/B7). Любой иной символ (включая
+// буквы) — не арифметика. Дефис-минус считается оператором, поэтому
+// безбуквенная дата «2026-11-21» тоже заблокируется — такой запрос
+// модель всё равно не ответила бы (нет в контексте).
+bool isArithmeticOnly(const std::string& s)
+{
+    bool digit = false, op = false;
+    for (std::size_t k = 0; k < s.size(); ++k)
+    {
+        const unsigned char c = static_cast<unsigned char>(s[k]);
+        if (c >= 0x80)  // многобайтные: допускаем только «×»/«÷»
+        {
+            if (c == 0xC3 && k + 1 < s.size())
+            {
+                const unsigned char n =
+                    static_cast<unsigned char>(s[k + 1]);
+                if (n == 0x97 || n == 0xB7)
+                {
+                    op = true;
+                    ++k;
+                    continue;
+                }
+            }
+            return false;
+        }
+        if (c >= '0' && c <= '9')
+        {
+            digit = true;
+            continue;
+        }
+        if (c == ' ' || c == '\t')
+            continue;
+        switch (c)
+        {
+        case '+': case '-': case '*': case '/': case '^':
+            op = true;
+            break;
+        case '(': case ')': case '.': case ',': case '%': case '=':
+            break;  // структура выражения, не признак операции
+        default:
+            return false;
+        }
+    }
+    return digit && op;
+}
+
+}  // namespace
+
+bool AssistantService::isOutOfScopeRequest(const std::string& message)
+{
+    const std::string up = upperRu(message);
+    // 1) Переводы — явная просьба в начале сообщения.
+    static constexpr std::string_view kTranslations[] = {
+        "ПЕРЕВЕДИ", "ПЕРЕВЕСТИ", "ПЕРЕВОД ", "TRANSLATE "};
+    for (const auto p : kTranslations)
+        if (up.compare(0, p.size(), p) == 0)
+            return true;
+    // 2) Чистая арифметика: срезать разговорный префикс и хвостовые
+    //    знаки препинания («сколько будет 2+2?» → «2+2»).
+    std::string s = up;
+    static constexpr std::string_view kArithPrefixes[] = {
+        "СКОЛЬКО БУДЕТ ", "ПОСЧИТАЙ ", "ВЫЧИСЛИ ", "ЧЕМУ РАВНО ",
+        "ЧЕМУ РАВЕН ", "ЧЕМУ РАВНА "};
+    for (const auto p : kArithPrefixes)
+    {
+        if (s.compare(0, p.size(), p) == 0)
+        {
+            s = s.substr(p.size());
+            break;
+        }
+    }
+    while (!s.empty() &&
+           (s.back() == '?' || s.back() == '!' || s.back() == '.'))
+        s.pop_back();
+    if (!s.empty() && isArithmeticOnly(s))
+        return true;
+    // 3) Мат-функция + число («синус 30», «корень из 9», «cos 45»).
+    //    Латинские SIN/COS/TAN — подстроки: риск задеть англ. слово
+    //    с цифрой пренебрежим (язык портала русский).
+    static constexpr std::string_view kMathWords[] = {
+        "СИНУС", "КОСИНУС", "ТАНГЕНС", "КОТАНГЕНС", "ЛОГАРИФМ",
+        "ФАКТОРИАЛ", "КОРЕНЬ", "SIN", "COS", "TAN", "SQRT", "LOG"};
+    if (up.find_first_of("0123456789") != std::string::npos)
+        for (const auto w : kMathWords)
+            if (up.find(w) != std::string::npos)
+                return true;
+    return false;
+}
+
 void AssistantService::chat(orm::DbClientPtr db,
                             const SessionInfo& session,
                             const std::string& message,
@@ -1153,6 +1255,23 @@ void AssistantService::chat(orm::DbClientPtr db,
         return;
     }
     const int64_t userId = session.userId;
+    // Предфильтр «вне компетенции» (инцидент 21.11 — «5*3»): арифметика и
+    // переводы не ходят в модель — canned-ответ, пара пишется в историю
+    // как обычный обмен. Лимит контроллера запрос уже учёл.
+    if (isOutOfScopeRequest(message))
+    {
+        const std::string text = kOutOfScopeReply;
+        *db << kInsertPairSql << userId << message << userId << text >>
+            [cb, text](const orm::Result&) {
+                cb(ChatResult{Status::Ok, text});
+            } >>
+            [cb, userId](const DrogonDbException& e) {
+                LOG_ERROR << "AssistantService: запись истории("
+                          << userId << "): " << e.base().what();
+                cb(ChatResult{Status::Error, {}});
+            };
+        return;
+    }
     collectContext(
         db, session, todayUtc(), message,
         [db, userId, message, cfg, transport, cb](bool ok, ContextData data) {
