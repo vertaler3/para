@@ -535,13 +535,9 @@ body[data-page=login] .footer-links a{font-size:.65rem}
 }
 @media print{.university-stage{display:none}.entry-composition{display:block}}
 
-/* Original vector construction marks, informed by the supplied Paper Mono clips. */
+/* Wordmark «пара»: чистый текстовый знак (03 §7.2 — без декоративных точек/линий). */
 .para-wordmark{display:block;width:116px;height:auto;overflow:visible;color:inherit;flex:none}
 .brand:has(.para-wordmark){gap:0;min-height:44px}
-.para-wordmark__nodes{fill:var(--surface);transition:opacity .25s}
-.para-wordmark__guides{opacity:.24;transition:opacity .25s}
-.brand:hover .para-wordmark__guides,.brand:focus-visible .para-wordmark__guides{opacity:.6}
-.brand:hover .para-wordmark__nodes{animation:para-node-breathe 2.4s ease-in-out 1}
 .para-error-art{display:block;color:var(--primary);width:min(100%,620px);height:auto;margin:0 auto;overflow:visible}
 .para-error-art__handles{transform-origin:330px 132px;animation:para-handle-float 7s ease-in-out infinite}
 .para-error-art__nodes{animation:para-node-breathe 7s ease-in-out infinite}
@@ -717,7 +713,6 @@ dialog::backdrop{background:var(--overlay)}
 .request-summary{background:var(--surface-2);border-radius:8px;padding:16px 18px;margin-top:24px;font-size:.9rem}
 .request-summary>p{font-size:.8rem;color:var(--text-2);margin-top:6px}
 .para-error-art__handles,.para-error-art__nodes{animation-duration:1.4s;animation-iteration-count:1}
-.brand:hover .para-wordmark__nodes{animation-duration:.7s}
 .field-counter{text-align:right;margin-top:5px}
 .application-details{border-top:1px solid var(--border);padding-top:24px}
 .application-details h2{font-size:1rem}.booking-hint{margin-top:12px;max-width:48ch}

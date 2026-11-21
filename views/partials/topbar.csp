@@ -21,22 +21,11 @@ const std::string staffEntry = @@.get<std::string>("staffEntry");
 <header class="site-header">
   <div class="header-inner">
     <a class="brand" href="/" aria-label="<%c++ $$ << @@.get<std::string>("t.a11y.brandHome"); %>"><svg aria-hidden="true" class="para-wordmark" fill="none" focusable="false" viewBox="0 0 306 120" xmlns="http://www.w3.org/2000/svg">
-<g aria-hidden="true" class="para-wordmark__guides" opacity=".38" stroke="currentColor" stroke-width=".75">
-<path d="M10 27H296M10 88H296M20 14V112M89 14V101M104 14V101M160 14V101M177 14V101M226 14V101M242 14V101M291 14V101" stroke-dasharray="2 5"></path>
-<path d="M40 22H75M33 57V76M53 93H76M104 57V77M114 23H147M179 32H211M235 22H275M237 57V76"></path>
-</g>
 <g class="para-wordmark__letters" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" stroke-width="7">
 <path d="M22 108V29M23 57C23 17 85 17 85 57S23 97 23 57Z"></path>
 <path d="M157 30V87M157 57C157 17 103 17 103 57S157 97 157 57Z"></path>
 <path d="M181 87V29M181 55C181 34 196 26 215 30"></path>
 <path d="M288 30V87M288 57C288 17 234 17 234 57S288 97 288 57Z"></path>
-</g>
-<g aria-hidden="true" class="para-wordmark__nodes" stroke="currentColor" stroke-width="1.2">
-<rect height="6" width="6" x="19" y="26"></rect><rect height="6" width="6" x="19" y="105"></rect>
-<circle cx="54" cy="27" r="2.8"></circle><circle cx="85" cy="57" r="2.8"></circle><circle cx="54" cy="87" r="2.8"></circle>
-<circle cx="103" cy="57" r="2.8"></circle><circle cx="130" cy="27" r="2.8"></circle><rect height="6" width="6" x="154" y="84"></rect>
-<rect height="6" width="6" x="178" y="26"></rect><circle cx="215" cy="30" r="2.8"></circle>
-<circle cx="234" cy="57" r="2.8"></circle><circle cx="261" cy="27" r="2.8"></circle><rect height="6" width="6" x="285" y="84"></rect>
 </g>
 </svg></a>
 <%c++ if (staffEntry == "1") { %>
