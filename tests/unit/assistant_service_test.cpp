@@ -509,6 +509,25 @@ TEST_CASE("ассистент: контекст — аудитория из ка
     CHECK(AssistantService::mentionedGroup("что у меня завтра?").empty());
     CHECK(AssistantService::mentionedGroup("где аудитория 1207?").empty());
 
+    // Дата из вопроса (today = 2026-11-21, суббота): явные даты, ДД.ММ,
+    // будни от today; прошедшее ДД.ММ → следующий год; «завтра»/без даты
+    // не распознаются (эти дни уже в контексте).
+    CHECK(AssistantService::mentionedDate("что за пары 25 ноября",
+                                          "2026-11-21") == "2026-11-25");
+    CHECK(AssistantService::mentionedDate("пары 25.11", "2026-11-21") ==
+          "2026-11-25");
+    CHECK(AssistantService::mentionedDate("расписание на 25.11.2026",
+                                          "2026-11-21") == "2026-11-25");
+    CHECK(AssistantService::mentionedDate("что в среду?", "2026-11-21") ==
+          "2026-11-25");
+    CHECK(AssistantService::mentionedDate("пара 5 ноября", "2026-11-21") ==
+          "2027-11-05");
+    CHECK(AssistantService::mentionedDate("что у меня завтра?",
+                                          "2026-11-21")
+              .empty());
+    CHECK(AssistantService::mentionedDate("какие дедлайны?", "2026-11-21")
+              .empty());
+
     // Время без перевода поясов: 10:00Z — это «10:00» (не «13:00» МСК),
     // как в остальных экранах портала.
     CHECK(AssistantService::portalTime("2026-11-20T10:00:00Z") == "10:00");
@@ -582,6 +601,38 @@ TEST_CASE("ассистент: контекст — аудитория из ка
     const std::string sys5 = (*llm5.seen)["messages"][0]["content"].asString();
     CHECK(sys5.find("проверить его решение") != std::string::npos);
     CHECK(sys5.find("наводящий вопрос") != std::string::npos);
+
+    // Дата в вопросе («что за пары 25 ноября») → секция этой даты с
+    // догруженными парами своей группы (живой кейс 21.11: «нет информации»).
+    exec(f.dbPath,
+         "INSERT INTO disciplines(code, title, control_type) VALUES"
+         " ('D-ATE', 'МАРКЕР-ДАТА-2511', 'credit');"
+         "INSERT INTO schedule_events(group_id, discipline_id, teacher_id,"
+         " room, kind, starts_at, ends_at, status) VALUES"
+         " (1, (SELECT id FROM disciplines WHERE title='МАРКЕР-ДАТА-2511'),"
+         " NULL, '3105', 'lecture', '2026-11-25T10:00:00Z',"
+         " '2026-11-25T11:30:00Z', 'normal');");
+    FakeLlm llm7;
+    llm7.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "что за пары у меня 25 ноября",
+                    config(), llm7.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys7 = (*llm7.seen)["messages"][0]["content"].asString();
+    CHECK(sys7.find("Расписание твоей группы на 25 ноября 2026") !=
+          std::string::npos);
+    CHECK(sys7.find("МАРКЕР-ДАТА-2511") != std::string::npos);
+    CHECK(sys7.find("10:00") != std::string::npos);  // время без сдвига
+    // Вопрос без даты — секции дат и маркера нет; «завтра» секцию не
+    // включает (уже есть основная).
+    FakeLlm llm8;
+    llm8.reply = "ok";
+    REQUIRE(runChat(f, session(1, "anya.demo"), "что у меня завтра?",
+                    config(), llm8.transport())
+                .status == AssistantService::Status::Ok);
+    const std::string sys8 = (*llm8.seen)["messages"][0]["content"].asString();
+    CHECK(sys8.find("МАРКЕР-ДАТА-2511") == std::string::npos);
+    CHECK(sys8.find("Расписание твоей группы на 25 ноября") ==
+          std::string::npos);
     // «проверь расписание» — не решение, маркер не включается.
     FakeLlm llm6;
     llm6.reply = "ok";

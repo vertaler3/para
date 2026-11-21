@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -413,6 +414,148 @@ std::string AssistantService::mentionedGroup(const std::string& message)
     return flush();
 }
 
+namespace {
+
+// «2026-11-25» + дней → «2026-12-02» (арифметика через timegm/gmtime).
+std::string addDaysStr(const std::string& ymd, int days)
+{
+    const std::time_t t = parseIso(ymd + "T12:00:00Z");
+    if (t < 0)
+        return std::string();
+    std::tm tm{};
+    const std::time_t shifted = t + days * 86400;
+    gmtime_r(&shifted, &tm);
+    char buf[16];
+    std::strftime(buf, sizeof buf, "%Y-%m-%d", &tm);
+    return buf;
+}
+
+int dayOfMonth(const std::string& ymd)
+{
+    return ymd.size() >= 10 ? std::atoi(ymd.c_str() + 8) : 0;
+}
+
+}  // namespace
+
+std::string AssistantService::mentionedDate(const std::string& message,
+                                            const std::string& today)
+{
+    if (today.size() < 10)
+        return std::string();
+    const int todayYear = std::atoi(today.c_str());
+    // Токены: буквы/цифры/точки (кириллица — байты >= 0x80).
+    std::vector<std::string> tokens;
+    std::string token;
+    auto flush = [&tokens, &token]() {
+        if (!token.empty())
+        {
+            tokens.push_back(token);
+            token.clear();
+        }
+    };
+    for (const char c : message)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '.' ||
+            static_cast<unsigned char>(c) >= 0x80)
+            token += c;
+        else
+            flush();
+    }
+    flush();
+    if (tokens.empty())
+        return std::string();
+
+    // Месяцы по префиксу в ВЕРХНЕМ регистре (токен прогоняется через
+    // upperRu; именительный/родительный: «ноябрь»/«ноября»).
+    static const std::pair<const char*, int> kMonths[] = {
+        {"ЯНВ", 1},  {"ФЕВ", 2},  {"МАР", 3},  {"АПР", 4},  {"МАЯ", 5},
+        {"МАЙ", 5},  {"МАЕ", 5},  {"МАЮ", 5},  {"ИЮН", 6},  {"ИЮЛ", 7},
+        {"АВГ", 8},  {"СЕН", 9},  {"ОКТ", 10}, {"НОЯ", 11}, {"ДЕК", 12}};
+    // Будни (в любом падеже — матчится по префиксу), верхний регистр.
+    static const std::pair<const char*, int> kWeekdays[] = {
+        {"ПОНЕДЕЛ", 1}, {"ВТОРНИ", 2},  {"СРЕД", 3}, {"ЧЕТВЕР", 4},
+        {"ПЯТНИЦ", 5},   {"СУББОТ", 6},  {"ВОСКРЕСЕН", 0}};
+
+    const auto toUpper = [](const std::string& s) { return upperRu(s); };
+
+    for (std::size_t i = 0; i < tokens.size(); ++i)
+    {
+        const std::string& t = tokens[i];
+        // 1) «25.11» / «25.11.2026» — целиком цифро-точечный токен.
+        // Токен без точки («25») сюда не попадает и уходит в правило 2
+        // (число + месяц).
+        if (t.find_first_not_of("0123456789.") == std::string::npos &&
+            t.find('.') != std::string::npos)
+        {
+            int d = 0, m = 0, y = 0;
+            const auto first = t.find('.');
+            const auto second = t.find('.', first + 1);
+            d = std::atoi(t.substr(0, first).c_str());
+            if (second == std::string::npos)
+                m = std::atoi(t.substr(first + 1).c_str());
+            else
+            {
+                m = std::atoi(t.substr(first + 1, second - first - 1)
+                                  .c_str());
+                y = std::atoi(t.substr(second + 1).c_str());
+            }
+            if (d >= 1 && d <= 31 && m >= 1 && m <= 12 &&
+                (y == 0 || (y >= 2000 && y <= 2100)))
+            {
+                int year = y != 0 ? y : todayYear;
+                char buf[16];
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", year, m,
+                              d);
+                std::string ymd(buf);
+                if (ymd < today && y == 0)
+                    ymd = addDaysStr(ymd, 365);  // спрашивают будущее
+                return ymd;
+            }
+            continue;
+        }
+        // 2) «25 ноября» — число + следующий токен месяц.
+        if (t.find_first_not_of("0123456789") == std::string::npos)
+        {
+            const int d = std::atoi(t.c_str());
+            if (d >= 1 && d <= 31 && i + 1 < tokens.size())
+            {
+                const std::string next = toUpper(tokens[i + 1]);
+                for (const auto& [p, m] : kMonths)
+                    if (next.rfind(p, 0) == 0)
+                    {
+                        char buf[16];
+                        std::snprintf(buf, sizeof buf, "%04d-%02d-%02d",
+                                      todayYear, m, d);
+                        std::string ymd(buf);
+                        if (ymd < today)
+                            ymd = addDaysStr(ymd, 365);
+                        return ymd;
+                    }
+            }
+            continue;
+        }
+        // 3) «в среду» / «среда» — ближайший будень СТРОГО после today.
+        {
+            const std::string up = toUpper(t);
+            for (const auto& [p, wd] : kWeekdays)
+                if (up.rfind(p, 0) == 0)
+                {
+                    const std::time_t cur =
+                        parseIso(today + "T12:00:00Z");
+                    if (cur < 0)
+                        return std::string();
+                    std::tm tm{};
+                    gmtime_r(&cur, &tm);
+                    int delta = (wd - tm.tm_wday + 7) % 7;
+                    if (delta == 0)
+                        delta = 7;
+                    return addDaysStr(today, delta);
+                }
+        }
+    }
+    return std::string();
+}
+
 std::string AssistantService::renderContext(const ContextData& d)
 {
     const std::string tomorrow = ScheduleService::addDays(d.today, 1);
@@ -454,6 +597,35 @@ std::string AssistantService::renderContext(const ContextData& d)
                     any = true;
                 }
         if (!any)
+            out += "- пар нет\n";
+    }
+
+    // Дата из вопроса («что за пары 25 ноября») — догруженная секция.
+    if (!d.dateAsked.empty())
+    {
+        static const char* kMonthsGen[] = {
+            "января", "февраля", "марта",     "апреля",   "мая",
+            "июня",   "июля",     "августа",  "сентября", "октября",
+            "ноября", "декабря"};
+        const int m = d.dateAsked.size() >= 10
+                          ? std::atoi(d.dateAsked.c_str() + 5)
+                          : 0;
+        const int day = dayOfMonth(d.dateAsked);
+        const int year = std::atoi(d.dateAsked.c_str());
+        std::string title = d.dateAsked;
+        if (m >= 1 && m <= 12 && day > 0)
+            title = std::to_string(day) + " " + kMonthsGen[m - 1] + " " +
+                    std::to_string(year);
+        out += "\nРасписание твоей группы на " + title + ", " +
+               weekdayRu(d.dateAsked) + ":\n";
+        bool anyDate = false;
+        if (d.dateEvents.isArray())
+            for (const auto& e : d.dateEvents)
+            {
+                renderLesson(out, e);
+                anyDate = true;
+            }
+        if (!anyDate)
             out += "- пар нет\n";
     }
 
@@ -725,8 +897,33 @@ void AssistantService::collectContext(orm::DbClientPtr db,
             // карте (GET /v1/map/rooms?q=…): «где аудитория 1207?» больше
             // не остаётся без данных портала.
             const std::string room = roomQuery(message);
-            g->pending = (hasGroup ? 6 : 4) + (room.empty() ? 0 : 1);
+            // Дата из вопроса («что за пары 25 ноября») → догрузить
+            // расписание этой даты: сегодня/завтра уже в контексте, их
+            // не дублируем (иначе модель видела «нет информации» на любой
+            // день дальше завтра — живой кейс 21.11).
+            std::string dateAsked = mentionedDate(message, today);
+            if (dateAsked == today ||
+                dateAsked == ScheduleService::addDays(today, 1))
+                dateAsked.clear();
+            const bool needDate = hasGroup && !dateAsked.empty();
+            if (needDate)
+                g->data.dateAsked = dateAsked;
+            g->pending = (hasGroup ? 6 : 4) + (room.empty() ? 0 : 1) +
+                         (needDate ? 1 : 0);
             const std::string now = nowIso();
+
+            if (needDate)
+                ScheduleService::eventsOnRange(
+                    db, *groupId, dateAsked + "T00:00:00Z",
+                    ScheduleService::addDays(dateAsked, 1) + "T00:00:00Z",
+                    [g](bool ok, Json::Value events) {
+                        if (ok)
+                        {
+                            std::lock_guard<std::mutex> l(g->mu);
+                            g->data.dateEvents = std::move(events);
+                        }
+                        g->done(ok);
+                    });
 
             if (hasGroup)
                 *db << "SELECT name FROM groups WHERE id = $1"

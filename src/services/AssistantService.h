@@ -138,6 +138,17 @@ class AssistantService
     // 20–21.11: вопрос про 4-МЭО отвечался парой самой Ани).
     static std::string mentionedGroup(const std::string& message);
 
+    // Дата в тексте сообщения («25 ноября», «25.11», «в среду») →
+    // «YYYY-MM-DD», или пустая строка. today — «сегодня» UTC проекта:
+    // относительные будни считаются от него, а уже прошедшее «ДД.ММ»
+    // переносится на следующий год (спрашивают о будущем). Сегодня/
+    // завтра НЕ распознаются — эти дни уже есть в контексте. Нужна,
+    // чтобы догрузить расписание названной даты: раньше вопрос «что за
+    // пары 25 ноября» своей группы получал «нет информации», потому что
+    // в контексте лежали только сегодня+завтра.
+    static std::string mentionedDate(const std::string& message,
+                                     const std::string& today);
+
     struct ContextData
     {
         std::string today;      // YYYY-MM-DD (UTC проекта)
@@ -145,7 +156,9 @@ class AssistantService
                                 // пусто (staff без профиля)
         std::string foreignGroup;  // группа из вопроса, если ≠ своей
         bool solutionCheck = false;  // в вопросе «проверь моё решение»
+        std::string dateAsked;  // дата из вопроса, ≠ сегодня/завтра
         Json::Value events;     // события группы сегодня+завтра (eventJson)
+        Json::Value dateEvents;  // события группы на dateAsked
         Json::Value exams;      // план сессии (GradesService::exams)
         Json::Value deadlines;  // [{title, kind, due_at}]
         Json::Value applications;  // активные заявки (appJson)
