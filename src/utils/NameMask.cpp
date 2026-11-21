@@ -42,4 +42,21 @@ std::string maskFullName(const std::string& fio)
            fio.substr(0, firstSpace);
 }
 
+std::string maskRatingName(const std::string& fio)
+{
+    // Инициал имени (первый не-пробельный символ после первого пробела,
+    // как в maskFullName); фамилия не отдаётся вовсе — вместо неё
+    // фиксированные «****» (длину не выдаём). Одно слово — инициал его
+    // первого символа; одни пробелы/пустая строка — пустая строка.
+    const std::size_t firstSpace = fio.find(' ');
+    const std::size_t searchFrom =
+        firstSpace == std::string::npos ? 0 : firstSpace + 1;
+    const std::size_t initialStart = fio.find_first_not_of(' ', searchFrom);
+    if (initialStart == std::string::npos)
+        return std::string();
+    const std::size_t initialLen =
+        utf8CharLen(static_cast<unsigned char>(fio[initialStart]));
+    return fio.substr(initialStart, initialLen) + "****";
+}
+
 }  // namespace para

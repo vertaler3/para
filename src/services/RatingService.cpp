@@ -87,9 +87,12 @@ void RatingService::rating(DbClientPtr db,
                 line["rank"] = rank;
                 line["user_id"] = userId;
                 // Маскирование НА СЕРВЕРЕ: полное имя чужих в ответ не
-                // попадает (02 §5.2) — только «И. Фамилия» (NameMask).
+                // попадает (02 §5.2). Рейтинг маскирует сильнее каталога
+                // (запрос владельца 22.11: «чтобы не был прям явный
+                // рейтинг») — вместо «И. Фамилия» только инициал и «****»
+                // («М****»): фамилии и её длины в рейтинге нет вовсе.
                 line["fio"] = self ? r["fio"].as<std::string>()
-                                   : maskFullName(r["fio"].as<std::string>());
+                                   : maskRatingName(r["fio"].as<std::string>());
                 line["average"] = averageOf(r);
                 line["self"] = self;
                 arr.append(std::move(line));
