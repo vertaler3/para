@@ -2764,6 +2764,17 @@
       const slot = state.selected;
       if (!slot || bookingBusy || (confirmBtn && confirmBtn.disabled)) return;
       if (!navigator.onLine) { applyOffline(true); return; }
+      /* фикс 22.11 (скрин владельца): сетка могла устареть — выбранный слот
+         уже прошёл. Сервер такую бронь корректно отвергает 400, но его
+         валидационный текст («starts_at/ends_at — ожидается ISO 8601…»)
+         нечитаем для студента, поэтому ловим ДО запроса: человекочитаемое
+         предупреждение, сброс выбора и тихое обновление сетки. */
+      if (Date.parse(slot.ends_at) <= Date.now()) {
+        showWarn('[data-slots-warn]', t('rooms.slotPast', 'Это время уже прошло — выберите слот позже'));
+        resetSelection();
+        loadSlots(true);
+        return;
+      }
       bookingBusy = true;
       show('[data-slots-warn]', false);
       hideDone();
@@ -2792,6 +2803,13 @@
           const code = body && body.error ? body.error.code || '' : '';
           if (code === 'slot_taken') showWarn('[data-slots-warn]', t('rooms.slotTaken', 'Слот только что заняли — обновляем сетку'));
           else if (code === 'not_found') { showWarn('[data-slots-warn]', t('rooms.roomNotFound', 'Аудитория не найдена — обновляем каталог')); loadCatalog(); }
+          else if (code === 'bad_request') {
+            /* серверная валидация (например, «интервал в будущем») говорит
+               на языке API — студенту человекочитаемая формулировка, детали
+               в консоль разработчику (фикс 22.11) */
+            console.warn('booking rejected:', body && body.error ? body.error.message : code);
+            showWarn('[data-slots-warn]', t('rooms.badBooking', 'Не получилось забронировать: проверьте дату и время слота'));
+          }
           else showWarn('[data-slots-warn]', serverText(body, t('toast.failBooking', 'Не получилось забронировать')));
         }
       } catch (e) {
@@ -2898,7 +2916,15 @@
             let body = null;
             try { body = await resp.json(); } catch (e) { /* тело не JSON */ }
             dlg.close();
-            showWarn('[data-bookings-warn]', serverText(body, t('toast.failBookingCancel', 'Не получилось отменить бронь')));
+            const cancelCode = body && body.error ? body.error.code || '' : '';
+            if (cancelCode === 'bad_request') {
+              /* как и при бронировании: технический текст валидации —
+                 разработчику в консоль, студенту — словарная строка */
+              console.warn('cancel rejected:', body && body.error ? body.error.message : cancelCode);
+              showWarn('[data-bookings-warn]', t('rooms.badCancel', 'Не получилось отменить бронь — обновляем список'));
+            } else {
+              showWarn('[data-bookings-warn]', serverText(body, t('toast.failBookingCancel', 'Не получилось отменить бронь')));
+            }
           }
         } catch (e) {
           dlg.close();
