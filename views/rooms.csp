@@ -52,7 +52,7 @@
     </div>
     <div class="rooms-date-field">
       <label for="slots-date"><%c++ $$ << @@.get<std::string>("t.rooms.date"); %></label>
-      <input type="date" id="slots-date" data-slots-date>
+      <span class="date-field"><input type="date" id="slots-date" data-slots-date><span class="date-field-view" data-date-view aria-hidden="true"></span></span>
     </div>
   </div>
   <p class="small muted rooms-room-line" data-room-meta hidden>

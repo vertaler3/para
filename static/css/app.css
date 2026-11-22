@@ -912,6 +912,16 @@ button.chip{font:inherit;cursor:pointer}
 
 /* ---- стыки эталона v3 и прод-разметки (fe_rebuild) ---- */
 [data-submitted-block]{margin-bottom:1.5rem}
+/* фикс 22.11: поле даты — единый формат «22.11.2026» на всех устройствах.
+   Нативный input[type=date] рисует значение в локали ОС («11/22/2026»
+   en-US, «22 нояб. 2026 г.» на Android-ru) — текст не наш. Поэтому инпут
+   прозрачный и лежит поверх (клик открывает системный календарь как
+   прежде), а видна наша надпись .date-field-view (дд.мм.гггг из app.js,
+   SSR — в шаблонах). Стили вида — как у инпутов эталона. */
+.date-field{position:relative;display:block}
+.date-field input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:1}
+.date-field-view{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:48px;padding:.75rem .875rem;border:1px solid var(--control-border);background:var(--surface);color:var(--text);border-radius:var(--r-md);font-size:1rem}
+.date-field-view:after{content:'';width:20px;height:20px;flex:none;background:var(--text-2);opacity:.55;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.65' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.65' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E") center/contain no-repeat}
 [data-submitted-block] .stack{margin-top:1rem;gap:.5rem;border:0;border-radius:0;background:var(--clear);overflow:visible}
 [data-document-block] .document-paper{margin-top:.75rem}
 [data-document-block] .document-paper .detail-list{margin-top:1rem}

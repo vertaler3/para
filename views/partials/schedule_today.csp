@@ -71,7 +71,16 @@ if (dayOk)
 $$ << "<p class=\"caption\">" << vstr("schedule.weekStrip") << " "
    << sv::esc(sv::weekRange(ctx, monday, sunday)) << "</p>";
 %>
-    <div><label class="caption" for="schedule-date"><%c++ $$ << vstr("schedule.dateLabel"); %></label><input id="schedule-date" name="date" type="date" required data-schedule-date data-network-action min="<%c++ $$ << minDate; %>" max="<%c++ $$ << maxDate; %>" value="<%c++ $$ << dayQ; %>" data-invalid-message="<%c++ $$ << vstr("schedule.dateInvalid"); %>"></div>
+<%c++
+      /* Дата на «кнопке»: нативное поле рисует значение в локали ОС
+         («11/22/2026» / «22 нояб. 2026 г.» — фикс 22.11), поэтому поверх
+         прозрачного инпута — своя надпись в дд.мм.гггг (dayQ — esc-нутая
+         строка YYYY-MM-DD). */
+      const std::string dayView = dayQ.size() == 10
+          ? dayQ.substr(8, 2) + "." + dayQ.substr(5, 2) + "." + dayQ.substr(0, 4)
+          : dayQ;
+%>
+    <div><label class="caption" for="schedule-date"><%c++ $$ << vstr("schedule.dateLabel"); %></label><span class="date-field"><input id="schedule-date" name="date" type="date" required data-schedule-date data-network-action min="<%c++ $$ << minDate; %>" max="<%c++ $$ << maxDate; %>" value="<%c++ $$ << dayQ; %>" data-invalid-message="<%c++ $$ << vstr("schedule.dateInvalid"); %>"><span class="date-field-view" data-date-view aria-hidden="true"><%c++ $$ << dayView; %></span></span></div>
 <%c++ if (dayOk) { %>
     <div class="week-strip" aria-label="<%c++ $$ << vstr("schedule.weekStrip"); %>">
 <%c++

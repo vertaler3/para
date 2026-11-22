@@ -68,6 +68,35 @@
   /* ---------- офлайн-баннер (03 §5.4: строка под шапкой, не модально) ---------- */
   /* Тап по баннеру / кнопка «Повторить» — проверка сети (03 §5.4): проба
      /healthz; сеть вернулась — баннер исчезает, данные обновляются. */
+  /* ---------- поле даты: единый формат «22.11.2026» на всех устройствах ----
+     Нативный <input type="date"> рисует значение в формате локали ОС
+     («11/22/2026» en-US, «22 нояб. 2026 г.» на Android-ru) — текст поле
+     отдаёт браузер, страницу не спросит. Поэтому поле накрыто своей
+     надписью .date-field-view (формат дд.мм.гггг зашит у нас), сам инпут
+     прозрачный и лежит поверх — клик открывает системный календарь как
+     прежде (фикс 22.11, скрины владельца). */
+  const dateViewOf = (input) => {
+    const wrap = input.closest('.date-field');
+    return wrap ? wrap.querySelector('[data-date-view]') : null;
+  };
+  const syncDateField = (input) => {
+    const view = dateViewOf(input);
+    if (view) view.textContent = input.value
+      ? input.value.split('-').reverse().join('.')
+      : t('common.pickDate', 'Выберите дату');
+  };
+  const syncDateFields = () => {
+    document.querySelectorAll('input[type="date"]').forEach(syncDateField);
+  };
+  document.addEventListener('change', (e) => {
+    if (e.target instanceof HTMLInputElement && e.target.type === 'date') syncDateField(e.target);
+  });
+  document.addEventListener('input', (e) => {
+    if (e.target instanceof HTMLInputElement && e.target.type === 'date') syncDateField(e.target);
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', syncDateFields, { once: true });
+  else syncDateFields();
+
   const banner = $('#offline-banner');
   const bannerText = banner ? banner.querySelector('[data-offline-text]') : null;
   let lastSyncAt = null; // время последней успешной загрузки данных — метка кэша
@@ -1761,6 +1790,7 @@
     document.body.addEventListener('htmx:afterSwap', () => {
       syncHeading();
       applyLessonFilter();
+      syncDateFields(); /* поле даты пересоздаётся обменом — надпись тоже */
       setTimeout(scrollTodayIntoView, 0);
     });
     let touchX = 0, touchY = 0, swipeArmed = false;
@@ -2963,6 +2993,7 @@
       if (!dateInput.value) dateInput.value = todayUtc(); /* дефолт — сегодня UTC проекта */
       dateInput.min = todayUtc();
       dateInput.addEventListener('change', () => { hideDone(); loadSlots(); });
+      syncDateField(dateInput); /* надпись «22.11.2026» вместо локали ОС */
     }
 
     loadBookings();

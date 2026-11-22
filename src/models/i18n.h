@@ -356,6 +356,7 @@ inline constexpr Entry kRu[]{
     {"common.more", "Ещё"},
     {"common.openProfile", "Открыть профиль"},
     {"common.openSchedule", "Открыть расписание"},
+    {"common.pickDate", "Выберите дату"},
     {"common.retry", "Повторить"},
     // control.* — тип контроля дисциплины (словарь CHECK 0002)
     {"common.toHome", "На главную"},
@@ -1255,6 +1256,7 @@ inline constexpr Entry kEn[]{
     {"common.more", "More"},
     {"common.openProfile", "Open profile"},
     {"common.openSchedule", "Open schedule"},
+    {"common.pickDate", "Pick a date"},
     {"common.retry", "Retry"},
     {"common.toHome", "Go home"},
     {"control.credit", "Pass-fail"},
@@ -2131,6 +2133,7 @@ inline constexpr Entry kZh[]{
     {"common.more", "更多"},
     {"common.openProfile", "打开个人主页"},
     {"common.openSchedule", "打开课程表"},
+    {"common.pickDate", "选择日期"},
     {"common.retry", "重试"},
     {"common.toHome", "返回首页"},
     {"control.credit", "考查"},
