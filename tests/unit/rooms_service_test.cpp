@@ -206,7 +206,9 @@ RoomsService::Result catalogOf(const drogon::orm::DbClientPtr& db,
 RoomsService::SlotsResult slotsOf(const drogon::orm::DbClientPtr& db,
                                   int64_t roomId,
                                   int64_t userId,
-                                  const std::string& date)
+                                  const std::string& date,
+                                  const std::string& nowIso =
+                                      "2000-01-01T00:00:00Z")
 {
     std::promise<RoomsService::SlotsResult> p;
     auto f = p.get_future();
@@ -214,6 +216,7 @@ RoomsService::SlotsResult slotsOf(const drogon::orm::DbClientPtr& db,
                         roomId,
                         userId,
                         date,
+                        nowIso,
                         [&p](RoomsService::SlotsResult r) {
                             p.set_value(std::move(r));
                         });
@@ -252,11 +255,16 @@ std::size_t countState(const Json::Value& body, const std::string& state)
 }
 
 // --- Шаг 2: брони ---------------------------------------------------------
+// nowIso по умолчанию — далёкое прошлое: детерминированные даты фикстур
+// (2026) остаются «будущими» для прежних кейсов; кейсы прошедшего времени
+// (фикс 22.11) передают nowIso явно.
 RoomsService::CreateResult createOf(const drogon::orm::DbClientPtr& db,
                                     int64_t roomId,
                                     int64_t userId,
                                     const std::string& startsAt,
-                                    const std::string& endsAt)
+                                    const std::string& endsAt,
+                                    const std::string& nowIso =
+                                        "2000-01-01T00:00:00Z")
 {
     std::promise<RoomsService::CreateResult> p;
     auto f = p.get_future();
@@ -265,6 +273,7 @@ RoomsService::CreateResult createOf(const drogon::orm::DbClientPtr& db,
                          userId,
                          startsAt,
                          endsAt,
+                         nowIso,
                          [&p](RoomsService::CreateResult r) {
                              p.set_value(std::move(r));
                          });
@@ -536,6 +545,45 @@ TEST_CASE("RoomsService: slots — другая дата и гейт-дата 20
     CHECK(markerCount >= 14);
 }
 
+TEST_CASE("RoomsService: slots — прошедшие слоты дня не «свободно» (фикс 22.11)")
+{
+    Fixture f;
+    // Середина дня 06.11 (ауд. 1207, Аня): слоты, ЗАКОНЧИВШИЕСЯ к now
+    // (slotEnd <= now), — не "free": create интервалы с началом в
+    // прошлом отвергает, сетка не должна предлагать их к тапу. В трёх
+    // состояниях 02 §5.2 прошедший свободный слот — "booked" (FE рисует
+    // не-"free" слот недоступным).
+    const auto r = slotsOf(f.db, 1, 1, "2026-11-06", "2026-11-06T10:00:00Z");
+    REQUIRE(r.status == RoomsService::SlotsStatus::Ok);
+    const auto states = statesOf(r.body);
+    CHECK(states.at("2026-11-06T08:00:00Z") == "booked");  // кончился в 09:00
+    CHECK(states.at("2026-11-06T09:00:00Z") == "booked");  // slotEnd == now
+    CHECK(states.at("2026-11-06T10:00:00Z") == "free");    // ещё идёт/впереди
+    CHECK(states.at("2026-11-06T11:00:00Z") == "booked");  // бронь Олега
+    CHECK(states.at("2026-11-06T21:00:00Z") == "free");    // последний слот
+    CHECK(countState(r.body, "free") == 11);   // 14 − 2 прошедших − 1 бронь
+    CHECK(countState(r.body, "booked") == 3);  // 2 прошедших + бронь Олега
+    CHECK(countState(r.body, "mine") == 0);
+
+    // «Ваша бронь» и у прошедшего слота остаётся "mine" (прошлое не
+    // замазывает свою занятость; отмена из сетки работает): бронь Ани
+    // 14:00 ауд. 3105 при now 20:00 того же дня — прошедшие 08:00–19:00
+    // "booked" (11), 14:00 "mine", будущие 20:00/21:00 "free".
+    const auto mine = slotsOf(f.db, 2, 1, "2026-11-06", "2026-11-06T20:00:00Z");
+    REQUIRE(mine.status == RoomsService::SlotsStatus::Ok);
+    CHECK(mine.body["slots"][6]["state"].asString() == "mine");  // 14:00
+    CHECK(countState(mine.body, "mine") == 1);
+    CHECK(countState(mine.body, "booked") == 11);
+    CHECK(countState(mine.body, "free") == 2);
+
+    // Другая дата-эталон не зависит от now: сетка будущего дня при now
+    // того же дня утром — вся "free" (окно дня целиком впереди).
+    const auto morning =
+        slotsOf(f.db, 1, 1, "2026-11-13", "2026-11-13T07:00:00Z");
+    REQUIRE(morning.status == RoomsService::SlotsStatus::Ok);
+    CHECK(countState(morning.body, "free") == 14);
+}
+
 TEST_CASE("RoomsService: slots — несуществующая комната и невалидная дата")
 {
     Fixture f;
@@ -684,6 +732,46 @@ TEST_CASE("RoomsService: create — InvalidBody, NotFound, fail-closed")
     CHECK(createOf(f.db, 999999, 1, "2026-11-13T10:00:00Z",
                    "2026-11-13T11:00:00Z").status ==
           RoomsService::CreateStatus::NotFound);
+}
+
+TEST_CASE("RoomsService: create — прошедший интервал → InvalidBody "
+          "(консистентность с upcoming, фикс 22.11)")
+{
+    Fixture f;
+    // Живая репродукция бага «Забронировано → пустые Мои брони»: слот,
+    // закончившийся задолго до now (09:00–10:00 при now 20:53), create
+    // раньше принимал (201 + тост «посмотреть в моих бронях»), а
+    // upcoming-фильтр myBookings (ends_at >= now) его скрывал. Теперь —
+    // InvalidBody (400) ДО INSERT'а, без записи в БД.
+    const std::string now = "2026-11-21T20:53:00Z";
+    CHECK(createOf(f.db, 1, 1, "2026-11-21T09:00:00Z",
+                   "2026-11-21T10:00:00Z", now).status ==
+          RoomsService::CreateStatus::InvalidBody);  // давно прошедший
+    CHECK(createOf(f.db, 1, 1, "2026-11-21T20:53:00Z",
+                   "2026-11-21T21:53:00Z", now).status ==
+          RoomsService::CreateStatus::InvalidBody);  // граница starts == now
+    CHECK(createOf(f.db, 1, 1, "2026-11-21T20:52:00Z",
+                   "2026-11-22T21:00:00Z", now).status ==
+          RoomsService::CreateStatus::InvalidBody);  // начало в прошлом
+    // (не-ISO по-прежнему InvalidBody и при «прошлом» now — см. кейс выше;
+    // порядок проверок в сервисе: формат → интервал → прошлое.)
+
+    // Будущий интервал — проходит; и ВИДЕН в upcoming (ends_at >= now):
+    // успешная бронь больше не может исчезнуть из «Моих броней».
+    const auto ok = createOf(f.db, 1, 1, "2026-11-22T10:00:00Z",
+                             "2026-11-22T11:00:00Z", now);
+    REQUIRE(ok.status == RoomsService::CreateStatus::Created);
+    const auto up = myBookingsOf(f.db, 1, true, now);
+    REQUIRE(up.ok);
+    REQUIRE(up.body["bookings"].size() == 1);  // фикстурная id 2 (06.11) — прошлое
+    CHECK(up.body["bookings"][0]["starts_at"].asString() ==
+          "2026-11-22T10:00:00Z");
+
+    // Отвергнутые попытки НИЧЕГО не записали: активные брони Ани —
+    // фикстурная id 2 (06.11 14:00) + созданная будущая.
+    const auto all = myBookingsOf(f.db, 1, false, now);
+    REQUIRE(all.ok);
+    REQUIRE(all.body["bookings"].size() == 2);
 }
 
 TEST_CASE("RoomsService: create — исключение БД на INSERT → SlotTaken (400)")

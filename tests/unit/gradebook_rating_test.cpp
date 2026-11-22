@@ -10,7 +10,7 @@
 //  - rating — ОБЩИЙ по ОЦЕНЁННЫМ студентам (гейт Э6а р2: у студента без
 //    оценок среднего нет — строки в рейтинге нет; маскирование — механизм
 //    приватности, «Поиск студентов ограничен своим факультетом» касается
-//    search, не рейтинга), своя строка полная, чужие — «И. Фамилия»
+//    search, не рейтинга), своя строка полная, чужие — «М****» (инициал + звёздочки, фикс 22.11)
 //    (NameMask; полное имя чужих в ответе отсутствует — CHECK по всем
 //    фикстурным ФИО); ?faculty= — фильтр для любого запрашивающего;
 //    staff — все маскированы; limit — после сортировки; среднему DESC;
@@ -361,21 +361,21 @@ TEST_CASE("rating: общий рейтинг — своя строка полн�
     CHECK(rawAll.find("Хакимова Дина Ринатовна") == std::string::npos);
 
     // Гейт Э6а р2 «рейтингАниБезПолныхФИО»: рейтинг Ани — НИ ОДНОГО
-    // полного ФИО (её собственной строки нет — среднего нет), «М. Ливанов»
+    // полного ФИО (её собственной строки нет — среднего нет), «М****»
     // присутствует.
     auto ra = ratingOf(f, 1);
     REQUIRE(ra.status == RatingService::Status::Ok);
     const auto& fl = ra.body["rating"];
     REQUIRE(fl.size() == 1);
     CHECK(fl[0]["user_id"].as<int64_t>() == 3);
-    CHECK(fl[0]["fio"].asString() == "М. Ливанов");
+    CHECK(fl[0]["fio"].asString() == "М****");
     CHECK(fl[0]["average"].as<int64_t>() == 83);
     CHECK(fl[0]["self"].asBool() == false);
     Json::StreamWriterBuilder b;
     b["emitUTF8"] = true;
     b["indentation"] = "";
     const std::string raw = Json::writeString(b, ra.body);
-    CHECK(raw.find("М. Ливанов") != std::string::npos);   // гейт-чек
+    CHECK(raw.find("М****") != std::string::npos);   // гейт-чек
     CHECK(raw.find("Ливанов Марк Сергеевич") == std::string::npos);
     CHECK(raw.find("Соколова Анна Игоревна") == std::string::npos);
     CHECK(raw.find("Родионов Олег Павлович") == std::string::npos);
@@ -394,7 +394,7 @@ TEST_CASE("rating: staff — все маскированы; ?faculty= — фил
     const auto& lines = r.body["rating"];
     REQUIRE(lines.size() == 1);
     CHECK(lines[0]["user_id"].as<int64_t>() == 3);
-    CHECK(lines[0]["fio"].asString() == "М. Ливанов");
+    CHECK(lines[0]["fio"].asString() == "М****");
     CHECK(lines[0]["average"].as<int64_t>() == 83);
     CHECK(lines[0]["self"].asBool() == false);
 
@@ -415,7 +415,7 @@ TEST_CASE("rating: staff — все маскированы; ?faculty= — фил
           "Факультет мировой экономики и политики");
     REQUIRE(rw.body["rating"].size() == 1);
     CHECK(rw.body["rating"][0]["user_id"].as<int64_t>() == 3);
-    CHECK(rw.body["rating"][0]["fio"].asString() == "М. Ливанов");
+    CHECK(rw.body["rating"][0]["fio"].asString() == "М****");
 }
 
 TEST_CASE("rating: сортировка оценённых по среднему; limit — после сортировки")

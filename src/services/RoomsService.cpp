@@ -156,6 +156,7 @@ void RoomsService::slots(DbClientPtr db,
                          int64_t roomId,
                          int64_t userId,
                          const std::string& date,
+                         const std::string& nowIso,
                          std::function<void(SlotsResult)> cb)
 {
     // Fail-closed: сетка по невалидной дате невозможна — «весь день
@@ -172,7 +173,7 @@ void RoomsService::slots(DbClientPtr db,
     roomById(
         db,
         roomId,
-        [db, roomId, userId, date, fromIso, toIso, cb = std::move(cb)](
+        [db, roomId, userId, date, fromIso, toIso, nowIso, cb = std::move(cb)](
             Lookup lookup, Json::Value room) mutable {
             if (lookup == Lookup::Error)
             {
@@ -201,7 +202,7 @@ void RoomsService::slots(DbClientPtr db,
                 // Колбэки-ветки копируют cb (стреляет ровно одна): move в
                 // success-ветке оставил бы error-ветке пустой std::function
                 // → bad_function_call на error-пути (урок Э2 шаг 1).
-                [room = std::move(room), date, userId, cb](
+                [room = std::move(room), date, userId, nowIso, cb](
                     const drogon::orm::Result& rows) {
                     // Строки дня → интервалы: слот занят, если есть
                     // пересечение (row.starts_at < slotEnd && row.ends_at >
@@ -243,6 +244,15 @@ void RoomsService::slots(DbClientPtr db,
                                 break;
                             }
                         }
+                        // Прошедший слот (slotEnd <= nowIso) не «свободно»:
+                        // create интервалы с началом в прошлом отвергает —
+                        // сетка не должна предлагать их к бронированию. В
+                        // трёх состояниях 02 §5.2 это "booked" (FE рисует
+                        // не-«free» слот недоступным); «ваша бронь» и у
+                        // прошедшего остаётся "mine" — проверка только
+                        // "free"-слота (фикс 22.11, см. шапку slots).
+                        if (slot["state"] == "free" && slotEnd <= nowIso)
+                            slot["state"] = "booked";
                         slotsArr.append(std::move(slot));
                     }
 
@@ -302,9 +312,16 @@ void RoomsService::create(DbClientPtr db,
                           int64_t userId,
                           const std::string& startsAt,
                           const std::string& endsAt,
+                          const std::string& nowIso,
                           std::function<void(CreateResult)> cb)
 {
-    if (!isIsoZ(startsAt) || !isIsoZ(endsAt) || endsAt <= startsAt)
+    // Прошедший интервал (startsAt <= nowIso) — InvalidBody: без проверки
+    // create принимал давно закончившиеся слоты (201), а upcoming-фильтр
+    // myBookings (ends_at >= now) их скрывал — «успешная» бронь, которой
+    // нет в «Моих бронях» (фикс 22.11; nowIso — utcNow контроллера, тот
+    // же формат «…Z», сравнение лексикографическое — как везде здесь).
+    if (!isIsoZ(startsAt) || !isIsoZ(endsAt) || endsAt <= startsAt ||
+        startsAt <= nowIso)
     {
         cb(CreateResult{CreateStatus::InvalidBody, Json::Value()});
         return;

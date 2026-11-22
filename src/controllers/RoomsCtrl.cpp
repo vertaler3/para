@@ -116,6 +116,7 @@ void RoomsCtrl::getSlots(const HttpRequestPtr& req,
 
     RoomsService::slots(
         app().getDbClient("para"), roomId, session.userId, date,
+        SessionService::utcNow(),  // прошедшие слоты — не «free» (фикс 22.11)
         [cb = std::move(cb)](RoomsService::SlotsResult r) mutable {
             switch (r.status)
             {
@@ -159,6 +160,7 @@ void RoomsCtrl::createBooking(const HttpRequestPtr& req,
         session.userId,
         (*json)["starts_at"].asString(),
         (*json)["ends_at"].asString(),
+        SessionService::utcNow(),  // интервал из прошлого → 400 (фикс 22.11)
         [cb = std::move(cb)](RoomsService::CreateResult r) mutable {
             switch (r.status)
             {
@@ -196,7 +198,8 @@ void RoomsCtrl::createBooking(const HttpRequestPtr& req,
                     cb(api::errorResponse(
                         "bad_request",
                         "starts_at/ends_at — ожидается ISO 8601 UTC "
-                        "(YYYY-MM-DDTHH:MM:SSZ), ends_at позже starts_at",
+                        "(YYYY-MM-DDTHH:MM:SSZ), интервал в будущем, "
+                        "ends_at позже starts_at",
                         k400BadRequest));
                     return;
                 case RoomsService::CreateStatus::NotFound:

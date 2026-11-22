@@ -543,6 +543,25 @@ TEST_CASE("maskFullName: формат «И. Фамилия» 02 §5.2 и emitUTF
     CHECK(body.find("\\u") == std::string::npos);  // без \u-эскейпов
 }
 
+// Рейтинговая маска (запрос владельца 22.11): чужие в рейтинге — только
+// инициал имени и фиксированные «****»: фамилии и её длины нет вовсе
+// («М. Титова» → «М****»). Каталог людей маскируется по-прежнему
+// maskFullName'ом — там поиск требует узнаваемости.
+TEST_CASE("maskRatingName: инициал + «****» — без фамилии и её длины")
+{
+    using para::maskRatingName;
+    CHECK(maskRatingName("Титова Маргарита Денисовна") == "М****");
+    CHECK(maskRatingName("Ливанов Марк Сергеевич") == "М****");
+    CHECK(maskRatingName("Соколова Анна Игоревна") == "А****");
+    CHECK(maskRatingName("Хакимова Дина Ринатовна") == "Д****");
+    // Разная длина фамилий — маска одинаковой длины (длину не выдаём).
+    CHECK(maskRatingName("Иванов Пётр").size() ==
+          maskRatingName("Богдановский Александр Николаевич").size());
+    CHECK(maskRatingName("Однослово") == "О****");  // инициал первого слова
+    CHECK(maskRatingName("") == "");
+    CHECK(maskRatingName("   ") == "");
+}
+
 TEST_CASE("fail-closed: нет таблицы teacher_profiles → Error, не падение")
 {
     Fixture f(/*withTeacherProfiles=*/false);
